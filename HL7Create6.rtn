@@ -1,0 +1,124 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Create6^MAC^^^0
+HL7Create6 // ML 03/05/2006 ; HL7 interface : create transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Create6.rtn#1 $
+	quit
+CheckRXC ;; build DATA array - RXC
+RXC()	set intOrdNum=$get(intOrdNum),count="" kill DATA
+	// extract order detail
+	kill OrdDetail if $$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail) quit 0
+	// check if manufacture order exists
+	set intManOrd=$get(OrdDetail(261)) if intManOrd="" quit 0
+	// extract manufacture order detail
+	kill ManufactOrd if $$ManufactureOrder^HL7OutExtract12(intManOrd,.ManufactOrd)
+	set row="0" for  set row=$order(^INMAN(intManOrd,"INCI",row)) quit:row=""  do
+	.set intManItm=intManOrd_"||"_row
+	. // extract items from manutfacture order
+	.kill ManufactItm if $$ManufactureItem^HL7OutExtract12(intManItm,.ManufactItm)
+	.set mtable="IN_Manufacture_OrderINCI" do CodeTable^HL7OutExtract12(mtable)
+ 	.set component=$get(ManufactItm(3)),component("QTY")=$get(ManufactItm(5)),component("UNITS")=$get(ManufactItm(6))
+	.set count=count+1
+	.if count=1 do  quit
+	..set DATA("RXC",1)="",DATA("RXC",2)=component,DATA("RXC",3)=component("QTY"),DATA("RXC",4)=component("UNITS"),DATA("RXC",5)="",DATA("RXC",6)=""
+	.if count>1,repeat="Y" do
+ 	..set Repeat("RXC",count,1)="",Repeat("RXC",count,2)=component,Repeat("RXC",count,3)=component("QTY"),Repeat("RXC",count,4)=component("UNITS"),Repeat("RXC",count,5)="",Repeat("RXC",count,6)=""
+	kill OrdDetail,ManufactOrd,ManufactItm,component
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckRXE ;; build DATA array - RXE
+RXE()	set intOrdNum=$get(intOrdNum) kill DATA
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2)
+	// extract order detail
+	kill OrdDetail if $$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail) quit 0
+	// extract item ordered detail
+	kill ItemOrdered if $$ItemOrdered^HL7OutExtract8($get(OrdDetail(4)),.ItemOrdered) quit 0
+	// extract drug form detail
+	kill DrugForm if $$DrugForm^HL7OutExtract12($get(ItemOrdered(51)),.DrugForm)
+	// extract ordering doctor
+	kill doctor set drcode=""
+	if $get(OrdDetail(14))'="" do
+	.if OrdDetail(14)=""""!(OrdDetail(14)="""""") quit
+	.set drcode=$$Provider^HL7Common5($get(OrdDetail(14)),"","","","C","O")
+	.set doctor("ORD")=$$BuildDoctor^HL7Common5(drcode)
+	// extract external code for item ordered
+	kill ExternalCode do ExternalCodeOut^HL7Common1(intOrdNum,.ExternalCode)
+	if HL7("CHAPPFACOUT")="Y" set ReceivingApp=$get(ExternalCode(13)),ReceivingFac=$get(ExternalCode(14))
+	// extract code table detail
+	for mtable="OE_OrdItem","ARC_ItmMast" do CodeTable^HL7OutExtract8(mtable)
+	do CodeTable^HL7OutExtract12("PHC_DrgForm")
+	kill datetime set datetime("ST")=$$DateTime^HL7Common2($get(OrdDetail(17)),$get(OrdDetail(18)),"Y")
+	set datetime("END")="" do
+	.set ord3=$order(^OEORD(ord1,"I",ord2,"X",""),-1) if ord3="" quit
+	.set detail=$get(^OEORD(ord1,"I",ord2,"X",ord3))
+	.set datetime("END")=$$DateTime^HL7Common2($piece(detail,"^"),$piece(detail,"^",2),"Y")
+	set interval=$piece($get(OrdDetail(25)),"^"),instructions=$piece($get(OrdDetail(27)),"^")_"^"_$translate($piece($get(OrdDetail(27)),"^",2,3),"^"," ")
+	set Give("UNITS")=$get(OrdDetail(28)),PrescriptionNum=$get(OrdDetail(65)),Give("QTY")=$get(OrdDetail(85)),MaximumRpt=$get(OrdDetail(297)),CurrentRpt=$get(OrdDetail(298))
+	set RefillRemaining=MaximumRpt-CurrentRpt
+	set comm=$get(OrdDetail(267)),comment("LABEL")="" if $listlength(comm) do
+	.for j=1:1:$listlength(comm) set comment("LABEL")=$get(comment("LABEL"))_$select($length(comment("LABEL")):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,j),"O"),$char(13,10),HL7("LINEBK"))
+	set Give("FORM")=$get(DrugForm(2))
+	set (VerifyingUser,login,extlogin,surname,given,name)=""
+	&SQL(SELECT SSUSR_Initials, SSUSR_ExternalUserIdentifier, SSUSR_Surname, SSUSR_GivenName, SSUSR_Name INTO :login, :extlogin, :surname, :given, :name FROM PA_Que1, SS_User WHERE QUE1_PrescNo = :PrescriptionNum AND SSUSR_RowId = QUE1_UserAccepted_DR)
+	for var="login","extlogin","surname","given","name" set @var=$$TextConversion^HL7Common12(@var,"O")
+	set VerifyingUser=login_"^"_$select(surname'="":surname,1:name)_"^"_given_"^^^^^^TRAKCARE"
+	if extlogin'="" set VerifyingUser=VerifyingUser_$select($length(VerifyingUser):"~",1:"")_extlogin_"^"_$select(surname'="":surname,1:name)_"^"_given_"^^^^^^TRAKCARE"
+	set DATA("RXE",1)="^"_interval_"^^"_datetime("ST")_"^"_datetime("END")
+	set DATA("RXE",2)=$get(ItemOrdered(2))_"^"_$get(ItemOrdered(3))_"^TRAKCARE"
+	if $data(ExternalCode) set DATA("RXE",2)=$get(ExternalCode(6))_"^"_$get(ExternalCode(8))_"^"_$piece($get(ItemOrdered(74)),"^")_"^"_$get(ItemOrdered(2))_"^"_$get(ItemOrdered(3))_"^TRAKCARE"
+	set DATA("RXE",3)=Give("QTY"),DATA("RXE",5)=Give("UNITS"),DATA("RXE",6)=Give("FORM"),DATA("RXE",7)=instructions,DATA("RXE",12)=MaximumRpt,DATA("RXE",13)=$get(doctor("ORD"))
+	set DATA("RXE",14)=VerifyingUser,DATA("RXE",15)=PrescriptionNum,DATA("RXE",16)=RefillRemaining,DATA("RXE",17)=CurrentRpt,DATA("RXE",21)=comment("LABEL")
+	kill OrdDetail,ItemOrdered,ExternalCode,DrugForm,Give,doctor,comment,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckRXO ;; build DATA array - RXO
+RXO()	set intOrdNum=$get(intOrdNum) kill DATA
+	// extract order detail
+	kill OrdDetail if $$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail) quit 0
+	// extract item ordered detail
+	kill ItemOrdered if $$ItemOrdered^HL7OutExtract8($get(OrdDetail(4)),.ItemOrdered) quit 0
+	// extract drug form detail
+	kill DrugForm if $$DrugForm^HL7OutExtract12($get(ItemOrdered(51)),.DrugForm)
+	// extract ordering doctor
+	kill doctor set drcode=""
+	if $get(OrdDetail(14))'="" do
+	.if OrdDetail(14)=""""!(OrdDetail(14)="""""") quit
+	.set drcode=$$Provider^HL7Common5($get(OrdDetail(14)),"","","","C","O")
+	.set doctor("ORD")=$$BuildDoctor^HL7Common5(drcode)
+	// extract external code for item ordered
+	kill ExternalCode do ExternalCodeOut^HL7Common1(intOrdNum,.ExternalCode)
+	if HL7("CHAPPFACOUT")="Y" set ReceivingApp=$get(ExternalCode(13)),ReceivingFac=$get(ExternalCode(14))
+	// extract code table detail
+	for mtable="OE_OrdItem","ARC_ItmMast" do CodeTable^HL7OutExtract8(mtable)
+	do CodeTable^HL7OutExtract12("PHC_DrgForm")
+	set instructions=$piece($get(OrdDetail(27)),"^")_"^"_$translate($piece($get(OrdDetail(27)),"^",2,3),"^"," ")
+	set Requested("UNITS")=$get(OrdDetail(28)),PrescriptionNum=$get(OrdDetail(65)),Requested("QTY")=$get(OrdDetail(85)),MaximumRpt=$get(OrdDetail(297))
+	set comm=$get(OrdDetail(53)),comment("TREAT")="" if $listlength(comm) do
+	.for j=1:1:$listlength(comm) set comment("TREAT")=$get(comment("TREAT"))_$select($length(comment("TREAT")):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,j),"O"),$char(13,10),HL7("LINEBK"))
+	set Requested("FORM")=$get(DrugForm(2))
+	set (VerifyingUser,login,extlogin,surname,given,name)=""
+	&SQL(SELECT SSUSR_Initials, SSUSR_ExternalUserIdentifier, SSUSR_Surname, SSUSR_GivenName, SSUSR_Name INTO :login, :extlogin, :surname, :given, :name FROM PA_Que1, SS_User WHERE QUE1_PrescNo = :PrescriptionNum AND SSUSR_RowId = QUE1_UserAccepted_DR)
+	for var="login","extlogin","surname","given","name" set @var=$$TextConversion^HL7Common12(@var,"O")
+	set VerifyingUser=login_"^"_$select(surname'="":surname,1:name)_"^"_given_"^^^^^^TRAKCARE"
+	if extlogin'="" set VerifyingUser=VerifyingUser_$select($length(VerifyingUser):"~",1:"")_extlogin_"^"_$select(surname'="":surname,1:name)_"^"_given_"^^^^^^TRAKCARE"
+	set DATA("RXO",1)=$get(ItemOrdered(2))_"^"_$get(ItemOrdered(3))_"^TRAKCARE"
+	if $data(ExternalCode) set DATA("RXO",1)=$get(ExternalCode(6))_"^"_$get(ExternalCode(8))_"^"_$piece($get(ItemOrdered(74)),"^")_"^"_$get(ItemOrdered(2))_"^"_$get(ItemOrdered(3))_"^TRAKCARE"
+	set DATA("RXO",2)=Requested("QTY"),DATA("RXO",4)=Requested("UNITS"),DATA("RXO",5)=Requested("FORM"),DATA("RXO",6)=comment("TREAT"),DATA("RXO",7)=instructions
+	set DATA("RXO",10)=DATA("RXO",1),DATA("RXO",13)=MaximumRpt,DATA("RXO",14)=$get(doctor("ORD")),DATA("RXO",15)=VerifyingUser
+	kill OrdDetail,ItemOrdered,ExternalCode,DrugForm,Requested,comment
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckRXR ;; build DATA array - RXR
+RXR()	set intOrdNum=$get(intOrdNum) kill DATA
+	// extract order detail
+	kill OrdDetail if $$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail) quit 0
+	// extract code table detail
+	for mtable="OE_OrdItem" do CodeTable^HL7OutExtract8(mtable)
+	set adminroute=$get(OrdDetail(269))
+	set DATA("RXR",1)=adminroute
+	kill OrdDetail
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

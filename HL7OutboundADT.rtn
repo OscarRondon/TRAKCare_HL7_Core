@@ -1,0 +1,655 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7OutboundADT^MAC^^^0
+HL7OutboundADT // ML 20/03/2003 ; HL7 Interface - Outbound ADT message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutboundADT.rtn#1 $
+	quit
+	
+check(table,trigger) new (table,trigger,%d,%e,%old,%before,%after,%session,%request,%PDSDATA,HL7PreadminCreate,ScreenForm,TRIGGER) set table=$get(table),trigger=$get(trigger)
+	set ScreenForm=$get(ScreenForm),(type,ok,otherNum,TransactionEdit,PDSmsg,UpdateSCN)="" kill old,curr,array
+	set PDSFlag=$piece($get(^CF("SM",1)),"^",67)
+	
+	// track PA_Person for A28/A31
+	if table="PAPERSON" do
+	. kill ^||TMP("HL7-TRACK",$job,table) set ^||TMP("HL7-TRACK",$job,table)=trigger
+	. if trigger="Insert",ScreenForm="PAAdm.EditEmergency" set ^||TMP("HL7-TRACK-1",$job,"PAPERSON_PAADM.EDITEMER")=""
+	. if trigger="Insert",ScreenForm'="PAAdm.EditEmergency" kill ^||TMP("HL7-TRACK-1",$job)
+	
+	// check if requesting national id via ADT_A28 (eg. from PDS)
+	set ReqNatId=$select($data(%request):$get(%request.Data("reqPAPERID",1)),1:"")
+	
+	// check if PDS Maternity Birth Registration
+	set SendPDSBirthRegistration=$select($data(%request):$get(%request.Data("SendPDSBirthRegistration",1)),1:"")
+	
+	// check if ignore duplicates for PDS Maternity Birth Registration
+	set IgnoreDupPDSMaternity=$select($data(%request):$get(%request.Data("IgnoreDupPDSMaternity",1)),1:"")
+	
+	// clean up tmp global
+	if $data(^||TMP("HL7-TRACK",$job,table)) do
+	. // ignore PAADMTRANSACTION - rowid's will not match as previous rowid and current rowid required
+	. if table="PAADMTRANSACTION" quit
+	. set detail=$get(^||TMP("HL7-TRACK",$job,table))
+	. if $piece(detail,"^",2)'="",$piece(detail,"^",2)'=$get(%d(1)) kill ^||TMP("HL7-TRACK",$job,table) quit
+	. if $piece(detail,"^",5)'="",$piece(detail,"^",5)'=ScreenForm kill ^||TMP("HL7-TRACK",$job,table)
+	
+	do
+	. // check for admission changes
+	. if table="PAADM",ScreenForm'="PAWaitingListAdm.Edit" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // only trigger A08 after tracking A02 / A12
+	. . if $data(^||TMP("HL7-TRACK-2",$job,"PAADMTRANSACTION")) do  quit
+	. . . set detail=$get(^||TMP("HL7-TRACK-2",$job,"PAADMTRANSACTION"))
+	. . . if $piece(detail,"^",3)="A02"!($piece(detail,"^",3)="A12") quit
+	. . . if $piece(detail,"^",3)="A08" set type="A08",ok=1 kill ^||TMP("HL7-TRACK-2",$job,"PAADMTRANSACTION")
+	. . // trigger A08 to follow A03 on last update of PA_Adm
+	. . if $data(^||TMP("HL7-TRACK",$job,table)) do  quit
+	. . . set detail=$get(^||TMP("HL7-TRACK",$job,table))
+	. . . // pre-admission update tracking
+	. . . if $piece(detail,"^",3)=1 quit
+	. . . if ",A03,"'[(","_$piece(detail,"^",4)_",") kill ^||TMP("HL7-TRACK",$job,table) quit
+	. . . set type="A08",ok=1 kill ^||TMP("HL7-TRACK",$job,table)
+	. . set CurrAdSt=$piece($get(%d(25)),$char(1)),PrevAdSt=$piece($get(%old(25)),$char(1))
+	. . // if admission created before registration numbers assigned (eg triage), track and send after A28 sent
+	. . if $get(^||TMP("HL7-TRACK-1",$job,"PAPERSON_PAADM.EDITEMER"))=1 do  quit
+	. . . set type=$select(CurrAdSt="P":"A05",1:"A01"),ok=1 kill ^||TMP("HL7-TRACK-1",$job,"PAPERSON_PAADM.EDITEMER")
+	. . // if admission created in triage is linked to a pre-existing patient
+	. . if $get(^||TMP("HL7-TRACK-TRIAGE",$job,$get(%d(1)))) do  quit
+	. . . if $piece(^||TMP("HL7-TRACK-TRIAGE",$job,$get(%d(1))),"^")=$get(%d(3)) set type=$select(CurrAdSt="P":"A05",1:"A01"),ok=1 kill ^||TMP("HL7-TRACK-TRIAGE",$job)
+	. . // check for patient discharge/cancel discharge
+	. . if ok="" do
+	. . . if CurrAdSt="D",PrevAdSt'="D" set type="A03",ok=1,^||TMP("HL7-TRACK",$job,table)=trigger_"^"_$get(%d(1))_"^^"_type_"^"_ScreenForm quit
+	. . . if CurrAdSt'="D",PrevAdSt="D" set type="A13",ok=1,^||TMP("HL7-TRACK",$job,table)=trigger_"^"_$get(%d(1))_"^^"_type_"^"_ScreenForm
+	. . // check for admission/cancel admission
+	. . if ok="" do
+	. . . if trigger="Insert",CurrAdSt="A" set type="A01",ok=1 quit
+	. . . if trigger="Update",CurrAdSt="A",(PrevAdSt'="A"),$get(%old(25))'="" set type="A01",ok=1 quit
+	. . . if CurrAdSt="C",(PrevAdSt'="C"),(PrevAdSt'="P") set type="A11",ok=1,^||TMP("HL7-TRACK",$job,table)=trigger_"^"_$get(%d(1))
+	. . // check for pre-admission/cancel pre-admission
+	. . if ok="" do
+	. . . if trigger="Insert",CurrAdSt="P" do  quit
+	. . . . kill ^||TMP("HL7-TRACK",$job)
+	. . . . if HL7PreadminCreate'=1 set type="A05",ok=1 quit
+	. . . . if HL7PreadminCreate=1 set ^||TMP("HL7-TRACK",$job,table)=trigger_"^"_$get(%d(1))_"^"_HL7PreadminCreate
+	. . . if trigger="Update",CurrAdSt="P",$get(%d(192))'="",$get(%d(192))'=$get(%old(192)) set type="A05",ok=1 quit
+	. . . if CurrAdSt="C",(PrevAdSt="P") set type="A38",ok=1
+	. . // check for outpatient to inpatient/inpatient to outpatient
+	. . if ok="" do
+	. . . set CurrAdmType=$piece($get(%d(9)),$char(1)),PrevAdmType=$piece($get(%old(9)),$char(1)) quit:CurrAdmType=PrevAdmType
+	. . . if CurrAdmType="I",PrevAdmType'="" set type="A06",ok=1 quit
+	. . . if CurrAdmType="O",PrevAdmType'="" set type="A07",ok=1
+	. . // check for other admission detail changes
+	. . if ok="",trigger="Update" do
+	. . . if HL7PreadminCreate=1 do  quit
+	. . . . if $data(^||TMP("HL7-TRACK",$job,table)),$piece($get(^||TMP("HL7-TRACK",$job,table)),"^")'=trigger quit
+	. . . . set ^||TMP("HL7-TRACK",$job,table)=trigger_"^"_$get(%d(1))_"^"_HL7PreadminCreate,HL7PreadminCreate=""
+	. . . for i=5,7,8,10,12,14,20,22,23,28,70,78,140,141,174,181,196,233,254,273,276,277,337,338,339,342,356 do  if ok quit
+	. . . . if $data(%d(i)),$piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set type="A08",ok=1
+	
+	. if table="PAADM2" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for other admission detail changes
+	. . for i=98,99 do  if ok quit
+	. . . if $data(%d(i)),$piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set type="A08",ok=1
+	
+	. if table="MRADM" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for link to admission
+	. . if $piece($get(%d(13)),$char(1))="" quit
+	. . // check for other admission changes
+	. . for i=14,15,44,45,46,53,55,58,63,65,85,87,88,90,91,93,99,100,108,138,139,140,141 do  if ok quit
+	. . . if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set type="A08",ok=1
+	
+	. if table="MRDIAGNOS" do  quit
+	. . // ignore if update occurred in waitlist and no waitlist linked to admission
+	. . set rowWL="" if ScreenForm="PAWaitingListAdm.Edit" do  if rowWL="" quit
+	. . . set rowMR=$piece($get(%d(1)),"||") if rowMR="" quit
+	. . . set rowADM=$piece($get(^MR(rowMR,"PRO",1)),"^",9) if rowADM="" quit
+	. . . set rowWL=$piece($get(^PAADM(rowADM,1)),"^",18)
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for new procedure
+	. . if trigger="Insert",$piece($get(%d(4)),$char(1))'="" set type="A08",ok=1
+	. . // check for updated procedure
+	. . if trigger="Update" do  if ok quit
+	. . . if $piece($get(%d(4)),$char(1))'=$piece($get(%old(4)),$char(1)) set type="A08",ok=1
+	. . // check for deleted procedure
+	. . if trigger="Delete",$piece($get(%old(4)),$char(1))'="" set type="A08",ok=1 kill curr
+	
+	. if table="MRPROCEDURES" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for new procedure
+	. . if trigger="Insert",$piece($get(%d(3)),$char(1))'="" set type="A08",ok=1
+	. . // check for updated procedure
+	. . if trigger="Update" do  if ok quit
+	. . . if $piece($get(%d(3)),$char(1))'=$piece($get(%old(3)),$char(1)) set type="A08",ok=1
+	. . // check for deleted procedure
+	. . if trigger="Delete",$piece($get(%old(3)),$char(1))'="" set type="A08",ok=1 kill curr
+	
+	. if table="PAADMTRANSACTION" do  quit
+	. . // ignore initial creation of transaction from new admission
+	. . if ScreenForm'="PAAdm.Edit",(ScreenForm'="PAAdmTransaction.EditNew"),(ScreenForm'="PAAdmTransaction.Edit"),(ScreenForm'="PAAdmTransaction.Movement.List"),(ScreenForm'="PAAdmTransaction.Transfer.List"),(ScreenForm'="MRAdm.ReverseDischargeEdit") quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check if not preadmission message creation
+	. . if ScreenForm="PAAdm.Edit",trigger="Insert",'$data(^||TMP("HL7-TRACK",$job,"PAADM")) quit
+	. . // check for patient transfer/cancel transfer
+	. . if trigger="Insert" do
+	. . . kill ^||TMP("HL7-TRACK",$job,table),^||TMP("HL7-TRACK-2",$job,table),array set (found,start,array)=""
+	. . . // check transaction type - if 'T'ransfer
+	. . . set transtype="" do  quit:transtype=""  quit:transtype="T"
+	. . . . set transtype=$select($piece($get(%d(23)),$char(1))'="":$piece($get(%d(23)),$char(1)),1:$piece($get(%old(23)),$char(1))) if transtype'="" set transtype=$piece($get(^PAC("TRANSTYP",transtype)),"^")
+	. . . // if 'B'ooking check if preadmission with ward/room/bed detail
+	. . . if transtype="B" do  kill ^||TMP("HL7-TRACK",$job,"PAADM") quit
+	. . . . if $piece($get(^||TMP("HL7-TRACK",$job,"PAADM")),"^",2)=$piece($get(%d(1)),"||"),$piece($get(^||TMP("HL7-TRACK",$job,"PAADM")),"^",3)=1 set type="A05",ok=1
+	. . . if 'ok do
+	. . . . // check for most recent end date/time
+	. . . . set seq=$piece(%d(1),"||",2) for  set seq=$order(^PAADM($piece(%d(1),"||"),"TRANS",seq),-1) quit:seq=""  do  quit:found
+	. . . . . set detail=$get(^PAADM($piece(%d(1),"||"),"TRANS",seq)),enddate=$piece(detail,"^",3),endtime=$piece(detail,"^",4)
+	. . . . . if enddate=""!(endtime="") quit
+	. . . . . // ignore rejected transfer
+	. . . . . set transstatus=$piece(detail,"^",12) if transstatus'="" set transstatus=$piece($get(^PAC("REQST",transstatus)),"^")
+	. . . . . if transstatus="J" quit
+	. . . . . set array(enddate,endtime,$piece(%d(1),"||"),seq)=""
+	. . . . set enddate=$order(array(""),-1) quit:enddate=""
+	. . . . if enddate'="" set endtime=$order(array(enddate,""),-1) quit:endtime=""
+	. . . . if enddate'="",endtime'="" set seq=$order(array(enddate,endtime,$piece(%d(1),"||"),""),-1) if seq'="" set otherNum=$piece(%d(1),"||")_"||"_seq,type="A02",ok=1
+	. . . if 'ok,$piece($get(%d(11)),$char(1))'="" set type="A02",ok=1
+	. . if trigger="Update" do
+	. . . // check for date/time change to dr transaction
+	. . . if $piece($get(%d(7)),$char(1))'="" do  if ok quit
+	. . . . for i=3,4,5,6,7 if $data(%d(i)),$data(%old(i)) do  if ok quit
+	. . . . . if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)),$piece($get(%old(i)),$char(1))'="" set type="A08",ok=1 quit
+	. . . // check if status 'removed'
+	. . . if $piece($get(%d(14)),$char(1))'="" do  if ok quit
+	. . . . if $piece($get(%d(14)),$char(1))'=$piece($get(%old(14)),$char(1)),$data(%old(14)) do
+	. . . . . set transstatus=$piece($get(^PAC("REQST",$piece($get(%d(14)),$char(1)))),"^") if transstatus'="J" quit
+	. . . . . for i=5,6 if $data(%d(i)),$data(%old(i)) do  if ok quit
+	. . . . . . if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)),$piece($get(%old(i)),$char(1))'="" set type="A08",ok=1 quit
+	. . . // check if A08 required to follow A13 once transaction status is adjusted
+	. . . if $piece($get(^||TMP("HL7-TRACK",$job,"PAADM")),"^",4)="A13" do  if ok quit
+	. . . . set newstatus="" if $piece($get(%d(14)),$char(1))'="" set newstatus=$piece($get(^PAC("REQST",$piece($get(%d(14)),$char(1)))),"^")
+	. . . . set oldstatus="" if $piece($get(%old(14)),$char(1))'="" set oldstatus=$piece($get(^PAC("REQST",$piece($get(%old(14)),$char(1)))),"^")
+	. . . . set newtype="" if $piece($get(%d(23)),$char(1))'="" set newtype=$piece($get(^PAC("TRANSTYP",$piece($get(%d(23)),$char(1)))),"^")
+	. . . . set oldtype="" if $piece($get(%old(23)),$char(1))'="" set oldtype=$piece($get(^PAC("TRANSTYP",$piece($get(%old(23)),$char(1)))),"^")
+	. . . . if newstatus'="T",oldstatus'="D",newtype'="M",oldtype'="M" quit
+	. . . . kill ^||TMP("HL7-TRACK",$job,"PAADM") set type="A08",ok=1
+	. . . // check transaction type - if 'T'ransfer ignore
+	. . . set transtype="" do  quit:transtype=""  quit:transtype="T"
+	. . . . set transtype=$select($piece($get(%d(23)),$char(1))'="":$piece($get(%d(23)),$char(1)),1:$piece($get(%old(23)),$char(1))) if transtype'="" set transtype=$piece($get(^PAC("TRANSTYP",transtype)),"^")
+	. . . // if 'B'ooking check if preadmission with ward/room/bed detail
+	. . . if transtype="B",$piece($get(%d(11)),$char(1))'=$piece($get(%old(11)),$char(1)) do  kill ^||TMP("HL7-TRACK",$job,"PAADM") quit
+	. . . . if $piece($get(^||TMP("HL7-TRACK",$job,"PAADM")),"^",2)=$piece($get(%d(1)),"||"),$piece($get(^||TMP("HL7-TRACK",$job,"PAADM")),"^",3)=1 set type="A08",ok=1
+	. . . if transtype="B" quit
+	. . . // edited transaction - generate A12 to 'cancel' original transaction bed followed by A02 to generate 'move to new bed'
+	. . . if $piece($get(%d(11)),$char(1))'=$piece($get(%old(11)),$char(1))!($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1))) do  quit
+	. . . . set type="A12~"_$get(%d(1))_"^A02~"_$get(%d(1)),ok=1,TransactionEdit="Y"
+	. . . // if updated and now end date/time exist, track for next update
+	. . . if $piece($get(%d(5)),$char(1))'="",($piece($get(%old(5)),$char(1))=""),($piece($get(%d(6)),$char(1))'=""),($piece($get(%old(6)),$char(1))="") do  quit
+	. . . . kill ^||TMP("HL7-TRACK",$job) set ^||TMP("HL7-TRACK",$job,table)=trigger_"^"_$get(%d(1))
+	. . . if $piece($get(%d(5)),$char(1))="",($piece($get(%old(5)),$char(1))'=""),($piece($get(%d(6)),$char(1))=""),($piece($get(%old(6)),$char(1))'="") do  quit
+	. . . . if $data(^||TMP("HL7-TRACK",$job,table)) set otherNum=$piece($get(^||TMP("HL7-TRACK",$job,table)),"^",2),type="A12",ok=1
+	. . . . kill ^||TMP("HL7-TRACK",$job)
+	. . // setup A08 to trigger when PA_Adm is updated after PA_AdmTransaction
+	. . if type="A02"!(type="A12"),ok'="" set $piece(^||TMP("HL7-TRACK-2",$job,table),"^",3)="A08"
+	
+	. if table="PAADMINSURANCE" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for insurance changes
+	. . for i=3,5,6,8,12 if $data(%d(i)) do  if ok quit
+	. . . if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set type="A08",ok=1
+	
+	. if table="PAADMLEAVE" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for leave of absence
+	. . if trigger="Insert",$piece($get(%d(1)),$char(1))'="" set type="A21",ok=1 kill old quit
+	. . if trigger="Update" do  if ok quit
+	. . . for i=4,7 do  quit:ok
+	. . . . if $piece($get(%old(i)),$char(1))'=$piece($get(%d(i)),$char(1)),($piece($get(%d(11)),$char(1))="") set type="A21",ok=1 quit
+	. . . for i=5,6 do  quit:ok
+	. . . . if $piece($get(%old(i)),$char(1))'=$piece($get(%d(i)),$char(1)),($piece($get(%d(12)),$char(1))="") set type="A21",ok=1 quit
+	. . . // check for return from leave of absence
+	. . . if $piece($get(%old(11)),$char(1))="",$piece($get(%d(11)),$char(1))'="" set type="A22",ok=1 quit
+	. . . if $piece($get(%old(11)),$char(1))'="",$piece($get(%d(11)),$char(1))'="",($piece($get(%old(11)),$char(1))'=$piece($get(%d(11)),$char(1))) set type="A22",ok=1 quit
+	. . . // check for cancel return from leave of absence
+	. . . if $piece($get(%old(11)),$char(1))'="",$piece($get(%d(11)),$char(1))="" set type="A53",ok=1
+	. . // check for cancel leave of absence
+	. . if trigger="Delete",$piece($get(%old(1)),$char(1))'="" set type="A52",ok=1 kill curr
+	
+	. if table="PAWAITINGLIST" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for waiting list entry/changes
+	. . if trigger="Update" do  quit
+	. . . // waiting list updates
+	. . . for i=3,4,5,7,13,14,22,37,57,66,76,83 if $data(%d(i)) do  if ok quit
+	. . . . if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="A08"
+	. . . // triage/vetting outcome changed and link to RBReferral exists
+	. . . if $data(%d(167)),$piece($get(%d(167)),$char(1))'=$piece($get(%old(167)),$char(1)) do  quit
+	. . . . set intRefNum=$order(^RBRFi("WaitList",$get(%d(1)),"")) if intRefNum="" quit
+	. . . . set type="REF_I13"
+	. . . . // extract links to send message to
+	. . . . kill SendTo if '$$sendto^HL7Outbound(type,table) if $order(SendTo(""))="" quit
+	. . . . set cnt="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do
+	. . . . . set link=SendTo(cnt)
+	. . . . . do Refer^HL7OutboundREF(intRefNum_"^"_$get(%d(1)),link,type,trigger)
+	. . if trigger="Delete" do  quit
+	. . . // waiting list deleted
+	. . . set type="A38",ok=1 kill curr
+	
+	. if table="PAWAITINGLISTADM" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for waiting list admission
+	. . if trigger="Insert" do  quit
+	. . . // waiting list link to admission
+	. . . if $piece($get(%old(3)),$char(1))="",$piece($get(%d(3)),$char(1))'="" set ok=1,type="A05"
+	. . // check for waiting list admission entry/changes
+	. . if trigger="Update" do  quit
+	. . . // waiting list link to admission
+	. . . if $piece($get(%old(3)),$char(1))="",$piece($get(%d(3)),$char(1))'="" set ok=1,type="A05" quit
+	. . . // waiting list link to admission deleted
+	. . . if $piece($get(%old(3)),$char(1))'="",$piece($get(%d(3)),$char(1))="" set ok=1,type="A38" quit
+	. . . // pre-admission cancelled
+	. . . if $piece($get(%old(41)),$char(1))'="C",$piece($get(%d(41)),$char(1))="C" set ok=1,type="A38" quit
+	. . . // other waiting list admission updates
+	. . . for i=4,8,9,12,13,16,17,18,19,22,23,27,28,29,33,34,35,36,37,38,39,40 do  if ok quit
+	. . . . if $data(%d(i)),$piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="A08"
+	. . . // check for changes to cancellation detail
+	. . . for i=5,6,7,11,26 if $piece($get(%old(i)),$char(1))'="" do  if ok quit
+	. . . . if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="A08"
+	
+	. if table="PAWAITINGLISTNOTAVAILABLE" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for waiting list not ready for care entry/changes
+	. . if trigger="Insert" do  quit
+	. . . set type="A05",ok=1 quit
+	. . if trigger="Update" do  quit
+	. . . set type="A05" for i=3,4,5,12,17 if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1 quit
+	. . if trigger="Delete" do  quit
+	. . . set type="A05",ok=1
+	
+	. if table="PAWAITINGLISTTRANSACTION" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for new transaction
+	. . if trigger="Insert" do  quit
+	. . . set intNum=$piece($get(%d(1)),$char(1))
+	. . . // ignore first transaction
+	. . . set row=$order(^PAWL($piece(intNum,"||"),"TRANS",$piece(intNum,"||",2)),-1) if row=""!(row=0) quit
+	. . . // extract current and previous status
+	. . . set transtatus=$piece($get(^PAC("WLS",$piece($get(%d(10)),$char(1)))),"^")
+	. . . if transtatus=""!(",I,R,"'[(","_transtatus_",")) quit
+	. . . // ab 16.06.05 - quit if tci status is changed (ie. on cancel)
+	. . . set tcistatus=$piece($get(%d(14)),$char(1)) quit:tcistatus'=""
+	. . . set ok=1,type="A05"
+	
+	. if table="PATRAFFICACCIDENT" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // new traffic accident/compensable detail
+	. . if trigger="Insert" do  quit
+	. . . if $get(%d(50))="" quit
+	. . . set type="A08",ok=1
+	. . if trigger="Update" do  quit
+	. . . // other traffic accident/compensable updates
+	. . . for i=2,6,8,15,20,25,26,42,47,49,50,52 do  if ok quit
+	. . . . if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="A08"
+	. . if trigger="Delete" do  quit
+	. . . set type="A08",ok=1 kill curr
+	
+	. if table="PATRAFFICACCIDENTCONTACT" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // new traffic accident contact detail
+	. . if trigger="Insert" do  quit
+	. . . if $piece($get(%d(4)),$char(1))'="" set ok=1,type="A08"
+	. . if trigger="Update" do  quit
+	. . . for i=3,4,5,6,7,8 if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="A08" quit
+	. . if trigger="Delete" do  quit
+	. . . set type="A08",ok=1 kill curr
+	
+	. if table="PAALLERGY"!(table="PAALERTMSG") do  quit
+	. . // ignore inserts from merging patients
+	. . if ScreenForm="PAMergePatient.Edit" quit
+	. . merge old(table)=%old,curr(table)=%d set oknum=""
+	. . // check for patient/hospital number
+	. . kill intNum do  kill intNum if 'oknum quit
+	. . . set intNum=$piece(%d(1),"||") if $$extRegMrn^HL7Common2(intNum)'="" set oknum=1 quit
+	. . . if $data(^RT(0,"PAT",intNum)) set oknum=1 quit
+	. . // check for new allergy/alert
+	. . if trigger="Insert",$piece($get(%d(1)),$char(1))'="" set type="A60",ok=1 quit
+	. . // check for update allergy/alert
+	. . if trigger="Update" do  quit
+	. . . set total=$order(%old(""),-1) for i=1:1:total if $get(%old(i))'=$get(%d(i)) set type="A60",ok=1 quit
+	. . // check for deleted allergy/alert
+	. . if trigger="Delete",$piece($get(%old(1)),$char(1))'="" set type="A60",ok=1 kill curr
+	
+	. // check for hospital number active status changes
+	. if table="RTMASTER" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for new number
+	. . if trigger="Insert",$piece($get(%d(1)),$char(1))'="" do  if ok quit
+	. . . if $piece($get(%d(3)),$char(1))'="",$$extRegMrn^HL7Common2($piece($get(%d(3)),$char(1)))="" set type="A28",ok=1
+	. . if trigger="Insert",$piece($get(%d(1)),$char(1))'="" set type="A31",ok=1 quit
+	. . if trigger="Update" do  quit
+	. . . // check for number change
+	. . . if $get(%old(2))'=$get(%d(2)) set type="A31",ok=1 quit
+	. . . // check for patient id change
+	. . . if $get(%old(3))'=$get(%d(3)),(ScreenForm="PAMergePatient.EditCopyAdmission") set type="A43",ok=1 quit
+	. . . // check for active status change
+	. . . if $get(%old(13))'=$get(%d(13)),(ScreenForm="PAMergePatient.EditCopyAdmission") set type="A47",ok=1 quit
+	. . . // check for medical record type change
+	. . . if $data(%d(9)),$get(%old(9))'=$get(%d(9)) set type="A31",ok=1 quit
+	. . // check for deleted number
+	. . if trigger="Delete" set type="A47",ok=1 kill curr
+	
+	. // check for hospital volume transaction changes
+	. if table="RTMVTRANS" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . if trigger="Delete" quit
+	. . // check for new transaction
+	. . if trigger="Insert",$piece($get(%d(1)),$char(1))'="" set type="A31",ok=1 quit
+	. . // check for transaction change
+	. . if trigger="Update" do  quit
+	. . . set total=$order(%old(""),-1) for i=1:1:total if $get(%old(i))'=$get(%d(i)) set type="A31",ok=1 quit
+	
+	. // check for patient detail changes
+	. if type="" do
+	. . // St Georges specific code - required to send A28 when no registration # exists
+	. . if $listget(^websys.ConfigurationD(1),58)="STG" do
+	. . . // send new
+	. . . if table="PAPATMAS" do  quit
+	. . . . merge old("PAPMI")=%old,curr("PAPMI")=%d
+	. . . . if $data(^||TMP("HL7-TRACK",$job,"PAPERSON")) do
+	. . . . . if ^||TMP("HL7-TRACK",$job,"PAPERSON")="Insert" set ok=1,type="A28" quit
+	. . . . . // ab 5.05.08 - to prevent 2 messages being sent on update of PAPerson.Edit - TRC 21851
+	. . . . . if ^||TMP("HL7-TRACK",$job,"PAPERSON")="Update" do
+	. . . . . . // TRC 26373 / LOG 67208
+	. . . . . . if $get(%d(2))="" set ok=1,type="A28" quit
+	. . . . kill ^||TMP("HL7-TRACK",$job)
+	
+	. . if $listget(^websys.ConfigurationD(1),58)'="STG" do
+	. . . // send new
+	. . . if table="PAPATMAS" do  quit
+	. . . . merge old("PAPMI")=%old,curr("PAPMI")=%d
+	. . . . if $data(^||TMP("HL7-TRACK",$job,"PAPERSON")) do
+	. . . . . if ^||TMP("HL7-TRACK",$job,"PAPERSON")="Insert",$get(%d(2))'="",$get(%old(2))="" set ok=1,type="A28" quit
+	. . . . . if ^||TMP("HL7-TRACK",$job,"PAPERSON")="Update" do
+	. . . . . . kill intNum set oknum="" do  kill intNum if 'oknum quit
+	. . . . . . . set intNum=$piece(%d(1),"||") if $$extRegMrn^HL7Common2(intNum)'="" set oknum=1 quit
+	. . . . . . . if $data(^RT(0,"PAT",intNum)) set oknum=1 quit
+	. . . . . . if PDSFlag'="Y",$get(%d(2))'="",$get(%old(2))="" set ok=1,type="A28" quit
+	. . . . . . // check for PDS changes only
+	. . . . . . if PDSFlag="Y" do  if ok quit
+	. . . . . . . if $data(%PDSDATA(table)) do
+	. . . . . . . . set i="" for  set i=$order(%PDSDATA(table,i)) quit:i=""  do  if ok quit
+	. . . . . . . . . // ignore updates to time of death from PDS merge screen
+	. . . . . . . . . if i=86 quit
+	. . . . . . . . . if $zconvert($piece($get(%PDSDATA(table,i)),$char(1)),"U")'=$zconvert($piece($get(%d(i)),$char(1)),"U") set ok=1,type="A31",PDSmsg="Y" quit
+	. . . . . . for i=84,86,91,98,99,105,106,109,110,111,112,113,114,115,117,119,120,121,122,124,125,129,132,133,138,140,144,146 do  if ok quit
+	. . . . . . . if $get(%d(i))'=$get(%old(i)) set ok=1,type="A31"
+	. . . . . . . // PDS does not require ADT_A31 for time of death
+	. . . . . . . if (PDSFlag="Y")&&(ok=1)&&(i=86) set ok=""
+	. . . . . . // person deactivated
+	. . . . . . if $get(%d(42))="N",$get(%old(42))'="N" set ok=1,type="A29" quit
+	. . . . // set tracking flag to allow previously triaged episode to be sent out
+	. . . . if ok,type="A28",$data(^||TMP("HL7-TRACK-1",$job,"PAPERSON_PAADM.EDITEMER")) set ^||TMP("HL7-TRACK-1",$job,"PAPERSON_PAADM.EDITEMER")=1
+	. . . . // new born birth registrations
+	. . . . if $piece($get(%d(145)),$char(1))'="" do
+	. . . . . // set tracking flag to allow ADT_A28 to be sent once baby birth record is linked in table PA_PregDelBaby
+	. . . . . if type="A28",ok do  quit
+	. . . . . . set ok=""
+	. . . . . . // force ADT_A28 if PDS birth registration requested
+	. . . . . . if SendPDSBirthRegistration="on" set PDSmsg="X"
+	. . . . . . set ^||TMP("HL7-TRACK-BABY",$job,$piece($get(%d(1)),$char(1)))=PDSmsg
+	. . . . . // force ADT_A28 if 'Send PDS Birth' is on and 'Ignore Duplicate PDS' is off
+	. . . . . if type="",SendPDSBirthRegistration="on",IgnoreDupPDSMaternity'="on" do
+	. . . . . . set ok=1,type="A28",PDSmsg="X"
+	. . . . if $get(%d(2))'="" kill ^||TMP("HL7-TRACK",$job)
+	
+	. . . if '$data(%old),$data(%d),table="PAPERSON",$get(ScreenForm)["PAMajorIncident" set ok=1,type="A28" quit
+	
+	. // send updates
+	. if table="PAPERSON",ScreenForm'="PAMergePatient.Edit" set type="A31" do
+	. . // check fields on PA_Person
+	. . kill intNum set oknum="" do  kill intNum if 'oknum quit
+	. . . // allow PDS to bypass if 'request national id' requested
+	. . . if PDSFlag="Y" set oknum=1 quit
+	. . . set intNum=$piece(%d(1),"||") if $$extRegMrn^HL7Common2(intNum)'="" set oknum=1 quit
+	. . . if $data(^RT(0,"PAT",intNum)) set oknum=1 quit
+	. . merge old("PAPER")=%old,curr("PAPER")=%d
+	. . // check for PDS changes only
+	. . if PDSFlag="Y" do  if ok quit
+	. . . if $data(%PDSDATA(table)) do
+	. . . . set i="" for  set i=$order(%PDSDATA(table,i)) quit:i=""  do  if ok quit
+	. . . . . // ignore updates to GP fields from PDS merge screen
+	. . . . . if ",67,148,244,"[(","_i_",") quit
+	. . . . . // ignore updates to time of death from PDS merge screen
+	. . . . . if i=82 quit
+	. . . . . // check list build fields separately
+	. . . . . if i=28 do  quit
+	. . . . . . set (pdsdatax,dx)=""
+	. . . . . . if $listlength($get(%PDSDATA(table,i))) for jj=1:1:$listlength($get(%PDSDATA(table,i))) set pdsdatax=pdsdatax_$select($length(pdsdatax):"^",1:"")_$list(%PDSDATA(table,i),jj)
+	. . . . . . if $listlength($get(%d(i))) for jj=1:1:$listlength($get(%d(i))) set dx=dx_$select($length(dx):"^",1:"")_$list(%d(i),jj)
+	. . . . . . if $zconvert(pdsdatax,"U")'=$zconvert(dx,"U") set ok=1,PDSmsg="Y"
+	. . . . . if $zconvert($piece($get(%PDSDATA(table,i)),$char(1)),"U")'=$zconvert($piece($get(%d(i)),$char(1)),"U") set ok=1,PDSmsg="Y" quit
+	. . . else  do
+	. . . . for i=4,5,11,15,18,26,28,33,35,36,38,74,113,118,138,139,140,143,168 do  if ok quit
+	. . . . . // check if null and $c(0) as they are the same thing - only occurs when setting up patients using PDS
+	. . . . . if $get(%d(i))'=$get(%old(i)),$get(%d(i))="",$get(%old(i))=$char(0) quit
+	. . . . . if $get(%d(i))'=$get(%old(i)) set ok=1,PDSmsg="Y" quit
+	. . . . // check dr group number separately
+	. . . . kill group if $get(%d(67))'=$get(%old(67)) do  kill group
+	. . . . . for i=1,2 set intRefDr=$select(i=1:$get(%old(67)),1:$get(%d(67))) if intRefDr'="" do
+	. . . . . . &SQL(SELECT REFD_Group INTO :GroupNum FROM PAC_RefDoctor WHERE REFD_RowId = :intRefDr)
+	. . . . . . set group($select(i=1:"old",1:"new"))=GroupNum
+	. . . . . if $get(group("old"))'=$get(group("new")) set ok=1,PDSmsg="Y" quit
+	. . . // for PDS - if we are NOW requesting National ID - force A28 regardless (switched to A28 later)
+	. . . if ReqNatId="on" set type="A31",ok=1,PDSmsg="X"
+	. . . // for PDS - if ignoring duplicates request again and force A28
+	. . . if IgnoreDupPDSMaternity="on" set type="A28",ok=1,PDSmsg="X"
+	. . for i=3,4,5,11,15,18,20,22,23,26,28,31,33,34,35,36,37,38,55,57,67,73,74,77,82,90,95,101,105,106,112,113,115,118,119,128,138,139,140,141,143,144,148,150,151,152,155,156,157,168,171,180,181,184,185,188,195,196,198,204,205,216,220,221 do  if ok quit
+	. . . if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1
+	. . . // PDS does not require ADT_A31 for time of death
+	. . . if (PDSFlag="Y")&&(ok=1)&&(i=82) set ok=""
+.
+	. . // check list build fields separately again due to $c(1) maybe used in building list
+	. . if 'ok for i=28,73 do  if ok quit
+	. . . set (dx,oldx)=""
+	. . . if $listlength($get(%d(i))) for jj=1:1:$listlength($get(%d(i))) set dx=dx_$select($length(dx):"^",1:"")_$list(%d(i),jj)
+	. . . if $listlength($get(%old(i))) for jj=1:1:$listlength($get(%old(i))) set oldx=oldx_$select($length(oldx):"^",1:"")_$list(%old(i),jj)
+	. . . if dx'=oldx set ok=1
+	. . // TRC 26373 / LOG 67208
+	. . if $data(%request),$get(%request.Data("OverrideDup",1))="on" set type="A31",ok=1 quit
+	
+	. // check for alias changes
+	. if table="PAPERSONALIAS" do  quit
+	. . merge old("PALIAS")=%old,curr("PALIAS")=%d
+	. . // check name
+	. . if $piece($get(%d(3)),$char(1))'=$piece($get(%old(3)),$char(1)) set type="A31",ok=1 quit
+	. . // check status
+	. . if $piece($get(%d(4)),$char(1))'=$piece($get(%old(4)),$char(1)) set type="A31",ok=1 quit
+	
+	. // check for surname alias changes
+	. if table="PAPERSONSURNAMEALIAS" do  quit
+	. . merge old("PSURALIAS")=%old,curr("PSURALIAS")=%d
+	. . // check name
+	. . if $piece($get(%d(3)),$char(1))'=$piece($get(%old(3)),$char(1)) set type="A31",ok=1 quit
+	. . // check sex
+	. . if $piece($get(%d(13)),$char(1))'=$piece($get(%old(13)),$char(1)) set type="A31",ok=1 quit
+	
+	. // check for temporary address changes
+	. if table="PATEMPADDRESS" do  quit
+	. . merge old("PTADD")=%old,curr("PTADD")=%d
+	. . // ignore if all addresses end dated and before current date - TRC 52943
+	. . set tadd1=$piece($get(%d(1)),"||"),tadd=1
+	. . set tadd2=0 for  set tadd2=$order(^PAPER(tadd1,"TADDR",tadd2),1,detail) quit:tadd2=""  do  if tadd="" quit
+	. . . if $piece(detail,"^",9)="" set tadd="" quit
+	. . . if $piece(detail,"^",9)>(+$h-1) set tadd="" quit
+	. . if tadd quit
+	. . // ab 5.05.08 - to prevent 2 messages being sent on update of PAPerson.Edit - TRC 21851
+	. . if $listget(^websys.ConfigurationD(1),58)="STG",ScreenForm="PAPerson.Edit" quit
+	. . // check for new or deleted address
+	. . if trigger="Insert",ScreenForm'="PAMergePatient.Edit" set ok=1,type="A31" quit
+	. . if trigger="Delete" set type="A31",ok=1 quit
+	. . // check for changes to address
+	. . if trigger'="Update" quit
+	. . // ignore updates to address if enddated and before current date
+	. . if $piece($get(%d(12)),$char(1))=$piece($get(%old(12)),$char(1)),$piece($get(%d(12)),$char(1))'="",$piece($get(%d(12)),$char(1))<+$h quit
+	. . for i=3,4,6,7,9,11,12,15,16 if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="A31" quit
+	
+	. // check for next of kin changes
+	. if table="PANOK" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for new or deleted nok
+	. . if trigger="Insert"!(trigger="Delete") set type="A31",ok=1 quit
+	. . // check for changes
+	. . set nokcnt=$order(%d(""),-1) for i=1:1:nokcnt if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set type="A31",ok=1 quit
+	. // check for
+	. if table="PAADMSEPREF" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . // check for changes to referral separation
+	. . if $piece($get(%d(3)),$char(1))'=$piece($get(%old(3)),$char(1)) set ok=1,type="A08" quit
+	. // check for operating room changes
+	. if table="RBOPERATINGROOM" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . if $listget(^websys.ConfigurationD(1),58)="STG" do  quit
+	. . . if $piece($get(%d(13)),$char(1))="B",$piece($get(%d(35)),$char(1))'="",$piece($get(%old(35)),$char(1))="" set type="A01",ok=1 quit
+	. . . if $piece($get(%d(35)),$char(1))'="",$piece($get(%old(35)),$char(1))'="",$piece($get(%d(35)),$char(1))'=$piece($get(%old(35)),$char(1)) set type="A08",ok=1 quit
+	. . if $piece($get(%d(13)),$char(1))="A",$piece($get(%old(13)),$char(1))="B" set type="A01",ok=1 quit
+	. // check for anaesthesia changes
+	. if table="ORANAESTHESIA" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . if trigger="Insert" set ok=1,type="A08"
+	. . if trigger="Delete" set ok=1,type="A08"
+	. . if trigger="Update" do
+	. . . for i=6,7 if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="A08" quit
+	
+	. // check for anaesthesia operation changes
+	. if table="ORANAESTOPERATION" do  quit
+	. . merge old(table)=%old,curr(table)=%d
+	. . if trigger="Insert" set ok=1,type="A08"
+	. . if trigger="Delete" set ok=1,type="A08"
+	. . if trigger="Update" do
+	. . . for i=4,5,11,16,19,44,45 if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="A08" quit
+	. // check for pregnancy birth detail link to registration
+	. if table="PAPREGDELBABY" do  quit
+	. . if trigger="Update",$piece($get(%d(85)),$char(1))'="",$piece($get(%old(85)),$char(1))="" do
+	. . . merge old(table)=%old,curr(table)=%d
+	. . . if '$data(^||TMP("HL7-TRACK-BABY",$job,$piece($get(%d(85)),$char(1)))) quit
+	. . . set ok=1,type="A28",PDSmsg=$get(^||TMP("HL7-TRACK-BABY",$job,$piece($get(%d(85)),$char(1))))
+	. . . kill ^||TMP("HL7-TRACK-BABY",$job)
+.
+	if 'ok kill old,curr,array quit
+.
+	// send singular message
+	if $length(type,"^")=1 do
+	. set type="ADT_"_type,copytype=type
+	. // extract links to send message to
+	. kill SendTo if '$$sendto^HL7Outbound(type,table) if $order(SendTo(""))="" quit
+	
+	. set cnt="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do
+	. . set link=SendTo(cnt)
+	. . set PDSok=1 if $piece($get(^SSHL7(link,"RULES",1)),"^",13)="Y" do  if 'PDSok quit
+	. . . // ignore non-PDS message on a PDS interface
+	. . . if PDSmsg="" set PDSok=0 quit
+	. . . // force ADT_A28 if ignoring duplicates in PDS birth registration
+	. . . if IgnoreDupPDSMaternity="on",PDSmsg="X",type="ADT_A28" set UpdateSCN="Y" quit
+	. . . // force ADT_A28 if PDS birth registration requested
+	. . . if SendPDSBirthRegistration="on",PDSmsg="X",type="ADT_A28" set UpdateSCN="Y" quit
+	. . . // for PDS - if we are NOW requesting National ID - force A28 regardless
+	. . . if PDSmsg="X",'$$MessageExist(link,"ADT_A28") set type="ADT_A28",UpdateSCN="Y" quit
+	. . . // check for message suppression if national id not requested (eg. from PDS)
+	. . . if PDSmsg'="",'$$CanUpdatePDS^CPAPerson1(%d(1),$piece(type,"_",2)) set PDSok=0 quit
+	. . . // mark SCN ready to update if PDS interface
+	. . . set UpdateSCN="Y"
+	. . // ignore PDS ADT_A31 from PAPerson before ADT_A28 on a non-PDS interface
+	. . if $piece($get(^SSHL7(link,"RULES",1)),"^",13)'="Y",table="PAPERSON",trigger="Insert",type="ADT_A31" quit
+	. . // set rowid triggering msg
+	. . set TRIGGER("ROWID")=$get(%d(1))
+	. . do ADT^HL7Create(%d(1),link,type,trigger,otherNum)
+	. . // also send message
+	. . do AlsoSend("")
+	
+	. . // revert message type back to original to cater for PDS forced change
+	. . set type=copytype
+	// send multiple messages
+	if $length(type,"^")>1 do
+	. set typex=type for typecnt=1:1:$length(typex,"^") set type=$piece(typex,"^",typecnt),intNum=$piece(type,"~",2),type=$piece(type,"~") do
+	. . set type="ADT_"_type,copytype=type
+	
+	. . // extract links to send message to
+	. . kill SendTo if '$$sendto^HL7Outbound(type,table) if $order(SendTo(""))="" quit
+	
+	. . set cnt="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do
+	. . . set link=SendTo(cnt)
+	
+	. . . set PDSok=1 if $piece($get(^SSHL7(link,"RULES",1)),"^",13)="Y" do  if 'PDSok quit
+	. . . . // ignore non-PDS message on a PDS interface
+	. . . . if PDSmsg="" set PDSok=0 quit
+	. . . . // force ADT_A28 if ignoring duplicates in PDS birth registration
+	. . . . if IgnoreDupPDSMaternity="on",PDSmsg="X",type="ADT_A28" set UpdateSCN="Y" quit
+	. . . . // force ADT_A28 if PDS birth registration requested
+	. . . . if SendPDSBirthRegistration="on",PDSmsg="X",type="ADT_A28" set UpdateSCN="Y" quit
+	. . . . // for PDS - if we are NOW requesting National ID - force A28 regardless
+	. . . . if PDSmsg="X",'$$MessageExist(link,"ADT_A28") set type="ADT_A28",UpdateSCN="Y" quit
+	. . . . // check for message suppression if national id not requested (eg. from PDS)
+	. . . . if PDSmsg'="",'$$CanUpdatePDS^CPAPerson1(%d(1),$piece(type,"_",2)) set PDSok=0 quit
+	. . . . // mark SCN ready to update if PDS interface
+	. . . . set UpdateSCN="Y"
+	. . . // ignore PDS ADT_A31 from PAPerson before ADT_A28 on a non-PDS interface
+	. . . if $piece($get(^SSHL7(link,"RULES",1)),"^",13)'="Y",table="PAPERSON",trigger="Insert",type="ADT_A31" quit
+	. . . // set rowid triggering msg
+	. . . set TRIGGER("ROWID")=$get(intNum)
+	. . . do ADT^HL7Create(intNum,link,type,trigger,otherNum)
+	. . . // also send message
+	. . . do AlsoSend("")
+	
+	. . . // revert message type back to original to cater for PDS forced change
+	. . . set type=copytype
+	
+	// if PDS mark record as 'update in progress' to prevent further auto-updates
+	if UpdateSCN="Y" set $piece(^PAPER($piece(%d(1),"||"),"PER",6),"^",6)="-1"
+	
+	kill old,curr,array
+	quit
+	
+	// also send message
+AlsoSend(merge,intNum) set merge=$get(merge),intNum=$get(intNum),(tabletype,tablex)=""
+	// check for other message to send
+	if $get(^SSHL7(link,"MSG-TYPE",type,"ALSO-SEND"))'="" do
+	. set AlsoSend=$piece($get(^SSHL7(link,"MSG-TYPE",type,"ALSO-SEND")),"^"),AlsoRowType=$piece(AlsoSend,"_",3),AlsoSend=$piece(AlsoSend,"_",1,2)
+	. // set rowid required from previous non-merge message
+	. if merge="" do
+	. . // extract rowid to send
+	. . set tabletype=$$table(table)
+	. . // extract rowid required from current rowid
+	. . if AlsoRowType="P" do  if intNum'="" set tablex=table,table="PAPERSON"
+	. . . if tabletype="P" set intNum=$piece(%d(1),"||")
+	. . . if tabletype="M" set intNum=$piece(^RT($piece(%d(1),"||")),"^",2)
+	. . . if tabletype="A" set intNum=$piece(^PAADM($piece(%d(1),"||")),"^")
+	. . . if tabletype="A-M" set intNum=$piece(^MR($piece(%d(1),"||"),"PRO",1),"^",9),intNum=$piece(^PAADM(intNum),"^")
+	. . // extract rowid required for additional admission message
+	. . if AlsoRowType="A",tabletype="A" do  if intNum'="" set tablex=table,table="PAADM"
+	. . . set intNum=$piece(%d(1),"||")
+	. if intNum="" quit
+	
+	. // only send ADT^A60 if alerts/allergies exist
+	. if AlsoSend="ADT_A60",$order(^PAPER(intNum,"ALG",0))="",($order(^PAPER(intNum,"ALM",0))="") quit
+	
+	. kill oldx,currx merge oldx=old,currx=curr kill old,curr
+	. do ADT^HL7Create(intNum,link,AlsoSend)
+	. merge old=oldx,curr=currx kill oldx,currx
+	. set table=tablex kill tablex
+	
+	quit
+	
+	// return table type : P - Patient
+	// 		      M - MRN
+	// 		      A - Admission
+table(table) new (table) set table=$get(table),tabletype=""
+	if ",PAPERSON,PAPATMAS,PAALLERGY,PAALERTMSG,PANOK,PATEMPADDRESS,PAPERSONALIAS,PAPERSONSURNAMEALIAS,"[(","_table_",") set tabletype="P"
+	if ",RTMASTER,RTMVTRANS,"[(","_table_",") set tabletype="M"
+	if ",PAADM,PAADMLEAVE,PAADMINSURANCE,PAADMTRANSACTION,"[(","_table_",") set tabletype="A"
+	if ",MRADM,"[(","_table_",") set tabletype="A-M"
+	quit tabletype
+.
+MessageExist(link,msgtype) new (link,msgtype) set link=$get(link),msgtype=$get(msgtype),rowid=link_"||"_msgtype
+	&SQL(SELECT * INTO :message() FROM SS_HL7MessageType WHERE HL7MSG_RowId = :rowid)
+	quit SQLCODE
+
+
+

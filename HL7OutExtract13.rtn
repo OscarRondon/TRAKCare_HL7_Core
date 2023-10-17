@@ -1,0 +1,41 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract13^MAC^^^0
+HL7OutExtract13 // ML 09/05/2006 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract13.rtn#1 $
+	quit
+ 
+	// extract clinical pathways
+ClinPathWay(intClinPath,ClinPathWay) new (intClinPath,ClinPathWay) set intClinPath=$get(intClinPath)
+	&SQL(SELECT * INTO :ClinPathWay() FROM MR_ClinicalPathWays WHERE CPW_RowId = :intClinPath)
+	quit SQLCODE
+ 
+	// extract pathway detail
+PathWay(intPathWay,PathWay) new (intPathWay,PathWay) set intPathWay=$get(intPathWay)
+	&SQL(SELECT * INTO :PathWay() FROM MRC_ClinicalPathways WHERE CPW_RowId = :intPathWay)
+	quit SQLCODE
+ 
+	// extract pathway episode days goals
+PathDays(intPathDays,PathDays) new (intPathDays,PathDays) set intPathDay=$get(intPathDay)
+	&SQL(SELECT * INTO :PathDays() FROM MRC_ClinPathwEpDays WHERE DAYS_RowId = :intPathDays)
+	quit SQLCODE
+ 
+	// extract code table settings
+CodeTable(mtable) set (code,desc,type,other)=""
+ 
+	if mtable="MRC_ClinicalPathways" do
+	.for i=7 if $get(PathWay(i))'="" do  set PathWay(i)=$select($get(PathWay(i))="""""":"""""",1:code_"^"_desc_$select(i=28:"^"_other,1:"")),(code,desc,other)=""
+	..set value=PathWay(i) quit:value=""""""
+	..if i=7 do
+	... &SQL(SELECT CLPT_Code, CLPT_Desc INTO :code, :desc FROM MRC_ClinPathType WHERE CLPT_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(PathWay(""),-1) if $data(PathWay(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",7,"[(","_i_",") quit
+	..set PathWay(i)=$$TextConversion^HL7Common12(PathWay(i),"O")
+ 
+	quit
+
+
+

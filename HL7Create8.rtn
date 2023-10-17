@@ -1,0 +1,119 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Create8^MAC^^^0
+HL7Create8 // ML 12/08/2009 ; HL7 interface : create transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Create8.rtn#1 $
+	quit
+	
+CheckNTE ;; build DATA array - NTE
+NTE()	set count="" kill DATA
+.
+	// notes for referral messages
+	if msgtype["REF" do
+	. // extract discharge summary detail
+	. kill DischSum if $$DischSum^HL7OutExtract14(intDSNum,.DischSum)
+	. for j=10,14,17,25,27,29,31,33,35 do
+	. . set type=$select(j=10:"DG^DIAGNOSIS",j=14:"PR^PROCEDURES",j=17:"SG^SUGGESTIONS",j=25:"TC^TREATING CLINICIANS",1:"CM"_$select(j=27:1,j=29:2,j=31:3,j=33:4,1:5)_"^COMMENTS "_$select(j=27:1,j=29:2,j=31:3,j=33:4,1:5))
+	. . kill comment set comm=$get(DischSum(j)),comment="" if $listlength(comm) do
+	. . . for k=1:1:$listlength(comm) set line=$list(comm,k),line=$translate(line,$char(0)),comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(line,"O"),$char(13,10),HL7("LINEBK"))
+	. . if comment="" quit
+	. . do Notes
+	
+	// notes for appointment scheduling messages
+	if (msgtype["SIU")&&(",S23,S24,"'[(","_$piece(msgtype,"_",2)_",")) {
+		// appointment data only available if not SIU^S23/S24
+		kill Appointment
+		// extract appointment detail
+		if '$$Appointment^HL7OutExtract11(intApptNum,.Appointment) {
+			set type="APPT^APPOINTMENT NOTES"
+			set comment=""
+			set comm=$get(Appointment(6))
+			if $listlength(comm) {
+				for k=1:1:$listlength(comm) {
+					set line=$list(comm,k)
+					set line=$translate(line,$char(0))
+					set comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(line,"O"),$char(13,10),HL7("LINEBK"))
+				}
+			}
+			if comment'="" do Notes
+		}
+	}
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+	// build NTE segment
+Notes
+	set count=count+1
+	if count=1 do  quit
+	. set DATA("NTE",1)=count,DATA("NTE",3)=comment,DATA("NTE",4)=type_"^TRAKCARE"
+	
+	if count>1,repeat="Y" do
+	. set Repeat("NTE",count,1)=count,Repeat("NTE",count,3)=comment,Repeat("NTE",count,4)=type_"^TRAKCARE"
+	quit
+	
+CheckROL ;; build DATA array - ROL
+ROL()	set count="" kill DATA
+	
+	// ROL segment for after PID or PD1 segment
+	if prevsegment="PID"!(prevsegment="PD1") do
+	. kill PatDetail if $$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail) quit
+	. kill doc
+	. if trigger="Insert",table="PAPERSON",PatDetail(67)'="" set doc(1)=PatDetail(67),action(1)="AD"
+	. if trigger="Update",table="PAPERSON" do
+	. . if $get(old("PAPER",67))=PatDetail(67),PatDetail(67)'="" set doc(1)=PatDetail(67),action(1)="UC" quit
+	. . if $get(old("PAPER",67))="",PatDetail(67)'="" set doc(1)=PatDetail(67),action(1)="AD" quit
+	. . if $get(old("PAPER",67))'=PatDetail(67),PatDetail(67)'="" set doc(1)=$get(old("PAPER",67)),action(1)="DE",doc(2)=PatDetail(67),action(2)="AD" quit
+	. . if $get(old("PAPER",67))'=PatDetail(67),PatDetail(67)="" set doc(1)=$get(old("PAPER",67)),action(1)="DE"
+	
+	. if table'="PAPERSON" if PatDetail(67)'="" set doc(1)=PatDetail(67),action(1)="UC"
+	. set j="" for  set j=$order(doc(j)) quit:j=""  do
+	. . set drcode=$$Provider^HL7Common5(doc(j),"","","","R","O")
+	. . set doctor=""
+	. . for k=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),k) do
+	. . . set drcodetype=$piece(dr,$char(2),7)
+	. . . set doctor=doctor_$select($length(doctor):"~",1:"")_$piece(dr,$char(2),1)_"^"_$piece(dr,$char(2),2)_"^"_$piece(dr,$char(2),3)_"^^^^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	. . set actioncode=action(j),drtype="FHCP^Family Health Care Professional"
+	. . do Role
+	
+	// ROL segment for after PV1 or PV2 segment
+	if prevsegment="PV1"!(prevsegment="PV2") do
+	. if intAdmNum="" quit
+	. kill AdmDetail if $$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail) quit
+	. for i=12,174,277 do
+	. . kill doc
+	
+	. . if trigger="Insert",table="PAADM",AdmDetail(i)'="" set doc(1)=AdmDetail(i),action(1)="AD"
+	. . if trigger="Update",table="PAADM" do
+	. . . if $get(old("PAADM",i))=AdmDetail(i),AdmDetail(i)'="" set doc(1)=$get(AdmDetail(i)),action(1)="UC" quit
+	. . . if $get(old("PAADM",i))="",AdmDetail(i)'="" set doc(1)=AdmDetail(i),action(1)="AD" quit
+	. . . if $get(old("PAADM",i))'=AdmDetail(i),AdmDetail(i)'="" set doc(1)=$get(old("PAADM",i)),action(1)="DE",doc(2)=AdmDetail(i),action(2)="AD" quit
+	. . . if $get(old("PAADM",i))'=AdmDetail(i),AdmDetail(i)="" set doc(1)=$get(old("PAADM",i)),action(1)="DE"
+	
+	. . if table'="PAADM" if AdmDetail(i)'="" set doc(1)=AdmDetail(i),action(1)="UC"
+	
+	. . set j="" for  set j=$order(doc(j)) quit:j=""  do
+	. . . set type=$select(i=174:"R",1:"C"),drid=doc(j)
+	. . . set drcode=$$Provider^HL7Common5(drid,"","","",type,"O")
+	. . . set doctor=""
+	. . . for k=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),k) do
+	. . . . set drcodetype=$piece(dr,$char(2),7)
+	. . . . set doctor=doctor_$select($length(doctor):"~",1:"")_$piece(dr,$char(2),1)_"^"_$piece(dr,$char(2),2)_"^"_$piece(dr,$char(2),3)_"^^^^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	. . . set actioncode=action(j),drtype=$select(i=12:"AT^Attending",i=174:"RP^Referring Provider",i=277:"PP^Primary Care Provider",1:"")
+	. . . do Role
+	
+	kill PatDetail,AdmDetail,doctor,doc,action
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+	// build ROL segment
+Role	set count=count+1
+	if count=1 do  quit
+	. set DATA("ROL",1)=count,DATA("ROL",2)=actioncode,DATA("ROL",3)=drtype,DATA("ROL",4)=doctor
+	
+	if count>1,repeat="Y" do
+	. set Repeat("ROL",count,1)=count,Repeat("ROL",count,2)=actioncode,Repeat("ROL",count,3)=drtype,Repeat("ROL",count,4)=doctor
+	
+	quit
+
+
+

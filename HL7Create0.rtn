@@ -1,0 +1,154 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Create0^MAC^^^0
+HL7Create0 // ML 04/02/08 ; HL7 interface : create transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Create0.rtn#1 $
+	quit
+	
+CheckEVN ;; build data array - EVN
+EVN()	set msgtype=$get(msgtype),intRegMrn=$get(intRegMrn),intAdmNum=$get(intAdmNum),intOrdNum=$get(intOrdNum) kill DATA
+	set (upduser,upddate,updtime,updhosp,login,extlogin,surname,given,name,hosp,locat,SendingFacType,SQLCODE)=""
+	set DATA("EVN",1)=$piece(msgtype,"^",2),DATA("EVN",2)=$$Date^HL7
+	
+	// extract user, date and time of update
+	if msgtype["ADT" do
+	
+	. if table="PAPERSON"!(table="PAPATMAS")!("^A34^A37^A40^A43^"[("^"_$piece(msgtype,"^",2)_"^")) do  quit
+	. . set SendingFacType=""
+	. . kill PatDetail if $$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail) quit
+	. . set upduser=$get(PatDetail(123)),upddate=$get(PatDetail(145)),updtime=$get(PatDetail(146)),updhosp=$get(PatDetail(164))
+	. . kill PatDetail
+	. if table="RTMASTER" do  quit
+	. . set SendingFacType=""
+	. . if trigger="Insert" do  quit
+	. . . &SQL(SELECT RTMAS_UserCreate_DR, RTMAS_DateCreate, RTMAS_TimeCreate, RTMAS_CreateLoc_DR INTO :upduser, :upddate, :updtime, :location FROM RT_Master WHERE RTMAS_RowId = :intNum)
+	. . . if SQLCODE quit
+	. . . &SQL(SELECT CTLOC_Hospital_DR INTO :updhosp FROM CT_Loc WHERE CTLOC_RowId = :location)
+	
+	. if table="PAALERTMSG" do  quit
+	. . set SendingFacType=""
+	. . if trigger'="Delete" do  quit
+	. . . kill Alert set SQLCODE=$$Alert^HL7OutExtract9(intNum,.Alert) if SQLCODE quit
+	. . . set upduser=$get(Alert(13)),upddate=$get(Alert(11)),updtime=$get(Alert(12)),updhosp=$get(Alert(29))
+	. . set upduser=$get(LogonUser),upddate=+$h,updtime=$piece($h,",",2),updhosp=$get(LogonHosp)
+	
+	. if table="PANOK" do  quit
+	. . set SendingFacType=""
+	. . if trigger'="Delete" do  quit
+	. . . kill NextOfKin if $$NextOfKin^HL7OutExtract1(intNum,.NextOfKin) quit
+	. . . set upddate=$get(NextOfKin(35)),updtime=$get(NextOfKin(36)),upduser=$get(NextOfKin(37)),updhosp=$get(NextOfKin(38))
+	. . . kill NextOfKin
+	. . set upduser=$get(LogonUser),upddate=+$h,updtime=$piece($h,",",2),updhosp=$get(LogonHosp)
+	
+	. if table="PAALLERGY" do  quit
+	. . set SendingFacType=""
+	. . if trigger'="Delete" do  quit
+	. . . kill Allergy set SQLCODE=$$Allergy^HL7OutExtract9(intNum,.Allergy) if SQLCODE quit
+	. . . set upduser=$get(Allergy(19)),upddate=$get(Allergy(26)),updtime=$get(Allergy(27)),updhosp=$get(Allergy(23))
+	. . . if trigger="Insert" set upddate=$get(Allergy(12)),updtime=$get(Allergy(18))
+	. . set upduser=$get(LogonUser),upddate=+$h,updtime=$piece($h,",",2),updhosp=$get(LogonHosp)
+	
+	. if table="PATEMPADDRESS" do  quit
+	. . set SendingFacType=""
+	. . if trigger'="Delete" do  quit
+	. . . &SQL(SELECT ADDR_UpdateDate, ADDR_UpdateTime, ADDR_UpdateUser_DR, ADDR_UpdateHospital_DR INTO :upddate, :updtime, :upduser, :updhosp FROM PA_TempAddress WHERE ADDR_RowId = :intNum)
+	. . set upduser=$get(LogonUser),upddate=+$h,updtime=$piece($h,",",2),updhosp=$get(LogonHosp)
+	
+	. if table="PAPERSONALIAS"!(table="PAPERSONSURNAMEALIAS") do  quit
+	. . set SendingFacType=""
+	
+	. if table="PAADM" do  quit
+	. . set SendingFacType="A"
+	. . kill AdmDetail if $$AdmDetail^HL7OutExtract2(intNum,.AdmDetail)
+	. . set upduser=$get(AdmDetail(218)),upddate=$get(AdmDetail(216)),updtime=$get(AdmDetail(217)),updhosp=$get(AdmDetail(344))
+	. . kill AdmDetail
+	
+	. if table="PAADMLEAVE" do  quit
+	. . set SendingFacType="A"
+	. . if ",A21,"[(","_$piece(msgtype,"^",2)_",") do  quit
+	. . . &SQL(SELECT ADML_UpdateUser_DR, ADML_GoingOutDate, ADML_GoingOutTime, ADML_UpdateUserHospital_DR INTO :upduser, :upddate, :updtime, :updhosp FROM PA_AdmLeave WHERE ADML_RowId = :intNum)
+	. . if ",A22,"[(","_$piece(msgtype,"^",2)_",") do  quit
+	. . . &SQL(SELECT ADML_UpdateUser_DR, ADML_ActualDateReturn, ADML_ActualTimeReturn, ADML_UpdateUserHospital_DR INTO :upduser, :upddate, :updtime, :updhosp FROM PA_AdmLeave WHERE ADML_RowId = :intNum)
+	
+	. if table="PAADMINSURANCE" do  quit
+	. . set SendingFacType="A"
+	
+	. if table="PAADMTRANSACTION" do  quit
+	. . if ",A02,"[(","_$piece(msgtype,"^",2)_",") do  quit
+	. . . &SQL(SELECT TRANS_StartDate, TRANS_StartTime INTO :upddate, :updtime FROM PA_AdmTransaction WHERE TRANS_RowId = :intNum)
+	. . set SendingFacType="A"
+	
+	. if table="PAWAITINGLIST" do  quit
+	. . set SendingFacType="A" if ##class(web.PAWaitingListAdm).GetLatestAdm(intNum)="" set SendingFacType=""
+	
+	. if table="PAWAITINGLISTADM" do  quit
+	. . set SendingFacType="A"
+	
+	. if table="PAWAITINGLISTNOTAVAILABLE" do  quit
+	. . set SendingFacType=""
+	. . if trigger'="Delete" do  quit
+	. . . kill WaitListAvail set SQLCODE=$$WaitListAvail^HL7OutExtract3(intNum,.WaitListAvail) if SQLCODE quit
+	. . . set upduser=$get(WaitListAvail(7)),upddate=$get(WaitListAvail(8)),updtime=$get(WaitListAvail(9)),updhosp=$get(WaitListAvail(16))
+	
+	. if table="RBAPPOINTMENT" do  quit
+	. . set SendingFacType="A"
+	
+	if msgtype["ORM" do
+	. &SQL(SELECT OEORI_UserUpdate, OEORI_UpdateDate, OEORI_UpdateTime INTO :upduser, :upddate, :updtime FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	
+	// use session user/hospital if none against database
+	if upduser="" set upduser=$get(LogonUser)
+	if updhosp="" set updhosp=$get(LogonHosp)
+	if upddate="" set upddate=+$h
+	if updtime="" set updtime=$piece($h,",",2)
+	
+	if upduser'="" do
+	. &SQL(SELECT SSUSR_Initials, SSUSR_ExternalUserIdentifier, SSUSR_Surname, SSUSR_GivenName, SSUSR_Name, SSUSR_DefaultDept_DR -> CTLOC_Code INTO :login, :extlogin, :surname, :given, :name, :locat FROM SS_User WHERE SSUSR_RowId = :upduser)
+	for var="login","extlogin","surname","given","name","locat" set @var=$$TextConversion^HL7Common12(@var,"O")
+	if updhosp'="" set hosp=$$Hospital^HL7Common9(updhosp,"C")
+	set hosp=$$TextConversion^HL7Common12(hosp,"O")
+	
+	// extracting sending facility
+	if SendingFacType="A" do  kill AdmDetail
+	. kill AdmDetail if $$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail)
+	. set SendingFac=$$TextConversion^HL7Common12($$Hospital^HL7Common9($get(AdmDetail(332)),"C"),"O")
+	. if SendingFac="" set SendingFacType=""
+	if SendingFacType'="A",$get(LogonHosp)'="" do
+	. set SendingFac=$$TextConversion^HL7Common12($$Hospital^HL7Common9($get(LogonHosp),"C"),"O")
+	
+	// extract role details
+	set (roleprofile,rolecode,logonGroupID)="" if $data(%session) do
+	. new SQLCODE
+	. if $get(%session.Data("SPINEPROFILE"))'="" set roleprofile=$get(%session.Data("SPINEPROFILE"))
+	. if $get(%session.Data("LOGON.GROUPID"))'="" do
+	. . set logonGroupID = %session.Data("LOGON.GROUPID")
+	. . &SQL(SELECT ExternalGroupID INTO :rolecode FROM epr.GroupSettings WHERE GroupDR = :logonGroupID)
+	set DATA("EVN",5)=$select($get(HL7("VER"))<"2.4":login_"^"_surname_"^"_given_"^^^^^TRAKCARE",1:login_"^"_surname_" "_given_"^^^^^^TRAKCARE")
+	if extlogin'="" set DATA("EVN",5)=DATA("EVN",5)_"~"_$select($get(HL7("VER"))<"2.4":extlogin_"^"_surname_"^"_given_"^^^^^TRAKCARE_EXT",1:extlogin_"^"_surname_" "_given_"^^^^^^TRAKCARE_EXT")
+	if roleprofile'="" set DATA("EVN",5)=DATA("EVN",5)_"~"_roleprofile_"^^^^^^^TRAKCARE_ROLE_PROFILE"
+	if rolecode'="" set DATA("EVN",5)=DATA("EVN",5)_"~"_rolecode_"^^^^^^^TRAKCARE_ROLE_CODE"
+	set DATA("EVN",6)=$select(upddate="":"",1:$$Date^HL7(upddate_","_updtime))
+	if $get(HL7("VER"))>"2.3.1" set DATA("EVN",7)=hosp_"^"_locat
+	kill PatDetail,PatDetailx,AdmDetail,Alert,Allergy,NextOfKin,WaitList,WaitListAdm,WaitListAvail
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckMSH ;; build data array - MSH
+MSH()
+	set headdetail=$get(headdetail)
+	set type=$piece(headdetail,"\"),xRECAPP=$piece(headdetail,"\",2),xRECFAC=$piece(headdetail,"\",3),xSENDFAC=$piece(headdetail,"\",4)
+	// default to interface settings if no receiving app/fac against message
+	set RECAPP=$select(xRECAPP'="":xRECAPP,1:HL7("RECAPP")),RECFAC=$select(xRECFAC'="":xRECFAC,1:HL7("RECFAC"))
+	// default to other sending fac if no default interface setting
+	set SENDFAC=$select(HL7("SENDFAC")'="":HL7("SENDFAC"),1:xSENDFAC)
+	// store last 'control id'
+	set controlID=$$ControlId^HL7AckNak
+	
+	set DATA("MSH",1)="|",DATA("MSH",2)="^~\&",DATA("MSH",3)=HL7("SENDAPP"),DATA("MSH",4)=SENDFAC,DATA("MSH",5)=RECAPP,DATA("MSH",6)=RECFAC
+	set DATA("MSH",7)=$$Date^HL7,DATA("MSH",9)=type,DATA("MSH",10)=controlID,DATA("MSH",11)=HL7("PT"),DATA("MSH",12)=HL7("VER")
+	set DATA("MSH",15)="AL",DATA("MSH",16)="NE",DATA("MSH",19)="EN^english^ISO639"
+	
+	quit 0
+
+
+

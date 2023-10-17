@@ -1,0 +1,103 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteRNHBCreate2^MAC^^^0
+HL7SiteRNHBCreate2 // ML 05/05/03 ; HL7 interface : create transmission packets - Royal National Hospital Bath
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteRNHBCreate2.rtn#1 $
+	quit
+ 
+CheckPV1 ;; build DATA array - PV1
+PV1()	set intAdmNum=$get(intAdmNum) kill DATA
+ 
+	// extract admission detail
+	kill AdmDetail set SQLCODE=$$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail)
+	if intAdmNum=""!SQLCODE do  quit $select(msgtype["A31":0,msgtype["A28":0,1:SQLCODE)
+	.if mandatory'="Y" quit
+	.if mandatory="Y" set DATA("PV1",1)=$increment(count("PV1")),DATA("PV1",2)="N"
+	.merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+ 
+	// check for new null fields and change to ""
+	if $data(old("PAADM")) do NullChange^HL7Common3("PAADM")
+ 
+	// extract admission transaction detail
+	kill AdmTransaction do
+	.set AdmTransRow=""
+	.if ",A02,A12,"[(","_$piece(msgtype,"^",2)_",") set intAdmTransNum=$get(intNum)
+	.if ",A02,A12,"'[(","_$piece(msgtype,"^",2)_",") set intAdmTransNum=intAdmNum_"||"_$order(^PAADM(intAdmNum,"TRANS",""),-1)
+	.if $piece(intAdmTransNum,"||",2)'="" set SQLCODE=$$AdmTransaction^HL7OutExtract2(intAdmTransNum,.AdmTransaction)
+	set (ward,room,bed,hospital)=""
+ 
+	// extract code table detail
+	set mtable="PA_Adm" do CodeTable^HL7OutExtract2A(mtable)
+	if table="PAADMTRANSACTION" set mtable="PA_AdmTransaction" do CodeTable^HL7OutExtract2A(mtable)
+ 
+	set admnum=AdmDetail(2),admtype=AdmDetail(9),source=AdmDetail(10),status=AdmDetail(25),preadmnum=AdmDetail(76),mradm=AdmDetail(152),inpattype=$piece($get(AdmDetail(273)),"^")
+	// send correct status for A38
+	if msgtype["A38",$data(old("PAADM")) set status=$get(old("PAADM",25))
+	if table="PAADMTRANSACTION" set room=$get(AdmTransaction(9)),ward=$get(AdmTransaction(10)),bed=$get(AdmTransaction(11))
+	if table'="PAADMTRANSACTION" set room=$get(AdmDetail(163)),ward=$get(AdmDetail(164)),bed=$get(AdmDetail(167))
+	// check for preadmission room detail
+	if status="P",table'="PAADMTRANSACTION",(msgtype["A08"!(msgtype["A38")) do
+	.set mtable="PA_AdmTransaction" do CodeTable^HL7OutExtract2A(mtable)
+	.if ward="",room="",bed="" set room=$get(AdmTransaction(9)),ward=$get(AdmTransaction(10)),bed=$get(AdmTransaction(11))
+	set auxilinstype=$piece($get(AdmInsurance(12)),"^")_"&"_$piece($get(AdmInsurance(12)),"^",2),insurancetype=$get(AdmInsurance(3))
+	set (admdatetime,dischdatetime)=""
+	if $$AdmDates^HL7OutExtract2(intAdmNum,AdmDetail(7),AdmDetail(8),AdmDetail(22),AdmDetail(23),"","",.admdatetime,.dischdatetime)
+ 
+	// extract doctors
+	kill doctor set drcodes=""
+	if $get(AdmDetail(12))'="" do
+	.if AdmDetail(12)=""""!(AdmDetail(12)="""""") quit
+	.set drid=AdmDetail(12),drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	.set doctor("ATTEND")=""
+	.for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	..set drcodetype=$piece(dr,$char(2),7)
+	..set doctor("ATTEND")=doctor("ATTEND")_$select($length(doctor("ATTEND")):"~",1:"")_$select($piece(dr,$char(2),8)'="":$piece(dr,$char(2),8),1:$piece(dr,$char(2),1))_"^"_$piece(dr,$char(2),2)_"^"_$piece(dr,$char(2),3)_"^^^^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+ 
+	// adjust location
+	if admtype'="O" set DATA("PV1",3)=$select(ward'="":ward,1:location)_%1_$select(ward'="":room,1:"")_%1_$select(ward'="":bed,1:"")_%1_$get(hospcode)_%1_%1_%1_$get(campuscode)
+	if admtype="O" set DATA("PV1",3)=location_%1_%1_%1_$get(hospcode)_%1_%1_%1_$get(campuscode)
+ 
+	set DATA("PV1",1)=$increment(count("PV1")),DATA("PV1",2)=$select(status="P":"P",1:admtype),DATA("PV1",5)=preadmnum
+	set DATA("PV1",8)=$get(doctor("REFER")),DATA("PV1",9)=$get(doctor("ATTEND")),DATA("PV1",10)=location
+	set DATA("PV1",14)=source,DATA("PV1",19)=admnum,DATA("PV1",44)=admdatetime,DATA("PV1",45)=dischdatetime
+ 
+	// extract previous location
+	if ",A02,A12,"[(","_$piece(msgtype,"^",2)_",") do
+	.new ward,room,bed set intAdmTransNum=otherNum kill AdmTransaction
+	.if trigger="Insert",otherNum="" do
+	.. // transfer
+	..if $piece(msgtype,"^",2)="A02" do
+	...set found=""
+	...set seq=$piece(curr("PAADMTRANSACTION",1),"||",2) for  set seq=$order(^PAADM($piece(curr("PAADMTRANSACTION",1),"||"),"TRANS",seq),-1) quit:seq=""  do  quit:found
+	....set detail=$get(^PAADM($piece(curr("PAADMTRANSACTION",1),"||"),"TRANS",seq)),bed=$piece(detail,"^",8),enddatetime=$piece(detail,"^",3,4)
+	....if bed="" quit
+	....if bed'=$piece($get(curr("PAADMTRANSACTION",11)),$char(1)),$translate(enddatetime,"^")'="" set intAdmTransNum=$piece(curr("PAADMTRANSACTION",1),"||")_"||"_seq,found=1
+	.. // cancel transfer
+	..if $piece(msgtype,"^",2)="A12" do
+	...set (found,start)=""
+	...if trigger'="Delete",otherNum="" do
+	....set seq=$piece(curr("PAADMTRANSACTION",1),"||",2) for  set seq=$order(^PAADM($piece(curr("PAADMTRANSACTION",1),"||"),"TRANS",seq),-1) quit:seq=""  do  quit:found
+	.....set detail=$get(^PAADM($piece(curr("PAADMTRANSACTION",1),"||"),"TRANS",seq)),bed=$piece(detail,"^",8),enddatetime=$piece(detail,"^",3,4)
+	.....if bed="" quit
+	.....if bed'=$piece($get(curr("PAADMTRANSACTION",11)),$char(1)),$translate(enddatetime,"^")'="" set start=start+1
+	.....if 'start quit
+	.....if bed=$piece($get(curr("PAADMTRANSACTION",11)),$char(1)),($translate(enddatetime,"^")'=""),start=1 set intAdmTransNum=$piece(curr("PAADMTRANSACTION",1),"||")_"||"_$order(^PAADM($piece(curr("PAADMTRANSACTION",1),"||"),"TRANS",seq)),found=1
+	.if trigger="Update",otherNum="" do
+	.. // transfer
+	..if $piece(msgtype,"^",2)="A02" do  quit
+	...set AdmTransaction(9)=$get(old("PAADMTRANSACTION",9)),AdmTransaction(10)=$get(old("PAADMTRANSACTION",10)),AdmTransaction(11)=$get(old("PAADMTRANSACTION",11))
+	.. // cancel transfer
+	..if $piece(msgtype,"^",2)="A12" do  quit
+	...set intAdmTransNum=otherNum
+ 
+	.if $piece(intAdmTransNum,"||",2)'="" do
+	..set SQLCODE=$$AdmTransaction^HL7OutExtract2(intAdmTransNum,.AdmTransaction) if SQLCODE quit
+	..do WardRoomBed^HL7OutExtract2($get(AdmTransaction(10)),$get(AdmTransaction(9)),$get(AdmTransaction(11)))
+	..set DATA("PV1",6)=wardcode_%1_roomcode_%1_bedcode
+ 
+	kill AdmDetail,doctor
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

@@ -1,0 +1,153 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteARMCCreate8^MAC^^^0
+HL7SiteARMCCreate8 // ML 12/08/2009 ; HL7 interface : create transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteARMCCreate8.rtn#1 $
+	quit
+CheckROL ;; build DATA array - ROL
+ROL()	set count="" kill DATA
+	// ROL segment for after PID or PD1 segment
+	if prevsegment="PID"!(prevsegment="PD1") do
+	. kill PatDetail if $$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail) quit
+	. kill doc,clinic,action
+	. if trigger="Insert",table="PAPERSON",PatDetail(67)'="" set doc(1)=PatDetail(67),action(1)="AD",clinic(1)=PatDetail(148)
+	. if trigger="Update",table="PAPERSON" do
+	. . if $get(old("PAPER",67))=PatDetail(67) set doc(1)=PatDetail(67),action(1)="UC",clinic(1)=PatDetail(148) quit
+	. . if $get(old("PAPER",67))="",PatDetail(67)'="" set doc(1)=PatDetail(67),action(1)="AD",clinic(1)=PatDetail(148) quit
+	. . if $get(old("PAPER",67))'=PatDetail(67),PatDetail(67)'="" set doc(1)=$get(old("PAPER",67)),action(1)="DE",clinic(1)=$get(old("PAPER",148)),doc(2)=PatDetail(67),action(2)="AD",clinic(2)=PatDetail(148) quit
+	. . if $get(old("PAPER",67))'=PatDetail(67),PatDetail(67)="" set doc(1)=$get(old("PAPER",67)),action(1)="DE",clinic(1)=$get(old("PAPER",148))
+	. if table'="PAPERSON" if PatDetail(67)'="" set doc(1)=PatDetail(67),action(1)="UC",clinic(1)=$get(PatDetail(148))
+	. set j="" for  set j=$order(doc(j)) quit:j=""  do
+	. . // extract dr contact details
+	. . set drdetails=$$DoctorDetails(doc(j),$get(clinic(j)),"R")
+	. . set address=$piece(drdetails,"|"),contact=$piece(drdetails,"|",2)
+	. . // extract dr codes
+	. . set drcode=$$Provider^HL7Common5(doc(j),"","","","R","O")
+	. . // doesnt call $$BuildDoctor^HL7Common5 as alternative title for care providers required
+	. . set doctor=""
+	. . // only output dr code
+	. . set dr=$piece(drcode,$char(1)) do
+	. . . set drcodetype=$piece(dr,$char(2),7)
+	. . . set (nameL,nameG,nameO,nameT,nameTdr)="" set nameL=$piece(dr,$char(2),2),nameG=$piece(dr,$char(2),3) if $piece(dr,$char(2),9)'="" do
+	. . . . set nameL=$piece($piece(dr,$char(2),9),"~"),nameG=$piece($piece(dr,$char(2),9),"~",2),nameO=$piece($piece(dr,$char(2),9),"~",3),nameT=$piece($piece(dr,$char(2),9),"~",4),nameTdr=$piece($piece(dr,$char(2),9),"~",5)
+	. . . // use code table derived title if available
+	. . . if nameTdr'="" set nameT=nameTdr
+	. . . set doctor=doctor_$select($length(doctor):"~",1:"")_$piece(dr,$char(2),1)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	. . set actioncode=action(j),drrole="FHCP^Family Health Care Professional",drtype="PAC_RefDoctor^REFD"
+	. . do Role
+	// ROL segment for after PV1 or PV2 segment
+	if prevsegment="PV1"!(prevsegment="PV2") do
+	. if intAdmNum="" quit
+	. kill AdmDetail if $$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail) quit
+	. set admtype=$get(AdmDetail(9))
+	. // extract admitting dr
+	. set (drfound,drid)=""
+	. set trans=0 for  set trans=$order(^PAADM(intAdmNum,"TRANS",trans)) quit:trans=""  do  quit:drfound'=""
+	. . set detail=$get(^PAADM(intAdmNum,"TRANS",trans))
+	. . // check if doctor
+	. . set drid=$piece(detail,"^",5) if drid="" quit
+	. . // check if main flag checked
+	. . if $piece(detail,"^",13)'="Y" quit
+	. . set drfound=1
+	. . // extract dr contact details
+	. . set drdetails=$$DoctorDetails(drid,"","C")
+	. . set address=$piece(drdetails,"|"),contact=$piece(drdetails,"|",2)
+	. . set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	. . // doesnt call $$BuildDoctor^HL7Common5 as alternative title for care providers required
+	. . set doctor=""
+	. . // only output dr code
+	. . set dr=$piece(drcode,$char(1)) do
+	. . . set drcodetype=$piece(dr,$char(2),7)
+	. . . set (nameL,nameG,nameO,nameT,nameTdr)="" set nameL=$piece(dr,$char(2),2),nameG=$piece(dr,$char(2),3) if $piece(dr,$char(2),9)'="" do
+	. . . . set nameL=$piece($piece(dr,$char(2),9),"~"),nameG=$piece($piece(dr,$char(2),9),"~",2),nameO=$piece($piece(dr,$char(2),9),"~",3),nameT=$piece($piece(dr,$char(2),9),"~",4),nameTdr=$piece($piece(dr,$char(2),9),"~",5)
+	. . . // use code table derived title if available
+	. . . if nameTdr'="" set nameT=nameTdr
+	. . . set doctor=doctor_$select($length(doctor):"~",1:"")_$piece(dr,$char(2),1)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	. . set actioncode="AD",drrole="AD^Admitting",drtype="CT_CareProv^CTPCP"
+	. . do Role
+	. for jj=12,174,277 do
+	. . kill doc,clinic,action
+	. . // if emergency ignore attending as attending is also treating doctor
+	. . if admtype="E",jj=12 quit
+	. . if trigger="Insert",table="PAADM",AdmDetail(jj)'="" set doc(1)=AdmDetail(jj),action(1)="AD"
+	. . if trigger="Update",table="PAADM" do
+	. . . if $get(old("PAADM",jj))=AdmDetail(jj),AdmDetail(jj)'="" set doc(1)=AdmDetail(jj),action(1)="UC" quit
+	. . . if $get(old("PAADM",jj))="",AdmDetail(jj)'="" set doc(1)=AdmDetail(jj),action(1)="AD" quit
+	. . . if $get(old("PAADM",jj))'=AdmDetail(jj),AdmDetail(jj)'="" set doc(1)=$get(old("PAADM",jj)),action(1)="DE",doc(2)=AdmDetail(jj),action(2)="AD" quit
+	. . . if $get(old("PAADM",jj))'=AdmDetail(jj),AdmDetail(jj)="" set doc(1)=$get(old("PAADM",jj)),action(1)="DE"
+	. . if table'="PAADM" if AdmDetail(jj)'="" set doc(1)=AdmDetail(jj),action(1)="UC"
+	. . // include referring doctor clinic for referring doctor
+	. . if jj=174 do
+	. . . if $get(action(1))="AD"!($get(action(1))="UC") set clinic(1)=AdmDetail(219)
+	. . . if $get(action(1))="DE" set clinic(1)=$get(old("PAADM",219))
+	. . . if $get(action(2))="AD" set clinic(2)=AdmDetail(219)
+	. . set j="" for  set j=$order(doc(j)) quit:j=""  do
+	. . . set type=$select(jj=174:"R",1:"C"),drtype=$select(type="R":"PAC_RefDoctor^REFD",1:"CT_CareProv^CTPCP")
+	. . . // extract dr contact details
+	. . . set drdetails=$$DoctorDetails(doc(j),$get(clinic(j)),type)
+	. . . set address=$piece(drdetails,"|"),contact=$piece(drdetails,"|",2)
+	. . . set drcode=$$Provider^HL7Common5(doc(j),"","","",type,"O")
+	. . . // doesnt call $$BuildDoctor^HL7Common5 as alternative title for care providers required
+	. . . set doctor=""
+	. . . // only output dr code
+	. . . set dr=$piece(drcode,$char(1)) do
+	. . . . set drcodetype=$piece(dr,$char(2),7)
+	. . . . set (nameL,nameG,nameO,nameT,nameTdr)="" set nameL=$piece(dr,$char(2),2),nameG=$piece(dr,$char(2),3) if $piece(dr,$char(2),9)'="" do
+	. . . . . set nameL=$piece($piece(dr,$char(2),9),"~"),nameG=$piece($piece(dr,$char(2),9),"~",2),nameO=$piece($piece(dr,$char(2),9),"~",3),nameT=$piece($piece(dr,$char(2),9),"~",4),nameTdr=$piece($piece(dr,$char(2),9),"~",5)
+	. . . . // use code table derived title if available
+	. . . . if nameTdr'="" set nameT=nameTdr
+	. . . . set doctor=doctor_$select($length(doctor):"~",1:"")_$piece(dr,$char(2),1)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	. . . set actioncode=action(j),drrole=$select(jj=12:"AT^Attending",jj=174:"RP^Referring Provider",jj=277:"CP^Consulting Provider",1:"")
+	. . . do Role
+	. . . // if emergency the treating doctor is also the attending doctor
+	. . . if admtype="E",jj=277 do
+	. . . . set drrole="AT^Attending"
+	. . . . do Role
+	kill PatDetail,AdmDetail,doctor,doc,action
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	// extract dr details
+DoctorDetails(drid,refclinic,type) new (drid,refclinic,type,doctor) set drid=$get(drid),refclinic=$get(refclinic),type=$get(type),(doctor,address,contact)=""
+	if drid'="" do
+	. kill CareProv,RefDoctor,RefClinic
+	. set (addline,addline2,city,province,postcode,phoneW)=""
+	. // extract further care provider details
+	. if type="C" do
+	. . if $$CareProvider^HL7OutExtract10(drid,.CareProv) quit
+	. . set mtable="CT_CareProv" do CodeTable^HL7OutExtract10(mtable)
+	. . for i=1:1:$listlength($get(CareProv(10))) if $list($get(CareProv(10)),i)'="" set addline=$get(addline)_$select($length(addline):", ",1:"")_$translate($$TextConversion^HL7Common12($list($get(CareProv(10)),i),"O"),$char(13,10),"")
+	. . set city=$piece($get(CareProv(13)),"^",2),province=$piece($get(CareProv(14)),"^"),postcode=$piece($get(CareProv(15)),"^")
+	. . set phoneW=$get(CareProv(18))
+	. // extract further referring doctor details
+	. if type="R" do
+	. . if $$RefDoctor^HL7OutExtract10(drid,.RefDoctor) quit
+	. . set mtable="PAC_RefDoctor" do CodeTable^HL7OutExtract10(mtable)
+	. . if refclinic'="" do
+	. . . if $$RefClinic^HL7OutExtract10(refclinic,.RefClinic) quit
+	. . . set addline=$get(RefClinic(4)),addline2=$get(RefClinic(5)) if addline="",addline2'="" set addline=addline2,addline2=""
+	. . . for var="addline","addline2" if @var'="",@var[$char(13,10) do
+	. . . . set newadd=""
+	. . . . for i=1:1:$length(@var,$char(13,10)) if $piece(@var,$char(13,10),i)'="" set newadd=$get(newadd)_$select($length(newadd):", ",1:"")_$piece(@var,$char(13,10),i)
+	. . . . set @var=newadd
+	. . . set mtable="PAC_RefDoctorClinic" do CodeTable^HL7OutExtract10(mtable)
+	. . . set city=$piece($get(RefClinic(6)),"^",2),province=$piece($get(RefClinic(6)),"^",3),postcode=$piece($get(RefClinic(7)),"^")
+	. . . set phoneW=$get(RefClinic(8))
+	. . if addline="" do
+	. . . for i=1:1:$listlength($get(RefDoctor(6))) if $list($get(RefDoctor(6)),i)'="" set addline=$get(addline)_$select($length(addline):", ",1:"")_$translate($$TextConversion^HL7Common12($list($get(RefDoctor(6)),i),"O"),$char(13,10),"")
+	. . . set city=$piece($get(RefDoctor(8)),"^",2),province=$piece($get(RefDoctor(9)),"^"),postcode=$piece($get(RefDoctor(7)),"^")
+	. . if phoneW="" set phoneW=$get(RefDoctor(42))
+	. // set address
+	. set address=addline_"^"_addline2_"^"_city_"^"_province_"^"_postcode
+	. // set contact details
+	. if phoneW'="" set contact=phoneW_"^WPN^PH^^^^^^"
+	quit address_"|"_contact
+	// build ROL segment
+Role	set count=count+1
+	if count=1 do  quit
+	. set DATA("ROL",1)=drtype,DATA("ROL",2)=actioncode,DATA("ROL",3)=drrole,DATA("ROL",4)=doctor,DATA("ROL",11)=address,DATA("ROL",12)=contact
+	if count>1,repeat="Y" do
+	. set Repeat("ROL",count,1)=drtype,Repeat("ROL",count,2)=actioncode,Repeat("ROL",count,3)=drrole,Repeat("ROL",count,4)=doctor,Repeat("ROL",count,11)=address,Repeat("ROL",count,12)=contact
+	quit
+
+
+

@@ -1,0 +1,31 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract15^MAC^^^0
+HL7OutExtract15 // ML 03/06/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract15.rtn#1 $
+	quit
+	// extract non-government organisation
+NonGovOrg(intNGO,NonGovOrg) new (intNGO,NonGovOrg) set intNGO=$get(intNGO)
+	&SQL(SELECT * INTO :NonGovOrg() FROM PAC_NonGovOrg WHERE NGO_RowId = :intNGO)
+	quit SQLCODE
+	// extract location
+Location(intLoc,Location) new (intLoc,Location) set intLoc=$get(intLoc)
+	&SQL(SELECT * INTO :Location() FROM CT_Loc WHERE CTLOC_RowId = :intLoc)
+	quit SQLCODE
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable) set (code,desc,other)=""
+	if mtable="PAC_NonGovOrg" do
+	.for i=11 if $get(NonGovOrg(i))'="" do  set NonGovOrg(i)=$select($get(NonGovOrg(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=NonGovOrg(i) quit:value=""""""
+	..if i=11 do
+	... set code=NonGovOrg(i),desc=##class(websys.StandardTypeItem).GetDescription("ContactMethod",NonGovOrg(i))
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(NonGovOrg(""),-1) if $data(NonGovOrg(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",11,"[(","_i_",") quit
+	..set NonGovOrg(i)=$$TextConversion^HL7Common12(NonGovOrg(i),"O")
+	quit
+
+
+

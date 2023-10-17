@@ -1,0 +1,62 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundADT^MAC^^^0
+HL7InboundADT	// ML 11/06/2010 : patient event
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundADT.rtn#1 $
+	// decide what ADT processing needs to occur
+Check(msgtype)	new (msgtype,link,INT,HL7,EB,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,version,PatNum,RefNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum,%session)
+	set msgtype=$get(msgtype),(forward,forwardnum,forwardtable,ok,reject,reject("Detail"))="" kill forwardnum,old
+	// extract miscellaneous processing rules
+	kill RULES if $$Rules^HL7Common7(link)
+	// extract rule address type codes
+	for j=6,8 {
+		set detail=##class(web.CTAddrType).GetCodeDescriptionFromId($get(RULES(j)))
+		set RULES(j_"-CODE")=$list(detail,3)
+	}
+	// check for site specific code
+	set found="",routine="HL7Site"_HL7("INCODE")_"Inbound"_$translate($piece(msgtype,"^",1,2),"^"),LineRoutine="Check"_$piece(msgtype,"^",2)_"^"_routine
+	if $length($text(@LineRoutine),";;")=2 xecute "s ok=$$"_$piece(msgtype,"^",2)_"^"_routine_"()" set found=1
+	if 'found {
+		// ADT^A01 - admit a patient
+		if msgtype="ADT^A01" set ok=$$A01^HL7InboundADTA01() set found=1
+		// ADT^A02 - transfer a patient
+		if msgtype="ADT^A02" set ok=$$A02^HL7InboundADTA02() set found=1
+		// ADT^A03 - discharge a patient
+		if msgtype="ADT^A03" set ok=$$A03^HL7InboundADTA03() set found=1
+		// ADT^A05 - pre-admit a patient
+		if msgtype="ADT^A05" set ok=$$A05^HL7InboundADTA05() set found=1
+		// ADT^A08 - update patient information/admission
+		if msgtype="ADT^A08" set ok=$$A08^HL7InboundADTA08() set found=1
+		// ADT^A11 - cancel admission
+		if msgtype="ADT^A11" set ok=$$A11^HL7InboundADTA11() set found=1
+		// ADT^A12 - cancel transfer
+		if msgtype="ADT^A12" set ok=$$A12^HL7InboundADTA12() set found=1
+		// ADT^A13 - cancel discharge
+		if msgtype="ADT^A13" set ok=$$A13^HL7InboundADTA13() set found=1
+		// ADT^A21 - patient goes on a 'leave of absence'
+		if msgtype="ADT^A21" set ok=$$A21^HL7InboundADTA21() set found=1
+		// ADT^A22 - patient returns from a 'leave of absence'
+		if msgtype="ADT^A22" set ok=$$A22^HL7InboundADTA22() set found=1
+		// ADT^A28 - person information
+		if msgtype="ADT^A28" set ok=$$A28^HL7InboundADTA28() set found=1
+		// ADT^A31 - update person information
+		if msgtype="ADT^A31" set ok=$$A31^HL7InboundADTA31() set found=1
+		// ADT^A34 - merge patient information - patient id ONLY
+		if msgtype="ADT^A34" set ok=$$A34^HL7InboundADTA34() set found=1
+		// ADT^A37 - unlink patient information
+		if msgtype="ADT^A37" set ok=$$A37^HL7InboundADTA37() set found=1
+		// ADT^A38 - cancel pre-admit
+		if msgtype="ADT^A38" set ok=$$A38^HL7InboundADTA38() set found=1
+		// ADT^A40 - merge patient information - patient identifier list
+		if msgtype="ADT^A40" set ok=$$A40^HL7InboundADTA40() set found=1
+		// ADT^A45 - move visit number
+		if msgtype="ADT^A45" set ok=$$A45^HL7InboundADTA45() set found=1
+		// ADT^A60 - update adverse reaction information
+		if msgtype="ADT^A60" set ok=$$A60^HL7InboundADTA60() set found=1
+		
+		if 'found set ok="AR\ADT message type received "_msgtype_" not currently supported\MSH^^9\200"
+	}
+	quit ok
+
+
+

@@ -1,0 +1,26 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7ReferralI14^MAC^^^0
+HL7ReferralI14	// ML 24/08/2009 ;  HL7 interface : referral
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7ReferralI14.rtn#1 $
+	quit
+ 
+	// I14 - cancel patient referral
+I14()
+	set RefNumber("REF")=""
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	.if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	.if '$data(^TMP("HL7",$job,cnt1,"RF1")) set reject="Required segment RF1 not received in message",reject("Detail")="RF1^^^~100" quit 
+ 
+	.if $data(^TMP("HL7",$job,cnt1,"RF1")) do
+	..set priority=$get(^TMP("HL7",$job,cnt1,"RF1",2))
+	.. // extract referral number
+	..if $data(RefNum("REF")) set RefNumber("REF")=$$ExtractNumber^HL7Common2("R","REF")
+	.if RefNumber("REF")="" set reject="No Referral Id received, unable to update referral.",reject("Detail")="RF1^^6^~100"
+	.if reject="" do ##class(web.RBReferral).CancelRef($get(RefNumber("REF")))
+ 
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

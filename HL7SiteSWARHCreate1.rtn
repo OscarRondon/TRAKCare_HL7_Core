@@ -1,0 +1,148 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteSWARHCreate1^MAC^^^0
+HL7SiteSWARHCreate1 // ML 06/05/2003 ; HL7 interface : create transmission packets - South West Alliance of Rural Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteSWARHCreate1.rtn#1 $
+	quit
+ 
+CheckPID ;; build data array - PID
+PID()	set intRegMrn=$get(intRegMrn),intAdmNum=$get(intAdmNum) kill DATA
+ 
+	// extract patient details
+	kill PatDetail,PatDetailx set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	if SQLCODE quit SQLCODE
+ 
+	// check for new null fields and change to ""
+	for xtable="PAPER","PAPMI" if $data(old(xtable)) do  quit
+	.do NullChange^HL7Common3(xtable)
+ 
+	// extract patient address details
+	do BuildAddress^HL7OutExtract1
+ 
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+ 
+	// extract patient number details
+	kill number set SQLCODE=$$PatNum^HL7OutExtract1(intRegMrn,intAdmNum,.number)
+	if SQLCODE quit SQLCODE
+ 
+	// extract patient alias
+	kill alias set Alias="" for altype="ALIAS","SUR" do 
+	.set row=0 for  set row=$order(^PAPER(intRegMrn,altype,row)) quit:row=""  do
+	..set intAliasNum=intRegMrn_"||"_row
+	..set al=$$PatAlias^HL7OutExtract1(intAliasNum,altype) if $translate($piece(al,"|"),",")="",($translate($piece(al,"|"),"_")="") quit
+	..set sep="," if $length($piece(al,"|"),"_")=7 set sep="_"
+	..set al=$piece(al,"|",1),$piece(al,sep,7)="A",alias(al)=""
+	set al="" for  set al=$order(alias(al)) quit:al=""  do
+	.set sep="," if $length($piece(al,"|"),"_")=7 set sep="_"
+	.set Alias=Alias_$select($length(Alias):"~",1:"")_$translate(al,sep,"^")
+ 
+	set sex=$get(PatDetail(15)),marital=$get(PatDetail(20)),religion=$get(PatDetail(23)),phoneW=$get(PatDetail(36)),phoneH=$get(PatDetail(38))
+	set country=$get(PatDetail(77)),email=$get(PatDetailx(130)),title=$get(PatDetail(139)),phoneM=$get(PatDetailx(131)),indigenous=$get(PatDetail(141)),language=$get(PatDetail(143))
+	set dvacard=$get(PatDetailx(114))
+	set MotherNum="" if $get(PatDetail(128))'="" set MotherNum=$$extRegMrn^HL7Common2(PatDetail(128))
+	// check dates for null values
+	set dob=$get(PatDetail(11)) if dob'="",dob'="""""" do
+	.set dob=$$DateConv^HL7Common2(.reject,"IE",PatDetail(11),"B"),estdob=$get(PatDetail(152))
+	set death=$get(PatDetail(74)) if death'="",death'="""""" do
+	.set death=$$Date^HL7(PatDetail(74)_","_PatDetail(82))
+ 
+	// adjust contact numbers
+	set phoneH=$select($length(phoneH):phoneH,1:"""""")_"^PRN^PH^^^^^^",phoneM=$select($length(phoneM):phoneM,1:"""""")_"^ORN^CP^^^^^^"
+	set phoneW=$select($length(phoneW):phoneW,1:"""""")_"^WPN^PH^^^^^^",email="^NET^Internet^"_$select($length(email):email,1:"""""")_"^^^^^"
+ 
+	// set counter
+	set DATA("PID",1)=$increment(count("PID"))
+ 
+	// adjust name
+	set name=$$BuildName^HL7Common3($get(PatDetail(4)),$get(PatDetail(5)),$get(PatDetail(118)))
+	set $piece(name,%1,5)=$piece(title,"^")_%1_%1_"L",DATA("PID",5)=name
+ 
+	// build patient numbers
+	for type="INT","REG","HOSP","CHINHS","MC","DVA","GOV","SN","HC" if $data(PatNum(type)) do
+	.if type'="HOSP",'$data(number(type)) set number(type)=""""""
+	.if type="HOSP" do
+	..do NumTypeDetail^HL7Common2(PatNum(type),"","",.asstype,.asscode,.idcode,.idmrtype,"","",.expfield)
+	..set number(type)=$get(number("REG")),$piece(number(type),"^",asstype)=asscode,$piece(number(type),"^",5)=idcode
+	.if $translate($get(number(type)),"^~")="" quit
+	.do NumTypeDetail^HL7Common2(PatNum(type),.segtype,.field,"","","","","","",.expfield,.expformat)
+	.if expfield'="" set $piece(number(type),"^",expfield)=$select($length(expformat):$extract($get(number(type,"EXPDATE")),1,$length(expformat)),1:$get(number(type,"EXPDATE")))
+	.set DATA(segtype,field)=$get(DATA(segtype,field))_$select($length($get(DATA(segtype,field))):"~",1:"")_number(type)
+ 
+	// setup date fields
+	if $length(dob) set DATA("PID",7)=$piece(dob,"^")_"^"_$select(estdob="Y":"Y",1:"")
+	if $length(death) do  else  kill DATA("PID",29),DATA("PID",30)
+	.set DATA("PID",29)=death,DATA("PID",30)=$select(death="""""":"""""",1:"Y")
+ 
+	// setup code table fields : sex, indigenous status, language, marital status, religion, ethnic code
+	set DATA("PID",8)=$piece(sex,"^"),DATA("PID",9)=Alias,DATA("PID",10)=indigenous,DATA("PID",13)=phoneH_"~"_phoneM_"~"_email
+	set DATA("PID",14)=phoneW,DATA("PID",15)=language,DATA("PID",16)=marital,DATA("PID",17)=religion,DATA("PID",21)=MotherNum
+	set DATA("PID",23)=country,DATA("PID",27)=$piece(dvacard,"^")
+ 
+	// setup permanent/temp address
+	if $data(PermAddress) do
+	.for k="CTY","PRV","PST" set PermAddress(k)=$piece($$Address^HL7Common7(.reject,"O",k,$get(PermAddress(k))),"|",$select(k="CTY":2,1:1))
+	.set DATA("PID",11)=$get(PermAddress("LINE1"))_%1_$get(PermAddress("LINE2"))_%1_$get(PermAddress("CTY"))_%1_$get(PermAddress("PRV"))_%1_$get(PermAddress("PST"))_%1_%1_"P"_%1_%1_%1_%1
+	if $data(TempAddress) do
+	.set cnt="" for  set cnt=$order(TempAddress(cnt)) quit:cnt=""  do
+	..for k="CTY","PRV","PST","TYP","FOR-COU" set TempAddress(cnt,k)=$piece($$Address^HL7Common7(.reject,"O",$select(k="FOR-COU":"COU",1:k),$get(TempAddress(cnt,k))),"|",$select(k="CTY":2,1:1))
+	..set TempAddress(cnt,"TYP")=$select($get(TempAddress(cnt,"TYP"))="P":"M",$get(TempAddress(cnt,"TYP"))="T":"C",1:$get(TempAddress(cnt,"TYP")))
+	..set DATA("PID",11)=$get(DATA("PID",11))_$select($length(DATA("PID",11)):"~",1:"")_$get(TempAddress(cnt,"LINE1"))_%1_$get(TempAddress(cnt,"LINE2"))_%1_$get(TempAddress(cnt,"CTY"))_%1_$get(TempAddress(cnt,"PRV"))_%1_$get(TempAddress(cnt,"PST"))_%1_%1_$get(TempAddress(cnt,"TYP"))_%1_$get(TempAddress(cnt,"FOR-CTY"))_%4_$get(TempAddress(cnt,"FOR-PST"))_%4_$get(TempAddress(cnt,"FOR-COU"))_%1_%1_%1
+ 
+	kill PatDetail,PatDetailx,PermAddress,TempAddress,number,phone
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckAL1 ;; extract patient allergies - AL1
+AL1()	set intRegMrn=$get(intRegMrn),(algtext,count)="" kill DATA,Repeat,AlgAlt
+ 
+	set check=1 if $order(^PAPER(intRegMrn,"ALG",0))="",$order(^PAPER(intRegMrn,"ALLERGY",0))="",$order(^PAPER(intRegMrn,"ALM",0))="" set check=""
+	if mandatory'="Y",'check quit 0
+	if mandatory="Y",'check set DATA("AL1",1)=1 quit 0
+ 
+	set (code,desc)=""
+	// extract allergies
+	set seq=0 for  set seq=$order(^PAPER(intRegMrn,"ALG",seq)) quit:seq=""  do
+	. // check for inactive
+	.set intAlgNum=intRegMrn_"||"_seq kill Allergy if $$Allergy^HL7OutExtract9(intAlgNum,.Allergy) quit
+	. // ignore not active allergy
+	.if $get(Allergy(11))'="A" quit
+	.set value=$get(Allergy(8)) if value="" quit
+	. &SQL(SELECT ALG_Code, ALG_Desc INTO :code, :desc FROM PAC_Allergy WHERE ALG_RowId = :value)
+	.if SQLCODE quit
+	. // convert escape characters
+	.for var="code","desc" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.set count=count+1
+	.set AlgAlt("AL1",count,1)=count,AlgAlt("AL1",count,2)="MA",AlgAlt("AL1",count,3)=code_"^"_desc
+ 
+	set seq=0 for  set seq=$order(^PAPER(intRegMrn,"ALLERGY",seq)) quit:seq=""  do
+	.set algtext=$get(algtext)_$select($length(algtext):"~",1:"")_^(seq)
+	if $translate(algtext,"~","")'="" do
+	.set count=count+1
+	.set AlgAlt("AL1",count,1)=count,AlgAlt("AL1",count,2)="MA",AlgAlt("AL1",count,3)="^"_algtext
+ 
+	set (code,desc)=""
+	// extract alerts
+	set seq=0 for  set seq=$order(^PAPER(intRegMrn,"ALM",seq)) quit:seq=""  do
+	.set intAltNum=intRegMrn_"||"_seq kill Alert if $$Alert^HL7OutExtract9(intAltNum,.Alert) quit
+	. // ignore not active alert
+	.if $get(Alert(30))'="A" quit
+	.set value=$get(Alert(21)) if value="" quit
+	. &SQL(SELECT ALERT_Code, ALERT_Desc INTO :code, :desc FROM PAC_PatientAlert WHERE ALERT_RowId = :value)
+	.if SQLCODE quit
+	. // convert escape characters
+	.for var="code","desc" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.set count=count+1
+	.set AlgAlt("AL1",count,1)=count,AlgAlt("AL1",count,2)="MC",AlgAlt("AL1",count,3)=code_"^"_desc
+ 
+	set (cnt,count)="" for  set cnt=$order(AlgAlt("AL1",cnt)) quit:cnt=""  do
+	.set count=count+1
+	.if count=1 merge DATA("AL1")=AlgAlt("AL1",cnt)
+	.if count>1,repeat="Y" merge Repeat("AL1",count)=AlgAlt("AL1",cnt)
+ 
+	kill AlgAlt
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

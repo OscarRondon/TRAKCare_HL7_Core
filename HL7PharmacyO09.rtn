@@ -1,0 +1,14 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7PharmacyO09^MAC^^^0
+HL7PharmacyO09	// ML 16/10/2006 : HL7 interface - pharmacy order
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7PharmacyO09.rtn#1 $
+	quit
+ 
+	// O09 - pharmacy/treatment order
+O09()
+ 
+	quit
+
+
+

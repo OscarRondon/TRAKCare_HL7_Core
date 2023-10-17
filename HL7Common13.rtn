@@ -1,0 +1,140 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Common13^MAC^^^0
+HL7Common13	// ML 11/6/2009 ;; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common13.rtn#1 $
+	quit
+	
+	// check if need to convert USRN format
+USRNFormat(number,method,reject) new (number,method,EB,reject) set number=$get(number),method=$get(method)
+	set (num,reject)=""
+	
+	if number="" quit ""
+	// format - 'T'rakCare
+	if EB("APPTFORMAT")="T"!(EB("APPTFORMAT")="") set num=number
+	
+	// format - 'G'UID
+	if EB("APPTFORMAT")="G" do
+	. // external to internal
+	. if method="EI" do
+	. . // check if GUID has USRN
+	. . set num=$order(^RBASi("GUID-USRN",number,"")) if num'="" quit
+	. . if num="" set reject="GUID-USRN received "_number_" does not match to an equivalent TrakCare USRN"
+	
+	. // internal to external
+	. if method="IE" do
+	. . // check if GUID exists
+	. . set num=$order(^RBASi("USRN-GUID",number,"")) if num'="" quit
+	. . // create new GUID
+	. . set num=$system.Util.CreateGUID()
+	. . set ^RBASi("USRN-GUID",number,num)=""
+	. . set ^RBASi("GUID-USRN",num,number)=""
+	
+	quit num
+	
+	// extract html document text
+HTMLDocument(documentId,HTMLText) new (documentId,HTMLText) set documentId=$get(documentId)
+	set doc=##class(websys.Document).DisplayStream(documentId,"docData")
+	do doc.Rewind()
+	for i=1:1 kill len set line=doc.ReadLine(.len,.sc) quit:len=-1  set HTMLText(i)=line
+	kill doc
+	quit 0
+	// search for external code/desc received in observations or observation attributes
+ObservationExtCode(obstype,obscode,obsdesc,intObservation) new (obstype,obscode,obsdesc,intObservation)
+	set obstype=$get(obstype),obscode=$get(obscode),obsdesc=$get(obsdesc),intObservation=$get(intObservation)
+	
+	if obscode="" quit ""
+	set (RowId,code)=""
+	// search for external code/desc received in observation
+	if obstype="OBSERVATION" {
+		&SQL(SELECT EXTCODE_ParRef, EXTCODE_ParRef -> ITM_Code INTO :RowId, :code FROM MRC_ObservationItemExtCodes WHERE %ALPHAUP(EXTCODE_Code) = %ALPHAUP(:obscode) AND %ALPHAUP(EXTCODE_Desc) = %ALPHAUP(:obsdesc))
+		if SQLCODE {
+			&SQL(SELECT ITM_RowId, ITM_Code INTO :RowId, :code FROM MRC_ObservationItem WHERE %ALPHAUP(ITM_Code) = %ALPHAUP(:obscode) AND %ALPHAUP(ITM_Desc) = %ALPHAUP(:obsdesc))
+			if SQLCODE {
+				&SQL(SELECT ITM_RowId, ITM_Code INTO :RowId, :code FROM MRC_ObservationItem WHERE %ALPHAUP(ITM_Code) = %ALPHAUP(:obscode))
+			}
+		}
+	}
+	// search for external code/desc received in observation attributes
+	if obstype="ATTRIBUTE" {
+		&SQL(SELECT EXTCODE_ParRef INTO :RowId FROM MRC_ObservationItemAttrExtCodes, MRC_ObservationItem WHERE ITM_RowId = :intObservation AND %ALPHAUP(EXTCODE_Code) = %ALPHAUP(:obscode) AND %ALPHAUP(EXTCODE_Desc) = %ALPHAUP(:obsdesc))
+		if SQLCODE {
+			&SQL(SELECT ATTR_RowId INTO :RowId FROM MRC_ObservationItemAttribute, MRC_ObservationItem WHERE ITM_RowId = :intObservation AND %ALPHAUP(ATTR_Code) = %ALPHAUP(:obscode) AND %ALPHAUP(ATTR_Desc) = %ALPHAUP(:obsdesc))
+			if SQLCODE {
+				&SQL(SELECT ATTR_RowId INTO :RowId FROM MRC_ObservationItemAttribute, MRC_ObservationItem WHERE ITM_RowId = :intObservation AND %ALPHAUP(ATTR_Code) = %ALPHAUP(:obscode))
+			}
+		}
+	}
+	quit $select(SQLCODE:"",1:RowId_$select(obstype="OBSERVATION":"^"_code,1:""))
+	// extract observation/attribute type
+ObservationType(obstype,intObsAtt) new (obstype,intObsAtt) set obstype=$get(obstype),intObsAtt=$get(intObsAtt),type=""
+	// extract observation type
+	if obstype="OBSERVATION" {
+		&SQL(SELECT ITM_InputType INTO :type FROM MRC_ObservationItem WHERE ITM_RowId = :intObsAtt)
+	}
+	// extract attribute type
+	if obstype="ATTRIBUTE" {
+		&SQL(SELECT ATTR_InputType INTO :type FROM MRC_ObservationItemAttribute WHERE ATTR_RowId = :intObsAtt)
+	}
+	quit type
+	// extract observation/attribute result lookup description
+ObservationResult(obstype,intObsAtt,desc) new (obstype,intObsAtt,desc) set obstype=$get(obstype),intObsAtt=$get(intObsAtt),desc=$get(desc),(newval1,newval2)=""
+	// extract observation type
+	if obstype="OBSERVATION" {
+		&SQL(SELECT LU_Code, LU_Desc INTO :newval1, :newval2 FROM MRC_ObservationItemLookUp WHERE LU_ParRef = :intObsAtt AND %ALPHAUP(LU_Desc) = %ALPHAUP(:desc))
+	}
+	// extract attribute result
+	if obstype="ATTRIBUTE" {
+		&SQL(SELECT RESP_Desc INTO :newval1 FROM MRC_ObservationItemAttrResponse WHERE RESP_ParRef = :intObsAtt AND %ALPHAUP(RESP_Desc) = %ALPHAUP(:desc))
+	}
+	quit $select(SQLCODE:"",1:newval1_"^"_newval2)
+	// extract observation status description
+ObservationStatus(statcode) new (statcode) set atatcode=$get(statcode),newstatus=""
+	// check status against standard type
+	set newstatus=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("ResultType",statcode)
+	if newstatus="" quit ""
+	// check if result type status is observation status
+	if ##class(web.MRCObservationStatus).GetIdFromCodeOrDescription(newstatus)="" quit ""
+	quit statcode
+	// check if observation result exists and is identical
+ObservationResultIdentical(obstype,intMRAdm,intObservation,intAttribute,dateObs,timeObs,obsEntryId,ObservationType,value) new (obstype,intMRAdm,intObservation,intAttribute,dateObs,timeObs,obsEntryId,ObservationType,value)
+	set obstype=$get(obstype),intMRAdm=$get(intMRAdm),intObservation=$get(intObservation),intAttribute=$get(intAttribute),dateObs=$get(dateObs),timeObs=$get(timeObs),obsEntryId=$get(obsEntryId),ObservationType=$get(ObservationType),value=$get(value)
+	set (return,detail)=""
+	set row=$order(^MR(intMRAdm,"OBSENTRY",0,"Item",intObservation,dateObs,timeObs,obsEntryId,""),-1)
+	if row="" quit ""
+	if obstype="OBSERVATION" {
+		set detail=$get(^MR(intMRAdm,"OBS",row))
+		set valuex=value
+		// convert to rowid of lookup value
+		if ObservationType="L" {
+			set valuex=##class(web.MRCObservationItemLookUp).GetCodeFromDescription(intObservation,$piece(value,"^",2))
+		}
+		// check if observation value matches
+		if $piece(detail,"^",2)=valuex set return=1 quit return
+		// if value does not match return rowid
+		set return=intMRAdm_"||"_row
+	}
+	if obstype="ATTRIBUTE" {
+		set rowx="0" for  {
+			if return'="" quit
+			set rowx=$order(^MR(intMRAdm,"OBS",row,"ATTR",rowx),1,detail)
+			if rowx="" quit
+			// attribute does not match
+			if $piece(detail,"^")'=intAttribute continue
+			set valuex=value
+			// convert to rowid of lookup value
+			if ObservationType="L" {
+				set valuex=##class(web.MRCObservationItemAttrResponse).GetIdFromCodeOrDescription(value,"","D",intAttribute)
+				if valuex="" quit
+				set valuex=$listget(##class(web.MRCObservationItemAttrResponse).GetCodeDescriptionFromId(valuex),3)
+			}
+			// attribute value matches
+			if $piece(detail,"^",2)=valuex set return=1 quit
+			// if value does not match return rowid
+			set return=intMRAdm_"||"_row_"||"_rowx
+		}
+	}
+	quit return
+
+
+

@@ -1,0 +1,1046 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7InboundUpdate1^MAC^^^0
+HL7InboundUpdate1	// ML 10/02/2011 ;  HL7 interface : update records using api's
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundUpdate1.rtn#2 $
+	quit
+	// alias information
+ALIAS
+	kill params,ErrorLog,msg
+	// remove invalid fields
+	set j="" for  {
+		set j=$order(ALIAS(j)) if j="" quit
+		set var="" for  {
+			set var=$order(ALIAS(j,var)) if var="" quit
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAPersonAllAlias.EditCustom||"_var)
+			if property="" {
+				// check hidden fields
+				kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAPersonAllAlias.EditCustom||"_var)
+				if property="" kill ALIAS(j,var)
+			}
+		}
+	}
+	kill property
+	// remove existing alias and rebuild
+	if $data(ALIAS) {
+		&SQL(DELETE FROM PA_PersonAlias WHERE ALIAS_ParRef = :intRegMrn)
+		&SQL(DELETE FROM PA_PersonSurnameAlias WHERE SUR_ParRef = :intRegMrn)
+		// remove empty fields and check for active nulls
+		set j="" for  {
+			set j=$order(ALIAS(j)) if j="" quit
+			set var="" for  {
+				set var=$order(ALIAS(j,var)) if var="" quit
+				if ALIAS(j,var)="" kill ALIAS(j,var)
+				else  if ALIAS(j,var)=""""!(ALIAS(j,var)="""""") set ALIAS(j,var)=""
+			}
+			set (success,return)=""
+			for  {
+				// succesful update
+				if success=1 quit
+				// unsuccessful update
+				if reject'="" quit
+				// alias removed due to reject notification
+				if '$data(ALIAS(j)) quit
+				// insert new alias
+				kill params set params=##class(TC.api.PAPersonAllAlias.EditCustom).%New()
+				set params.PatientID=intRegMrn
+				set var="" for  {
+					set var=$order(ALIAS(j,var)) if var="" quit
+					set $property(params,var)=ALIAS(j,var)
+				}
+				set jHL7=j
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+				// successful update
+				if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+				// unsuccessful update
+				if 'success {
+					do apiReject^HL7Reject(.APIerror,"TC.api.PAPersonAllAlias.EditCustom",$piece(return,"^",2),"","Y")
+					// remove fields with invalid values
+					set var="" for  {
+						set var=$order(APIerror(var)) if var="" quit
+						kill ALIAS(jHL7)
+					}
+				}
+				kill APIerror
+				set j=jHL7 kill params
+			}
+		}
+	}
+	kill params,ErrorLog,msg
+	quit
+	// alert and allergy information - from IAM segment
+ALERTALLERGY
+	kill params,ErrorLog,msg
+	// insert and update alerts
+	if $data(ALERT) {
+		// remove invalid fields
+		set j="" for  {
+			set j=$order(ALERT(j)) if j="" quit
+			set var="" for  {
+				set var=$order(ALERT(j,var)) if var="" quit
+				// action removed later after it is determined what to do with the alert
+				if var'="Action" {
+					kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAlertMsg.EditNew||"_var)
+					if property="" {
+						// check hidden fields
+						kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAlertMsg.EditNew||"_var)
+						if property="" kill ALERT(j,var)
+					}
+				}
+			}
+		}
+		kill property
+		// check if exists
+		for action="D","A","U" {
+			set j="" for  {
+				set j=$order(ALERTi("ACTION",action,j)) if j="" quit
+				set ALTExternalId=$get(ALERT(j,"ALMExternalID"))
+				set intAltNum=""
+				&SQL(SELECT ALM_RowId INTO :intAltNum FROM PA_AlertMsg WHERE ALM_PAPMI_ParRef = :intRegMrn AND ALM_ExternalID = :ALTExternalId)
+				if SQLCODE set intAltNum=""
+				set ALERT(j,"ROWID")=intAltNum
+			}
+		}
+		// delete all existing alerts and then insert all received
+		if $data(ALERTi("ACTION","X")) {
+			&SQL(DELETE FROM PA_AlertMsg WHERE ALM_PAPMI_ParRef = :intRegMrn)
+		}
+		// delete marked alert
+		if $data(ALERTi("ACTION","D")) {
+			set j="" for  {
+				set j=$order(ALERTi("ACTION","D",j)) if j="" quit
+				set intAltNum=$get(ALERT(j,"ROWID"))
+				if intAltNum'="" {
+					&SQL(DELETE FROM PA_AlertMsg WHERE ALM_RowId = :intAltNum)
+				}
+				kill ALERT(j),ALERTi("ACTION","D",j)
+			}
+		}
+		// add alert - filter out existing
+		if $data(ALERTi("ACTION","A")) {
+			set j="" for  {
+				set j=$order(ALERTi("ACTION","A",j)) if j="" quit
+				set intAltNum=$get(ALERT(j,"ROWID"))
+				// if pre-existing do not add
+				if intAltNum'="" kill ALERT(j),ALERTi("ACTION","A",j)
+			}
+		}
+		// update alert
+		if $data(ALERTi("ACTION","U")) {
+			set j="" for  {
+				set j=$order(ALERTi("ACTION","U",j)) if j="" quit
+				set intAltNum=$get(ALERT(j,"ROWID"))
+				// remove 'ROWID' as not an api field
+				kill ALERT(j,"ROWID")
+				if intAltNum'="" {
+					kill ALERT(j,"Action")
+					// remove empty fields and check for active nulls
+					set var="" for  {
+						set var=$order(ALERT(j,var)) if var="" quit
+						if ALERT(j,var)="" kill ALERT(j,var)
+						else  if ALERT(j,var)=""""!(ALERT(j,var)="""""") set ALERT(j,var)=""
+					}
+					// update existing alert
+					kill params set params=##class(TC.api.PAAlertMsg.EditNew).%New()
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Open(token,intAltNum)
+					set var="" for  {
+						set var=$order(ALERT(j,var)) if var="" quit
+						set $property(params,var)=ALERT(j,var)
+					}
+					set jHL7=j
+					if $data(params) {
+						set params.TOVERRIDE=1
+						// request api token
+						set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+						set return=params.Save(token)
+					}
+					// successful update
+					set success=""
+					if $piece(return,"^")=1!($piece(return,"^")="I") {
+						set success=1
+						kill ALERT(j),ALERTi("ACTION","U",j)
+					}
+					// unsuccessful update
+					if 'success {
+						do apiReject^HL7Reject(.APIerror,"TC.api.PAAlertMsg.EditNew",$piece(return,"^",2))
+						// remove fields with invalid values
+						set var="" for  {
+							set var=$order(APIerror(var)) if var="" quit
+							kill ALERT(jHL7),ALERTi("ACTION","U",jHL7)
+						}
+					}
+					kill APIerror
+					set j=jHL7 kill params
+				}
+			}
+		}
+		// insert remaining alerts
+		set j="" for  {
+			set j=$order(ALERT(j)) if j="" quit
+			kill ALERT(j,"Action"),ALERT(j,"ROWID")
+			// remove empty fields and check for active nulls
+			set var="" for  {
+				set var=$order(ALERT(j,var)) if var="" quit
+				if ALERT(j,var)="" kill ALERT(j,var)
+				else  if ALERT(j,var)=""""!(ALERT(j,var)="""""") set ALERT(j,var)=""
+			}
+			// insert new alert
+			kill params set params=##class(TC.api.PAAlertMsg.EditNew).%New()
+			// require both as GCOM routine and web class use one each
+			set params.PARREF=intRegMrn
+			set params.PatientID=intRegMrn
+			set var="" for  {
+				set var=$order(ALERT(j,var)) if var="" quit
+				set $property(params,var)=ALERT(j,var)
+			}
+			set jHL7=j
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+			// successful update
+			set success=""
+			if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+			// unsuccessful update
+			if 'success {
+				do apiReject^HL7Reject(.APIerror,"TC.api.PAAlertMsg.EditNew",$piece(return,"^",2))
+				// remove fields with invalid values
+				set var="" for  {
+					set var=$order(APIerror(var)) if var="" quit
+					kill ALERT(jHL7)
+				}
+			}
+			kill APIerror
+			set j=jHL7 kill params
+		}
+	}
+	kill params,ErrorLog,msg
+	// insert and update allergies
+	if $data(ALG) {
+		// remove invalid fields
+		set j="" for  {
+			set j=$order(ALG(j)) if j="" quit
+			set var="" for  {
+				set var=$order(ALG(j,var)) if var="" quit
+				// action removed later after it is determined what to do with the allergy
+				if var'="Action" {
+					kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAllergy.EditEMR||"_var)
+					if property="" {
+						// check hidden fields
+						kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAllergy.EditEMR||"_var)
+						if property="" kill ALG(j,var)
+					}
+				}
+			}
+		}
+		kill property
+		// check if exists
+		for action="D","A","U" {
+			set j="" for  {
+				set j=$order(ALGi("ACTION",action,j)) if j="" quit
+				set ALGExternalId=$get(ALG(j,"ALGExternalID"))
+				set intAlgNum=""
+				&SQL(SELECT ALG_RowId INTO :intAlgNum FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn AND ALG_ExternalID = :ALGExternalId)
+				if SQLCODE set intAlgNum=""
+				set ALG(j,"ROWID")=intAlgNum
+			}
+		}
+		// delete all existing allergies and then insert all received
+		if $data(ALGi("ACTION","X")) {
+			&SQL(DELETE FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn)
+		}
+		// delete marked allergies
+		if $data(ALGi("ACTION","D")) {
+			set j="" for  {
+				set j=$order(ALGi("ACTION","D",j)) if j="" quit
+				set intAlgNum=$get(ALG(j,"ROWID"))
+				if intAlgNum'="" {
+					&SQL(DELETE FROM PA_Allergy WHERE ALG_RowId = :intAlgNum)
+				}
+				kill ALG(j),ALGi("ACTION","D",j)
+			}
+		}
+		// add allergy - filter out existing
+		if $data(ALGi("ACTION","A")) {
+			set j="" for  {
+				set j=$order(ALGi("ACTION","A",j)) if j="" quit
+				set intAlgNum=$get(ALG(j,"ROWID"))
+				// if pre-existing do not add
+				if intAlgNum'="" kill ALG(j),ALGi("ACTION","A",j)
+			}
+		}
+		// update allergy
+		if $data(ALGi("ACTION","U")) {
+			set j="" for  {
+				set j=$order(ALGi("ACTION","U",j)) if j="" quit
+				set intAlgNum=$get(ALG(j,"ROWID"))
+				// remove 'ROWID' as not an api field
+				kill ALG(j,"ROWID")
+				if intAlgNum'="" {
+					kill ALG(j,"Action")
+					// remove empty fields and check for active nulls
+					set var="" for  {
+						set var=$order(ALG(j,var)) if var="" quit
+						if ALG(j,var)="" kill ALG(j,var)
+						else  if ALG(j,var)=""""!(ALG(j,var)="""""") set ALG(j,var)=""
+					}
+					// update existing allergy
+					kill params set params=##class(TC.api.PAAllergy.EditEMR).%New()
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Open(token,intAlgNum)
+					set var="" for  {
+						set var=$order(ALG(j,var)) if var="" quit
+						set $property(params,var)=ALG(j,var)
+					}
+					set jHL7=j
+					if $data(params) {
+						set params.TOVERRIDE=1
+						// request api token
+						set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+						set return=params.Save(token)
+					}
+					// successful update
+					set success=""
+					if $piece(return,"^")=1!($piece(return,"^")="I") {
+						set success=1
+						kill ALG(j),ALGi("ACTION","U",j)
+					}
+					// unsuccessful update
+					if 'success {
+						do apiReject^HL7Reject(.APIerror,"TC.api.PAAllergy.EditEMR",$piece(return,"^",2))
+						// remove fields with invalid values
+						set var="" for  {
+							set var=$order(APIerror(var)) if var="" quit
+							kill ALG(jHL7),ALGi("ACTION","U",jHL7)
+						}
+					}
+					kill APIerror
+					set j=jHL7 kill params
+				}
+			}
+		}
+		// insert remaining allergies
+		set j="" for  {
+			set j=$order(ALG(j)) if j="" quit
+			kill ALG(j,"Action"),ALG(j,"ROWID")
+			// remove empty fields and check for active nulls
+			set var="" for  {
+				set var=$order(ALG(j,var)) if var="" quit
+				if ALG(j,var)="" kill ALG(j,var)
+				else  if ALG(j,var)=""""!(ALG(j,var)="""""") set ALG(j,var)=""
+			}
+			// insert new allergy
+			kill params set params=##class(TC.api.PAAllergy.EditEMR).%New()
+			set params.PARREF=intRegMrn
+			set var="" for  {
+				set var=$order(ALG(j,var)) if var="" quit
+				set $property(params,var)=ALG(j,var)
+			}
+			set jHL7=j
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+			// successful update
+			set success=""
+			if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+			// unsuccessful update
+			if 'success {
+				do apiReject^HL7Reject(.APIerror,"TC.api.PAAllergy.EditEMR",$piece(return,"^",2))
+				// remove fields with invalid values
+				set var="" for  {
+					set var=$order(APIerror(var)) if var="" quit
+					kill ALG(jHL7)
+				}
+			}
+			kill APIerror
+			set j=jHL7 kill params
+		}
+	}
+	kill params,ErrorLog,msg
+	quit
+	// allergy information - from AL1 segment
+ALLERGY
+	kill params,ErrorLog,msg
+	// remove invalid fields
+	set j="" for  {
+		set j=$order(ALG(j)) if j="" quit
+		set var="" for  {
+			set var=$order(ALG(j,var)) if var="" quit
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAllergy.EditEMR||"_var)
+			if property="" {
+				// check hidden fields
+				kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAllergy.EditEMR||"_var)
+				if property="" kill ALG(j,var)
+			}
+		}
+	}
+	kill property
+	// update allergies
+	if $data(ALG) {
+		if $order(^PAPER(intRegMrn,"ALG",0))'="" {
+			// set all existing allergies to inactive
+			set x=0 for  set x=$order(^PAPER(intRegMrn,"ALG",x)) quit:x=""  set $piece(^(x),"^",8)="I"
+			
+			// extract all existing allergies
+			kill rs set rs=##class(TC.api.PAAllergy.ListEMR).%New()
+			kill params set params=##class(TC.api.PAAllergy.ListEMR.Params).%New()
+			set params.PatientID=intRegMrn
+			do rs.Execute(token,params)
+			for  {
+				do rs.Next()
+				if $get(rs.Data("RowID"))="" quit
+				set RowId=rs.Data("RowID")
+				set AllergenRowId=##class(web.PACAllergy).GetIdFromCodeOrDescription(rs.Data("Allergen"))
+				// check if received and assign rowid
+				if $data(ALGi("CODE-ROW",AllergenRowId)) {
+					set j=$order(ALGi("CODE-ROW",AllergenRowId,""))
+					if j'="" set ALG(j,"ALG-ROWID")=RowId kill ALGi("CODE-ROW",AllergenRowId,j)
+				}
+			}
+			kill rs
+		}
+		// remove empty fields and check for active nulls
+		set j="" for  {
+			set j=$order(ALG(j)) if j="" quit
+			set var="" for  {
+				set var=$order(ALG(j,var)) if var="" quit
+				if ALG(j,var)="" kill ALG(j,var)
+				else  if ALG(j,var)=""""!(ALG(j,var)="""""") set ALG(j,var)=""
+			}
+			if $get(ALG(j,"ALG-ROWID"))="" {
+				// insert new allergy
+				kill params set params=##class(TC.api.PAAllergy.EditEMR).%New()
+				set params.PARREF=intRegMrn
+				set var="" for  {
+					set var=$order(ALG(j,var)) if var="" quit
+					set $property(params,var)=ALG(j,var)
+				}
+				set jHL7=j
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+				// successful update
+				set success=""
+				if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+				// unsuccessful update
+				if 'success {
+					do apiReject^HL7Reject(.APIerror,"TC.api.PAAllergy.EditEMR",$piece(return,"^",2))
+					// remove fields with invalid values
+					set var="" for  {
+						set var=$order(APIerror(var)) if var="" quit
+						kill ALG(j)
+					}
+				}
+				kill APIerror
+				set j=jHL7 kill params
+			}
+			if $get(ALG(j,"ALG-ROWID"))'="" {
+				set intAlgNum=$get(ALG(j,"ALG-ROWID")) kill ALG(j,"ALG-ROWID")
+				// update existing allergy
+				kill params set params=##class(TC.api.PAAllergy.EditEMR).%New()
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Open(token,intAlgNum)
+				if $piece(return,"^")=1 {
+					set var="" for  {
+						set var=$order(ALG(j,var)) if var="" quit
+						set $property(params,var)=ALG(j,var)
+					}
+					set jHL7=j
+					if $data(params) {
+						set params.TOVERRIDE=1
+						// request api token
+						set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+						set return=params.Save(token)
+					}
+					// successful update
+					set success=""
+					if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+					// unsuccessful update
+					if 'success {
+						do apiReject^HL7Reject(.APIerror,"TC.api.PAAllergy.EditEMR",$piece(return,"^",2))
+						// remove fields with invalid values
+						set var="" for  {
+							set var=$order(APIerror(var)) if var="" quit
+							kill ALG(jHL7)
+						}
+					}
+					kill APIerror
+					set j=jHL7 kill params
+				}
+			}
+		}
+	}
+	kill params,ErrorLog,msg
+	quit
+	// employee information
+EMPLOYEE
+	kill params,ErrorLog,msg
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(EMPLOY(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAPersonEmployee.Edit||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAPersonEmployee.Edit||"_var)
+			if property="" kill EMPLOY(var)
+		}
+	}
+	kill property
+	// remove empty field and check for active nulls
+	set var="" for  {
+		set var=$order(EMPLOY(var)) if var="" quit
+		if EMPLOY(var)="" kill EMPLOY(var)
+		else  if EMPLOY(var)=""""!(EMPLOY(var)="""""") set EMPLOY(var)=""
+	}
+	set (success,return)=""
+	for  {
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// add/update employee information
+		kill params set params=##class(TC.api.PAPersonEmployee.Edit).%New()
+		// request api token
+		set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+		set return=params.Open(token,intRegMrn)
+		if $piece(return,"^")=1 {
+			set var="" for  {
+				set var=$order(EMPLOY(var)) if var="" quit
+				set $property(params,var)=EMPLOY(var)
+			}
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAPersonEmployee.Edit",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill EMPLOY(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// med record number
+HOSPMRN
+	kill params,ErrorLog,msg
+	set (success,return)=""
+	// remove invalid fields
+	set j="" for  {
+		set j=$order(HOSPMRN(j)) if j="" quit
+		set var="" for  {
+			set var=$order(HOSPMRN(j,var)) if var="" quit
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.RTMaster.MRTypeEdit||"_var)
+			if property="" {
+				// check hidden fields
+				kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.RTMaster.MRTypeEdit||"_var)
+				if property="" kill HOSPMRN(j,var)
+			}
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set j="" for  {
+		set j=$order(HOSPMRN(j)) if j="" quit
+		set var="" for  {
+			set var=$order(HOSPMRN(j,var)) if var="" quit
+			if HOSPMRN(j,var)="" kill HOSPMRN(j,var)
+			else  if HOSPMRN(j,var)=""""!(HOSPMRN(j,var)="""""") set HOSPMRN(j,var)=""
+		}
+		// check if med record number exists already
+		set intHospMrn=$$intHospMrn^HL7Common2(HOSPMRN(j,"RTMASMRNo"))
+		if intHospMrn'="" {
+			set intRegMrnHosp=$$intRegMrnHosp^HL7Common2(intHospMrn)
+			if intRegMrn'=intRegMrnHosp {
+				set reject="Unable to add Medical Record Id "_HOSPMRN(j,"RTMASMRNo")_" - already exists on Patient Id "_$$extRegMrn^HL7Common2(intRegMrnHosp)
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+			}
+		}
+		if intHospMrn="" {
+			set (success,return)=""
+			// insert new med record number
+			kill params set params=##class(TC.api.RTMaster.MRTypeEdit).%New()
+			set params.PatientID=intRegMrn
+			set var="" for  {
+				set var=$order(HOSPMRN(j,var)) if var="" quit
+				set $property(params,var)=HOSPMRN(j,var)
+			}
+			set jHL7=j
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+			// successful update
+			if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+			// unsuccessful update
+			if 'success {
+				do apiReject^HL7Reject(.APIerror,"TC.api.RTMaster.MRTypeEdit",$piece(return,"^",2))
+			}
+			kill APIerror
+			set j=jHL7 kill params
+		}
+		// unsuccessful update
+		if reject'="" quit
+	}
+	kill params,ErrorLog,msg
+	quit
+	// merge patient
+MERGE
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(MERGE(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAMergePatient.Edit||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAMergePatient.Edit||"_var)
+			if property="" kill MERGE(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(MERGE(var)) if var="" quit
+		if MERGE(var)="" kill MERGE(var)
+		else  if MERGE(var)=""""!(MERGE(var)="""""") set MERGE(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// merge patients
+		kill params set params=##class(TC.api.PAMergePatient.Edit).%New()
+		set var="" for  {
+			set var=$order(MERGE(var)) if var="" quit
+			set $property(params,var)=MERGE(var)
+		}
+		if $data(params) {
+			set params.TOVERRIDE=1
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Save(token)
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAMergePatient.Edit",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill MERGE(var)
+			}
+			// set success to 1 to prevent second merge attempt
+			if reject="" set success=1
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// next of kin
+NOK
+	kill params,ErrorLog,msg
+	// remove invalid fields
+	set j="" for  {
+		set j=$order(NOK(j)) if j="" quit
+		set var="" for  {
+			set var=$order(NOK(j,var)) if var="" quit
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PANok.Edit||"_var)
+			if property="" {
+				// check hidden fields
+				kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PANok.Edit||"_var)
+				if property="" kill NOK(j,var)
+			}
+		}
+	}
+	kill property
+	// remove existing NOK and rebuild
+	if $data(NOK) {
+		kill ^PAPER(intRegMrn,"NOK")
+		// remove empty fields and check for active nulls
+		set j="" for  {
+			set j=$order(NOK(j)) if j="" quit
+			set var="" for  {
+				set var=$order(NOK(j,var)) if var="" quit
+				if NOK(j,var)="" kill NOK(j,var)
+				else  if NOK(j,var)=""""!(NOK(j,var)="""""") set NOK(j,var)=""
+			}
+			set (success,return)=""
+			for  {
+				// succesful update
+				if success=1 quit
+				// unsuccessful update
+				if reject'="" quit
+				// insert new next of kin
+				kill params set params=##class(TC.api.PANok.Edit).%New()
+				set params.PARREF=intRegMrn
+				set var="" for  {
+					set var=$order(NOK(j,var)) if var="" quit
+					set $property(params,var)=NOK(j,var)
+				}
+				set jHL7=j
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+				// successful update
+				if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+				// unsuccessful update
+				if 'success {
+					do apiReject^HL7Reject(.APIerror,"TC.api.PANok.Edit",$piece(return,"^",2))
+					// remove fields with invalid values
+					set var="" for  {
+						set var=$order(APIerror(var)) if var="" quit
+						kill NOK(jHL7,var)
+					}
+				}
+				kill APIerror
+				set j=jHL7 kill params
+			}
+		}
+	}
+	kill params,ErrorLog,msg
+	quit
+	// person information
+PERSON
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PERSON(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAPerson.Edit||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAPerson.Edit||"_var)
+			if property="" kill PERSON(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PERSON(var)) if var="" quit
+		if PERSON(var)="" kill PERSON(var)
+		else  if PERSON(var)=""""!(PERSON(var)="""""") set PERSON(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// update existing person information
+		if intRegMrn'="" {
+			kill params set params=##class(TC.api.PAPerson.Edit).%New()
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Open(token,intRegMrn)
+			if $piece(return,"^")=1 {
+				set var="" for  {
+					set var=$order(PERSON(var)) if var="" quit
+					set $property(params,var)=PERSON(var)
+				}
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+			}
+		}
+		// add person information
+		if intRegMrn="" {
+			kill params set params=##class(TC.api.PAPerson.Edit).%New()
+			set var="" for  {
+				set var=$order(PERSON(var)) if var="" quit
+				set $property(params,var)=PERSON(var)
+			}
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+			// rowid for patient
+			if $piece(return,"^")=1 set intRegMrn=params.ID
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAPerson.Edit",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PERSON(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+.
+	// temporary address
+TEMPADDRESS
+	kill params,ErrorLog,msg
+	kill EXISTADD,TADD
+	
+	if $data(TEMPADDRESS) {
+		// remove invalid fields
+		set atype="" for  {
+			set atype=$order(TEMPADDRESS(atype)) if atype="" quit
+			set j="" for  {
+				set j=$order(TEMPADDRESS(atype,j)) if j="" quit
+				set var="" for  {
+					set var=$order(TEMPADDRESS(j,var)) if var="" quit
+					kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PATempAddress.Edit||"_var)
+					if property="" {
+						// check hidden fields
+						kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PATempAddress.Edit||"_var)
+						if property="" kill TEMPADDRESS(j,var)
+					}
+				}
+			}
+		}
+		
+		kill property
+		set addcnt=""
+		// extract existing temporary addresses
+		if $order(^PAPER(intRegMrn,"TADDR",0))'="" {
+			// extract existing temporary addresses
+			kill list set list=##class(TC.api.PATempAddress.List).%New()
+			set params=##class(TC.api.PATempAddress.List.Params).%New()
+			if $data(params) {
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set params.PARREF=intRegMrn
+				set return=list.Execute(token,params)
+				set jcnt=""
+				while return=1 {
+					set return=list.Next() if return'=1 quit
+					// ignore already end-dated addresses and those with no address type
+					if $get(list.Data("ADDRDATETO"))="",$get(list.Data("CTADRDESC"))'="" {
+						// get address type code
+						set atype=$get(list.Data("CTADRDESC"))
+						set atype=##class(web.CTAddrType).GetIdFromCodeOrDescription(atype)
+						set detail=##class(web.CTAddrType).GetCodeDescriptionFromId(atype)
+						set atype=$list(detail,3)
+						if atype'="" {
+							if $increment(addcnt) merge EXISTADD(addcnt)=list.Data
+							set EXISTADD(addcnt,"CTADRDESC")=atype
+						}
+					}
+				}
+			}
+		}
+		
+		if $data(EXISTADD) {
+			set addcnt="" for  {
+				set addcnt=$order(EXISTADD(addcnt)) if addcnt="" quit
+				set atype=$get(EXISTADD(addcnt,"CTADRDESC"))
+				// process if address type does not match previous permanent address type
+				if atype'=$get(RULES("6-CODE")) {
+					// check for match amongst received addresses
+					if $data(TEMPADDRESS(atype)) {
+						set jcnt="" for  {
+							set jcnt=$order(TEMPADDRESS(atype,jcnt)) if jcnt="" quit
+							// check for address match on all fields
+							set match=""
+							for var="ADDRStreet","ADDRStreet2","CTCITDesc","CTZIPCode","PROVDesc","CTCOUDesc","ADDRPhone","ADDRForeignZip","ADDRForeignCity" {
+								set varUpper=$zconvert(var,"U")
+								if varUpper="PROVDESC" set var="PROVDescComparison"
+								if varUpper="CTCOUDESC" set var="CTCOUDescComparison"
+								set val1=$get(TEMPADDRESS(atype,jcnt,var)),val2=$get(EXISTADD(addcnt,varUpper))
+								if $zconvert(val1,"U")=$zconvert(val2,"U") set match=match+1
+							}
+							// remove existing addresses from received list if exact match
+							if match=9 kill TEMPADDRESS(atype,jcnt)
+							// process existing address if not in received list
+							if match'=9 {
+								kill TADD
+								set TADD("ID")=$get(EXISTADD(addcnt,"ADDRROWID"))
+								set intTempAdd=$get(TADD("ID"))
+								// end-date temporary address
+								if $get(RULES(9))="E" {
+									// change overseas address to previous permanent address
+									if type=$get(RULES(8)),$get(RULES(7))="Y" set TADD("CTADRDesc")=RULES("6-CODE")
+									// update temporary address
+									set TADD("ADDRDateTo")=$get(EVNupdate("DATE")),TADD("ADDRUpdateDate")=$get(EVNupdate("DATE")),TADD("ADDRUpdateTime")=$get(EVNupdate("TIME"))
+									set TADD("SSUSRName")=$get(EVNupdate("USER")),TADD("HOSPDesc")=$get(EVNupdate("HOSP"))
+									
+									kill tempadd set tempadd=##class(TC.api.PATempAddress.Edit).%New()
+									// request api token
+									set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+									set rtn=tempadd.Open(token,intTempAdd)
+									if $piece(rtn,"^")=1 {
+										set var="" for  {
+											set var=$order(TADD(var)) if var="" quit
+											set $property(tempadd,var)=TADD(var)
+										}
+										if $data(tempadd) {
+											set tempadd.TOVERRIDE=1
+											// request api token
+											set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+											set rtn=tempadd.Save(token)
+										}
+									}
+								}
+								// delete temporary addresses (exclude previous permanent)
+								if $get(RULES(9))="D",$get(TADD("CTADRDesc"))'=$get(RULES("6-CODE")) {
+									&SQL(DELETE FROM PA_TempAddress WHERE ADDR_RowId = :intTempAdd)
+								}
+							}
+							kill TADD
+						}
+					}
+				}
+			}
+		}
+.
+		// add remaining temporary addresses
+		if $data(TEMPADDRESS) {
+			// remove empty fields and check for active nulls
+			set atype="" for  {
+				set atype=$order(TEMPADDRESS(atype)) if atype="" quit
+				set j="" for  {
+					set j=$order(TEMPADDRESS(atype,j)) if j="" quit
+					// not an API field so remove as comparison is done
+					kill TEMPADDRESS(atype,j,"PROVDescComparison"),TEMPADDRESS(atype,j,"CTCOUDescComparison")
+					set var="" for  {
+						set var=$order(TEMPADDRESS(atype,j,var)) if var="" quit
+						if TEMPADDRESS(atype,j,var)="" kill TEMPADDRESS(atype,j,var)
+						else  if TEMPADDRESS(atype,j,var)=""""!(TEMPADDRESS(atype,j,var)="""""") set TEMPADDRESS(atype,j,var)=""
+					}
+					set (success,return)=""
+					for  {
+						//  successful update
+						if success=1 quit
+						// unsuccessful update
+						if reject'="" quit
+						// insert new temporary address
+						kill params set params=##class(TC.api.PATempAddress.Edit).%New()
+						set params.ADDRParRef=intRegMrn
+						set var="" for  {
+							set var=$order(TEMPADDRESS(atype,j,var)) if var="" quit
+							set $property(params,var)=TEMPADDRESS(atype,j,var)
+						}
+						set jHL7=j
+						if $data(params) {
+							set params.TOVERRIDE=1
+							// request api token
+							set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+							set return=params.Save(token)
+						}
+						// successful update
+						if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+						// unsuccessful update
+						if 'success {
+							do apiReject^HL7Reject(.APIerror,"TC.api.PATempAddress.Edit",$piece(return,"^",2))
+							// remove fields with invalid values
+							set var="" for  {
+								set var=$order(APIerror(var)) if var="" quit
+								kill TEMPADDRESS(atype,jHL7,var)
+							}
+						}
+						kill APIerror
+						set j=jHL7 kill params
+					}
+				}
+			}
+		}
+	}
+	
+	kill params,ErrorLog,msg,EXISTADD,TADD
+	quit
+	
+	// unmerge patient
+UNMERGE
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(MERGE(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAPerson.UnMerge||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAPerson.UnMerge||"_var)
+			if property="" kill MERGE(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(MERGE(var)) if var="" quit
+		if MERGE(var)="" kill MERGE(var)
+		else  if MERGE(var)=""""!(MERGE(var)="""""") set MERGE(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// unmerge patients
+		kill params set params=##class(TC.api.PAPerson.UnMerge).%New()
+		set var="" for  {
+			set var=$order(MERGE(var)) if var="" quit
+			set $property(params,var)=MERGE(var)
+		}
+		if $data(params) {
+			set params.TOVERRIDE=1
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Save(token)
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAPerson.UnMerge",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill MERGE(var)
+			}
+			// set success to 1 to prevent second unmerge attempt
+			if reject="" set success=1
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+
+
+

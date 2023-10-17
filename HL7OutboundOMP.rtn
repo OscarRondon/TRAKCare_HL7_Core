@@ -1,0 +1,63 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutboundOMP^MAC^^^0
+HL7OutboundOMP // ML 05/09/2006 ; HL7 Interface - Outbound OMP message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutboundOMP.rtn#1 $
+	quit
+check(table,rowid,trigger) new (table,rowid,trigger,%d,%e,%old,%before,%after,insert,ScreenForm,LogonUser) set (type,ok,ordtype,msgtype)="" kill old,curr
+	set table=$get(table),rowid=$get(rowid),trigger=$get(trigger),insert=$get(insert),ScreenForm=$get(ScreenForm),LogonUser=$get(LogonUser)
+	set intOrdNum=$select(rowid'="":rowid,1:$get(%d(1)))
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2),PrescriptionNum=""
+	&SQL(SELECT OEORI_PrescNo INTO :PrescriptionNum FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if PrescriptionNum="" quit
+	set sendon=$$sendon^HL7Outbound(intOrdNum)
+	// only generate on call from OEHL7Messages UDF
+	if sendon="OE",trigger'="",insert=1 quit
+	// check for packed prescription
+	set packed=""
+	set ord3="0" for  set ord3=$order(^OEORD(ord1,"I",ord2,"X",ord3)) quit:ord3=""  do  quit:packed=1
+	. set ord4="0" for  set ord4=$order(^OEORD(ord1,"I",ord2,"X",ord3,"D",ord4)) quit:ord4=""  set packed=1 quit
+	// check for new and discontinued items
+	if table="OEORDITEM" do
+	. // check for newly accepted and not packed order
+	. if $piece($get(%d(140)),$char(1))="A",$piece($get(%d(140)),$char(1))'=$piece($get(%old(140)),$char(1)),'packed set ok=1,msgtype="RDE_O11" quit
+	. // send only on order entry
+	. if sendon="OE" do  quit
+	. . // extract order status
+	. . &SQL(SELECT OEORI_ItemStat_DR INTO :status FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	. . // only send if new or discontinued
+	. . if insert!($piece($get(^OEC("OSTAT",status)),"^")="D") do
+	. . . // send only if questions answered
+	. . . set ok=$$Question^HL7OutboundORM(ord1,ord2)
+	. . . if ok set msgtype="OMP_O09"
+	if 'ok quit
+	// extract links to send message to
+	kill SendTo if '$$sendto^HL7Outbound("","",intOrdNum) if $order(SendTo(""))="" quit
+	set link=SendTo(1)
+	// build order
+	do Order(intOrdNum,link,msgtype)
+	quit
+	// build segments and message
+Order(intOrdNum,link,msgtype) new (intOrdNum,link,msgtype,table,LogonUser,LogonHosp,old,curr,insert) set intOrdNum=$get(intOrdNum),link=$get(link),msgtype=$get(msgtype),table=$get(table)
+	set LogonUser=$get(LogonUser),LogonHosp=$get(LogonHosp),insert=$get(insert)
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2),trigger="" kill queue,^TMP("HL7-OUT",$job)
+	// check link status
+	if '$$Init^HL7Create quit
+	// extract required external/internal numbers
+	set (OrdNum,intRegMrn,intAdmNum,ReceivingApp,ReceivingFac)=""
+	set SQLCODE=$$OrdAdmNum^HL7OutExtract8(intOrdNum,.OrdNum,.intAdmNum)
+	set intRegMrn=$$AdmPatNum^HL7OutExtract2(intAdmNum)
+	set RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+	// extract segments required
+	kill SEG if '$$Segment^HL7Create(msgtype)
+	if $order(SEG(""))="" quit
+	set msgtype=$translate(msgtype,"_","^")
+	// build segment information
+	do BuildSegment^HL7Create if fail kill ^TMP("HL7-OUT",$job) quit
+	
+	if $length(queue) do Queue^HL7Queue(link,msgtype,ReceivingApp,ReceivingFac)
+	kill queue,^TMP("HL7-OUT",$job)
+	quit
+
+
+

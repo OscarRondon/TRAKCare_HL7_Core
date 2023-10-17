@@ -1,0 +1,351 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SystemGENERIC^MAC^^^0
+HL7SystemGENERIC // ML 28/9/01 ; HL7 interface - result processing for Generic HL7
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SystemGENERIC.rtn#1 $
+	quit
+.
+	// results in data array
+File(intOrdNum,TextType,TestSegment,ResultType,TestStatus,DelAtomicRes,reject)
+	set intOrdNum=$get(intOrdNum),TextType=$get(TextType),TestSegment=$get(TestSegment),ResultType=$get(ResultType),TestStatus=$get(TestStatus),DelAtomicRes=$get(DelAtomicRes)
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2),updated="Y"
+	set (NewRes,reject)=""
+	kill TEST
+	
+	// convert test code
+	set $piece(TestSegment,"^",1)=##class(%Collation).AlphaUp($piece(TestSegment,"^",1))
+	
+	// check if non-Labtrak system
+	set intextMrn=RegMrn if $$LabSystem^HL7Common2()="Y" set intextMrn=intRegMrn
+	
+	// process results
+	if (ResultType="AT"!(ResultType="AI")),SubCatType="LAB" do
+	. do Atomic
+	. if reject'="" quit
+	. // find medtrak category for the item
+	. set MedCat=$$Category^HL7Common3(OrderedItem)
+	. // insert/update atomic transaction queue
+	. do AtomicTrans^HL7ResultAtomic
+.
+	if reject'="" quit
+	
+	if ResultType="IM"!(ResultType="AI") do Image
+	
+	// file test comments against order item
+	if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR-NTE")) do OrderComments^HL7Common11(intOrdNum,cnt1,cnt2,cnt3)
+	
+	// mark order as read/clear date, time, user read detail
+	if updated="Y" do OrderUpdate^HL7Common3(intOrdNum,$select(HL7("MARKREAD")="Y":"RD",1:"UR"),$select('NewRes:HL7("USER"),1:""))
+	
+	// update status of order to 'executed'
+	do ChangeStatus^COEOrdItem(intOrdNum,"E",HL7("USER"))
+	
+	// 'ok' to continue
+	set SQLCODE=0
+	quit
+	
+	// process 'atomic' lab results
+Atomic
+	// extract patient sex
+	set sex=$piece($get(^PAPER(intRegMrn,"ALL")),"^",7)
+	if sex'="" set sex=$piece($get(^CT("SEX",sex)),"^")
+	if sex="" set sex="U"
+	
+	// update/insert test set detail
+	set ts=$$TextFormatCode^HL7Common12($zname,$piece(TestSegment,"^")),tsdesc=$$TextFormatCode^HL7Common12($zname,$piece(TestSegment,"^",2))
+	set TEST(ts)=tsdesc
+	kill TS set check="",SQLCODE=$$TestSet^HL7Common4(ts,"S") if SQLCODE set check=1
+	if tsdesc'=$get(TS(3)) set check=1
+	kill TS set TS(2)=ts,TS(3)=tsdesc
+	if check,$$TestSet^HL7Common4(ts,$select(SQLCODE'=0:"I",1:"U"))
+	kill TS
+	
+	// extract lab episode test rowid
+	set LabTestRowId=$$LabTestRowId^HL7Common2(intOrdNum)
+	if LabTestRowId'="" set seq=$piece(LabTestRowId,"||",3)
+	if LabTestRowId="" set seq=$$TestSequence^HL7ResultAtomic(intOrdNum,OrdNum,ts)
+	
+	// extract current results
+	kill oldResults merge oldResults(OrdNum,1,ts,seq)=^TEPI(OrdNum,1,ts,seq)
+	
+	// extract test status
+	set status=$$ResultStatus^HL7Common8($zname,TestStatus)
+	if status="" set status=TestStatus
+	set $piece(TEST(ts),"\",2)=status
+	
+	// extract request/collection/received date and time
+	do TestDateTime^HL7Common4
+	
+	// extract processing rules
+	kill RULES if $$Rules^HL7Common7(link)
+	
+	// add/update specimen on order
+	set specimen=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",15),"^")
+	if $piece(specimen,"&")'="" do
+	. set sitecode=$piece(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",15),"^",4)
+	. do OrderSpec^HL7Common9(intOrdNum,$piece(specimen,"&"),$piece(sitecode,"&"),$get(date("COL")),$get(time("COL")))
+	
+	// test code sequence
+	kill TestCodeSequence set tcseq=""
+	set prevtc=""
+	
+	// subset of previously sent result (sensitivities)
+	set detail=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",26))
+	if $piece(detail,"^",2)'="" set prevtc=$piece($piece(detail,"^"),"&")_"_"_$piece(detail,"^",2)
+	if $translate(prevtc,"_")'="" do
+	. // extract current parent result
+	. if $data(^TEPI(OrdNum,1,ts,seq,"DATA",prevtc)) set TEST(ts,"TC",prevtc,"RES",1)=$get(^TEPI(OrdNum,1,ts,seq,"DATA",prevtc)),TestCodeSequence(ts,"TC",prevtc)=$piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",prevtc)),"\",9),TestCodeSequence(ts,"TC-ANT",prevtc)=""
+	. // extract antibiotic sensitivities
+	. set cnt4=0 for  set cnt4=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4)) quit:cnt4=""  if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX")) do
+	. . set format=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",2),"^")
+	. . set antibiotic=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",3))
+	. . set (resultMIC,unitsMIC,senscode,sensdesc)=""
+	. . if format="SN" do
+	. . . set resultMIC=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,1))
+	. . . kill val
+	. . . for val=1:1:4 set val(val)=$select($translate($piece(resultMIC,"^",val)," ")="":"",1:$piece(resultMIC,"^",val))
+	. . . if val(1)="=" set val(1)=""
+	. . . set resultMIC=val(1)_val(2)_val(3)_val(4)
+	. . . kill val
+	. . . set unitsMIC=$$TextConversion^HL7Common12($translate(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",6),"^",$char(16)),"I")
+	. . . set unitsMIC=$$TextFormatCode^HL7Common12($zname,unitsMIC)
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",8)),senscode=$piece(detail,"^"),sensdesc=$piece(detail,"^",2)
+	. . if format'="SN" do
+	. . . set sensdesc=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,1)),senscode=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",8))
+	. . // update/insert antibiotic detail
+	. . kill ANTI set check="",SQLCODE=$$Antibiotic^HL7Common4($piece(antibiotic,"^"),"S")
+	. . if $piece(antibiotic,"^",2)'=$get(ANTI(3)) do
+	. . . set sequence=$get(ANTI(4))
+	. . . kill ANTI set ANTI(2)=$piece(antibiotic,"^"),ANTI(3)=$piece(antibiotic,"^",2),ANTI(4)=sequence,ANTI(6)="Y"
+	. . . if $$Antibiotic^HL7Common4(ANTI(2),$select(SQLCODE'=0:"I",1:"U"))
+	. . kill ANTI
+	. . // update/insert sensitivity detail
+	. . kill SENS set check="",SQLCODE=$$Sensitivity^HL7Common4(senscode,"S")
+	. . if sensdesc'=$get(SENS(3)) do
+	. . . kill SENS set SENS(2)=senscode,SENS(3)=sensdesc
+	. . . if $$Sensitivity^HL7Common4(senscode,$select(SQLCODE'=0:"I",1:"U"))
+	. . kill SENS
+	. . set antibiotic=$piece(antibiotic,"^")
+	. . set $piece(TEST(ts,"TC",prevtc,"ANT",antibiotic),"\")=sensdesc
+	. . set $piece(TEST(ts,"TC",prevtc,"ANT",antibiotic),"\",3)=resultMIC
+	. . set $piece(TEST(ts,"TC",prevtc,"ANT",antibiotic),"\",4)=unitsMIC
+	
+	// new result
+	if $translate(prevtc,"_")="" do  if reject'="" quit
+	. set cnt4=0 for  set cnt4=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4)) quit:cnt4=""  if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX")) do  if reject'="" quit
+	. . set format=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",2),"^")
+	. . // ignore footer results
+	. . if format="FT" quit
+	. . // update/insert test item detail
+	. . set tc=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",3),tcsubid=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",4)
+	. . set tcdesc=$$TextFormatCode^HL7Common12($zname,$piece(tc,"^",2)),tc=$$TextFormatCode^HL7Common12($zname,$piece(tc,"^"))
+	. . set units=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",6)
+	. . // run conversion to escape out LIMS specific HL7 \..\ sequences
+	. . set units=$$TextFormatCode^HL7Common12($zname,units)
+	. . // run conversion to escape out standard HL7 \..\ sequences
+	. . set units=$$TextConversion^HL7Common12(units,"I")
+	. . set tcUnits=tc_$select(units'="":"-"_$translate(units,"^"),1:"")
+	. . set units=$translate(units,"^",$char(16))
+	
+	. . // check if test item exists and update/insert as required. If units do not match create new test item
+	. . kill TC
+	. . set tc=$$TestItemExist^HL7Common4(tc,tcdesc,tcUnits,units,.reject)
+	. . kill TC
+	. . if reject'="" do
+	. . . do Reject^HL7Reject(reject,"W") set (reject,SQLCODE)="" kill rejected
+	
+	. . if '$data(^TTAB("TC",tc,1,ts)) do TestItemTestSet^HL7Common4(tc,ts)
+	. . if tcsubid'="" set tc=tc_"_"_tcsubid
+	. . set TEST(ts,"TC",tc)=tcdesc,$piece(TEST(ts,"TC",tc),"\",2)=units
+	. . set range=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",7),$piece(TEST(ts,"TC",tc),"\",3)=range
+	. . set TestCodeSequence(ts,"TC",tc)=$increment(tcseq)
+	. . // extract flags
+	. . set $piece(TEST(ts,"TC",tc),"\",4)=$select($piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",8)),"^")="""""":"",1:$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",8)),"^"))
+	. . // extract status
+	. . set $piece(TEST(ts,"TC",tc),"\",5)=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",11))
+	. . // extract data type
+	. . set $piece(TEST(ts,"TC",tc),"\",6)=$select(format="CWE":"CE",1:format)
+	. . // extract results - including multi-line
+	. . if format'="TX" do
+	. . . if ((format="ST")&($get(RULES(4))="Y")) quit
+	. . . set i=0 for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i)) quit:i=""  do
+	. . . . set result=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i)
+	. . . . if format="NM",$extract(result)="." set result="0"_result
+	. . . . // check for structured numeric results
+	. . . . if format="SN" do
+	. . . . . // expected formats : '>^100', '=^100', '=<^100', '^100^-^200', '^1^:^228', '^2^+'
+	. . . . . kill val
+	. . . . . for val=1:1:4 set val(val)=$select($translate($piece(result,"^",val)," ")="":"",1:$piece(result,"^",val))
+	. . . . . if val(1)="=" set val(1)=""
+	. . . . . set result=val(1)_val(2)_val(3)_val(4)
+	. . . . . kill val
+	. . . . set TEST(ts,"TC",tc,"RES",i)=result
+	. . // text based test items are test set comments
+	. . if (format="TX")!((format="ST")&($get(RULES(4))="Y")) do
+	. . . set i=0 for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i)) quit:i=""  do
+	. . . . set x=$order(TEST(ts,"TC",tc,"COM",""),-1)+1
+	. . . . set TEST(ts,"TC",tc,"COM",x)=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i)
+	. . set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX-NTE",3,i)) quit:i=""  do
+	. . . set x=$order(TEST(ts,"TC",tc,"COM",""),-1)+1,TEST(ts,"TC",tc,"COM",x)=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX-NTE",3,i)
+	
+	. . if ('$data(TEST(ts,"TC",tc,"RES")))&&('$data(TEST(ts,"TC",tc,"COM"))) do  quit
+	. . . set reject="Unable to file results for order "_OrdNum_", test set "_ts_". Observation value missing for test item "_tc_$select($piece($get(TEST(ts,"TC",tc)),"\")'="":" ("_$piece($get(TEST(ts,"TC",tc)),"\")_")",1:"")_"."
+	. . . do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBX^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",1))_"^5",207)
+	
+	. . // extract item date/time
+	. . set datetime=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",14),"^"),(itemdate,itemtime)=""
+	. . set itemdate=$extract(datetime,1,8),itemdate=$select(itemdate?8N:$$DateConv^HL7Common2(.reject,"EI",itemdate),1:"")
+	. . set itemtime=$extract(datetime,9,12),itemtime=$select(itemtime?4N:$$TimeConv^HL7Common2("EI",$extract(itemtime,1,2)_":"_$extract(itemtime,3,4)),1:"")
+	. . set $piece(TEST(ts,"TC",tc),"\",7)=itemdate,$piece(TEST(ts,"TC",tc),"\",8)=itemtime
+	. . // extract 'performed at lab'
+	. . kill PerformLab
+	. . set PerformLab(0)=$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",23)),"^")
+	. . for jj=1:1:6,9 set PerformLab(jj)=$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",24)),"^",jj)
+	. . set jj="" for  set jj=$order(PerformLab(jj)) quit:jj=""  do
+	. . . // include county after suburb
+	. . . if jj=3,$translate($get(PerformLab(9))," ")'="" do
+	. . . . set PerformLab(jj)=$get(PerformLab(jj))_$select($length($get(PerformLab(jj))):", ",1:"")_$get(PerformLab(9))
+	. . . . kill PerformLab(9)
+	. . . if $translate($get(PerformLab(jj))," ")'="" set PerformLab=$get(PerformLab)_$select($length($get(PerformLab)):", ",1:"")_$get(PerformLab(jj))
+	. . set TEST(ts,"TC",tc,"PERFORMED-AT-LAB")=$get(PerformLab)
+	. . kill PerformLab
+	
+	// convert formatting codes
+	set tc="" for  set tc=$order(TEST(ts,"TC",tc)) quit:tc=""  do
+	. set i="" for  set i=$order(TEST(ts,"TC",tc,"RES",i)) quit:i=""  do
+	. . set TEST(ts,"TC",tc,"RES",i)=$$TextFormatCode^HL7Common12($zname,TEST(ts,"TC",tc,"RES",i))
+	. set i="" for  set i=$order(TEST(ts,"TC",tc,"COM",i)) quit:i=""  do
+	. . set TEST(ts,"TC",tc,"COM",i)=$$TextFormatCode^HL7Common12($zname,TEST(ts,"TC",tc,"COM",i))
+	
+	// file atomic result
+	do FileAtomic^HL7ResultAtomic($zname)
+	
+	kill oldResults
+	quit
+	
+	// process 'image' results
+Image
+	if SubCatType="LAB" do
+	. // add/update specimen on order
+	. set specimen=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",15),"^") if $piece(specimen,"&")="" quit
+	. do OrderSpec^HL7Common9(intOrdNum,$piece(specimen,"&"),$get(date("COL")),$get(time("COL")))
+	
+	// extract authorised date and time
+	set datetime=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",22),"^")
+	set authdate=$extract(datetime,1,8),authdate=$select(authdate?8N:$$DateConv^HL7Common2(.reject,"EI",authdate),1:"")
+	set authtime=$extract(datetime,9,12),authtime=$select(authtime?4N:$$TimeConv^HL7Common2("EI",$extract(authtime,1,2)_":"_$extract(authtime,3,4)),1:0)
+	
+	kill Result
+	// find sections to post into
+	set TextSection=$$TextSection^HL7Common3(TextType)
+	set Result(TextSection,$increment(Result(TextSection)))=""
+	
+	// set flag
+	set flag=""
+	set FTtext=""
+	
+	// build text result array - check for 'FT' fields first
+	set cnt4="" for  set cnt4=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4)) quit:cnt4=""  do
+	. if '$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX")) quit
+	. // ignore non-footer results
+	. if $piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",2),"^")'="FT" quit
+	. set FTtext=1
+	. for i=1:1 quit:'$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i))  set Result(TextSection,$increment(Result(TextSection)))=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i))
+	. if flag=""!(flag="N") set flag=$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",8)),"^")
+	
+	// build the text array - if no 'FT' fields
+	if 'FTtext do
+	. // check for consecutive 'TX' and identical identifiers and remove identifiers (OBX.3) for display purposes
+	. set cnt4="" for  set cnt4=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4)) quit:cnt4=""  do
+	. . if $get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",2))'="TX" quit
+	. . // ignore no result lines as they are ignored when compiling result
+	. . if '$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,1))!($get(^TMP("HL7",$job,cnt1,cnt2,cnt4,"OBX",5,1))="R") quit
+	. . set identifier=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",3)),obxsubid=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",4)),nextcnt4=cnt4
+	. . for  set nextcnt4=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,nextcnt4)) quit:nextcnt4=""  quit:$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,nextcnt4,"OBX",2))'="TX"  quit:$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,nextcnt4,"OBX",3))'=identifier  quit:$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,nextcnt4,"OBX",4))'=obxsubid  do
+	. . . // ignore no result lines as they are ignored when compiling result
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,nextcnt4,"OBX",5,1)) quit
+	. . . set $piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,nextcnt4,"OBX",3),"^",2)=""
+	. set cnt4="" for  set cnt4=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4)) quit:cnt4=""  do
+	. . if '$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX")) quit
+	. . set format=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",2)
+	. . set line="",line=$extract($piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",3),"^",2)_"                              ",1,30)
+	. . if flag=""!(flag="N") set flag=$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",8)),"^")
+	. . // numeric
+	. . if format="NM" do
+	. . . set line=line_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,1))_" "_$extract(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",6)_"              ",1,14)
+	. . . if ^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",7)'="" set line=line_" : "_$justify(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",7),4)
+	. . . if $piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",8)),"^")'="" set line=line_" : "_$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",8),"^")
+	. . . set Result(TextSection,$increment(Result(TextSection)))=line
+	. . // coded entry
+	. . if format="CE" set Result(TextSection,$increment(Result(TextSection)))=line_$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,1),"^",2)
+	. . // coded with exception
+	. . if format="CWE" set Result(TextSection,$increment(Result(TextSection)))=line_$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,1),"^",2)
+	. . // structured numeric results
+	. . if format="SN" do
+	. . . set result=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,1))
+	. . . // expected formats : '>^100', '=^100', '=<^100', '^100^-^200', '^1^:^228', '^2^+'
+	. . . kill val
+	. . . for val=1:1:4 set val(val)=$select($translate($piece(result,"^",val)," ")="":"",1:$piece(result,"^",val))
+	. . . if val(1)="=" set val(1)=""
+	. . . set Result(TextSection,$increment(Result(TextSection)))=line_val(1)_val(2)_val(3)_val(4)
+	. . // text or short text
+	. . if format="TX"!(format="ST") do
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,1)) quit
+	. . . set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i)) quit:i=""  do
+	. . . . set Result(TextSection,$increment(Result(TextSection)))=line_^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i)
+	. . . . set line="                              "
+	. . // note based
+	. . set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX-NTE",3,i)) quit:i=""  set Result(TextSection,$increment(Result(TextSection)))=^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX-NTE",3,i)
+	
+	// convert formatting codes
+	set x="" for  set x=$order(Result(TextSection,x)) quit:x=""  do
+	. set Result(TextSection,x)=$$TextFormatCode^HL7Common12($zname,Result(TextSection,x))
+	
+	// result status : F = Final result (status 'V'erified)
+	//                 C = Corrected result (status 'C'orrected)
+	//                 * = All other results (status 'E'ntered)
+	set status=$select(TestStatus="C":"C",TestStatus="F":"V",1:"E")
+	
+	kill PLIST
+	// check if result exists
+	set TextId=$order(^OEORD(ord1,"I",ord2,"TR",0)),exists=1 if TextId'="" set TextId=$get(^OEORD(ord1,"I",ord2,"TR",TextId))
+	if $$SelImageResult^HL7ResultImage(TextId) do
+	. set exists="" for j=2:1:15 set PLIST(j)=""
+	
+	// file results
+	for j=2:1:12 set PLIST(j)=""
+	set PLIST(2)=ord1,PLIST(3)=$order(^OEC("RESST",0,"Code",status,"")),PLIST(5)=TextType,PLIST(6)=+$h,PLIST(7)=$piece($h,",",2)
+	set PLIST(9)=authdate,PLIST(10)=authtime,PLIST(12)=$piece(TestSegment,"^"),PLIST(23)=^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",25)
+	if status="V"!(status="C") set PLIST(11)=HL7("USER"),PLIST(4)=$piece($get(^SSU("SSUSR",HL7("USER"))),"^",14)
+	set PLIST(30)=flag
+	
+	// mark as read/clear date, time and user read fields
+	if HL7("MARKREAD")'="Y" set (PLIST(13),PLIST(14),PLIST(15))="",PLIST(25)=HL7("USER"),PLIST(26)=+$h,PLIST(27)=$piece($h,",",2)
+	if HL7("MARKREAD")="Y" set PLIST(13)=+$h,PLIST(14)=$piece($h,",",2),PLIST(15)=HL7("USER"),(PLIST(25),PLIST(26),PLIST(27))=""
+	
+	// verifying care provider
+	set VerifyingDr=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",32))
+	set drfound="" for i=1:1:$length(VerifyingDr,"~") do  quit:$piece(drfound,$char(1))'=""
+	. set doctor=$piece(VerifyingDr,"^") if doctor="" quit
+	. set drsystem=$piece(VerifyingDr,"^",9) if drsystem="TRAKCARE" set drsystem=""
+	. set drfound=$$Provider^HL7Common5(doctor,drsystem,"","","C","I")
+	set PLIST(34)=$piece(drfound,$char(1))
+	
+	// file text result
+	do FileImage^HL7ResultImage kill PLIST,Result
+	
+	// result date/time executed
+	set (dateExe,timeExe)=""
+	set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",7))
+	if datetime'="" do
+	. set dateExe=$extract(datetime,1,8),timeExe=$extract(datetime,9,12)
+	. if dateExe?8N set dateExe=$$DateConv^HL7Common2(.reject,"EI",dateExe) if dateExe="" quit
+	. if timeExe?4N set timeExe=$$TimeConv^HL7Common2("EI",$extract(timeExe,1,2)_":"_$extract(timeExe,3,4))
+	. if datetime="""""" set (dateExe,timeExe)=""
+	. do OrderUpdate^HL7Common3(intOrdNum,"MF",dateExe_"^"_timeExe,"115^116")
+	
+	set NewRes=exists
+	quit
+
+
+

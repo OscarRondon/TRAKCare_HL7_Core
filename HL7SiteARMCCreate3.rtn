@@ -1,0 +1,375 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteARMCCreate3^MAC^^^0
+HL7SiteARMCCreate3 // ML 05/05/2003 ; HL7 interface : create transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteARMCCreate3.rtn#1 $
+	quit
+	
+CheckORC ;; build DATA array - ORC
+ORC()	set intOrdNum=$get(intOrdNum) kill DATA
+	
+	// discharge summary REF_I12
+	if msgtype="REF^I12" do  quit 0
+	. set DATA("ORC",1)="RE",DATA("ORC",3)=intDSNum_"^DG-1031"
+	. merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	
+	// extract order detail
+	kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+	if SQLCODE quit SQLCODE
+	
+	// check for new null fields and change to ""
+	if $data(old("OEORI")) do NullChange^HL7Common3("OEORI")
+	
+	// extract code table detail
+	do CodeTable^HL7OutExtract8("OE_OrdItem")
+	
+	set location=OrdDetail(6),ordstatus=$piece($get(OrdDetail(10)),"^"),priority=$piece($get(OrdDetail(23)),"^"),quantity=OrdDetail(29),OrdNum=OrdDetail(88)
+	set accession=OrdDetail(148),FillerNum=OrdDetail(163)
+	kill datetime for i="17^18^ST^Y","189^190^ARR^Y","192^193^UPD^Y" do
+	. set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(OrdDetail($piece(i,"^"))),$get(OrdDetail($piece(i,"^",2))),$piece(i,"^",4))
+	
+	// extract doctors
+	kill doctor set drcodes=""
+	for i=14,246 if $get(OrdDetail(i))'="" do
+	. if OrdDetail(i)=""""!(OrdDetail(i)="""""") quit
+	. set drcode=$$Provider^HL7Common5($get(OrdDetail(i)),"","","","C","O")
+	. set OrdDetail(i)=""
+	. for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	. . set drcodetype=$piece(dr,$char(2),7)
+	. . set OrdDetail(i)=OrdDetail(i)_$select($length(OrdDetail(i)):"~",1:"")_$piece(dr,$char(2),1)_"^"_$piece(dr,$char(2),2)_"^"_$piece(dr,$char(2),3)_"^^^^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	for i=14,246 set doctor($select(i=14:"ORD",1:"AUTH"))=OrdDetail(i)
+	
+	set DATA("ORC",1)=$select($get(insert)=1:"NW",ordstatus="H":"HD",ordstatus="D":"CA",1:"SC")
+	set field="" for  set field=$order(OrderNum("ORC",field)) quit:field=""  do
+	. set type=OrderNum("ORC",field) quit:type=""
+	. if type="MO" set DATA("ORC",field)=OrdNum
+	. if type="FI" set DATA("ORC",field)=FillerNum
+	set DATA("ORC",5)=$select(ordstatus="D":"CA",ordstatus="H":"HD",1:ordstatus),DATA("ORC",7)=quantity_%1_%1_%1_$get(datetime("ST"))_%1_%1_priority
+	set (DATA("ORC",9),DATA("ORC",15))=$$Date^HL7,DATA("ORC",12)=$get(doctor("ORD")),DATA("ORC",17)=$piece(location,"^")_%1_$piece(location,"^",2)
+	set DATA("ORC",19)=$get(doctor("AUTH"))
+	
+	kill OrdDetail,doctor,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckOBR ;; build DATA array - OBR
+OBR()	set intOrdNum=$get(intOrdNum) kill DATA
+	
+	// discharge summary REF_I12
+	if msgtype="REF^I12" do  quit 0
+	. // extract discharge summary detail
+	. kill DischSum if $$DischSum^HL7OutExtract14(intDSNum,.DischSum)
+	. set datetime("DISSUM")=""
+	. if $get(DischSum(7))'="" set datetime("DISSUM")=$$Date^HL7(DischSum(7)_","_DischSum(8))
+	. set DATA("OBR",1)="1",DATA("OBR",3)=intDSNum_"^DG-1031",DATA("OBR",4)="CEDA^Emergency Department Attendance^AUSPD",DATA("OBR",22)=datetime("DISSUM")
+	. set DATA("OBR",25)="F"
+	. kill DischSum,datetime
+	. merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	
+	// extract order detail
+	kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+	if SQLCODE quit SQLCODE
+	
+	// check for new null fields and change to ""
+	if $data(old("OEORI")) do NullChange^HL7Common3("OEORI")
+	
+	// extract item ordered detail
+	kill ItemOrdered set SQLCODE=$$ItemOrdered^HL7OutExtract8(OrdDetail(4),.ItemOrdered)
+	if SQLCODE quit SQLCODE
+	// extract external code for item ordered
+	kill ExternalCode do ExternalCodeOut^HL7Common1(intOrdNum,.ExternalCode)
+	
+	if HL7("CHAPPFACOUT")="Y" set ReceivingApp=$get(ExternalCode(13)),ReceivingFac=$get(ExternalCode(14))
+	
+	// extract code table detail
+	for mtable="OE_OrdItem","ARC_ItmMast" do CodeTable^HL7OutExtract8(mtable)
+	
+	set ordstatus=$piece($get(OrdDetail(10)),"^"),priority=$piece($get(OrdDetail(23)),"^"),quantity=OrdDetail(29),OrdNum=OrdDetail(88),accession=OrdDetail(148),FillerNum=OrdDetail(163)
+	kill datetime for i="17^18^ST^Y","189^190^ARR^Y","192^193^UPD^Y" do
+	. set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(OrdDetail($piece(i,"^"))),$get(OrdDetail($piece(i,"^",2))),$piece(i,"^",4))
+	
+	set ordertype=$$SubCatType^HL7Common11(OrdDetail(4))
+	// extract specimen for a lab order
+	set (speccode,collected,site)="" if ordertype="LAB" do
+	. set row=$order(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"SPEC",0)) quit:row=""  do
+	. set intSpecNum=intOrdNum_"||"_row
+	. kill OrdSpecimen set SQLCODE=$$OrdSpecimen^HL7OutExtract8(intSpecNum,.OrdSpecimen)
+	. if SQLCODE quit
+	. set speccode=OrdSpecimen(3),date=OrdSpecimen(6),time=OrdSpecimen(7),collected=$select(date'="":$$Date^HL7(date_","_time),1:"")
+	. set rowx=$order(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"SPEC",row,"SITE",0)) quit:rowx=""
+	. set site=$piece(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"SPEC",row,"SITE",rowx),"^")
+	. // check for daybook specimen site
+	. if OrdDetail(232)'="" set site=$piece($piece(OrdDetail(232),","),"|",2)
+	
+	// extract doctors
+	kill doctor if $$OrdDoctor^HL7OutExtract8(intOrdNum,.doctor)
+	
+	set field="" for  set field=$order(OrderNum("OBR",field)) quit:field=""  do
+	. set type=OrderNum("OBR",field) quit:type=""
+	. if type="MO" set DATA("OBR",field)=OrdNum
+	. if type="FI" set DATA("OBR",field)=FillerNum
+	set DATA("OBR",4)=$get(ItemOrdered(2))_%1_$get(ItemOrdered(3))_%1_"TRAKCARE"
+	if $data(ExternalCode) set DATA("OBR",4)=$get(ExternalCode(6))_%1_$get(ExternalCode(8))_%1_$piece($get(ItemOrdered(74)),"^")_%1_$get(ItemOrdered(2))_%1_$get(ItemOrdered(3))_%1_"TRAKCARE"
+	if ordertype="LAB" set DATA("OBR",7)=collected,DATA("OBR",11)="S",DATA("OBR",15)=speccode_%1_%1_%1_site
+	set DATA("OBR",16)=$piece($get(doctor("ORDER")),"^")_%1_$piece($get(doctor("ORDER")),"^",2),DATA("OBR",17)=$piece($get(doctor("ORDER")),"^",3)_" X"_$piece($get(doctor("ORDER")),"^",4)
+	set DATA("OBR",27)=quantity_%1_%1_%1_$get(datetime("ST"))_%1_%1_priority
+	
+	// set order status
+	if msgtype="ORM^O01" set DATA("OBR",25)=$piece(ordstatus,"^")
+	
+	// extract result details
+	if msgtype="ORU^R01" do
+	. set (datetime("EXE"),datetime("VER"))=""
+	. // atomic results
+	. if table="EPVISITTESTSET" do
+	. . set detail=$get(^TEPI($piece(intResNum,"||"),1,$piece(intResNum,"||",2),$piece(intResNum,"||",3)))
+	. . set date("VER")=$piece(detail,"\",4),time("VER")=$piece(detail,"\",5)*60,status=$piece(detail,"\",31)
+	. . set datetime("VER")=$$Date^HL7($get(date("VER"))_","_$get(time("VER")))
+	. // word results saved as text document
+	. if table="OEORDRESULT" do
+	. . &SQL(SELECT RES_ResStat_DR -> RESST_Code, RES_DateVerified, RES_TimeVerified INTO :status, :date("VER"), :time("VER")
+		FROM OE_OrdResult WHERE Res_RowId = :intResNum)
+	. . set datetime("VER")=$$Date^HL7($get(date("VER"))_","_$get(time("VER")))
+	. . // check for previous editions of report and change status
+	. . set ord1=$piece(intOrdNum,"||",1),ord2=$piece(intOrdNum,"||",2),ord3=$piece(intResNum,"||",3)
+	. . set found="" for  set ord3=$order(^OEORD(ord1,"I",ord2,"RES",ord3),-1) quit:ord3=""  do  quit:found
+	. . . if ^OEORD(ord1,"I",ord2,"RES",ord3)[".txt" set found=1,status="C"
+	. // text report
+	. if table="OETEXTRESULTSECTION" do
+	. . set intTextNum=$piece(intResNum,"||")
+	. . &SQL(SELECT TR_ResStat_DR -> RESST_Code, TR_DateVerified, TR_TimeVerified INTO :status, :date("VER"), :time("VER")
+		FROM OE_TextResult WHERE TR_RowId = :intTextNum)
+	. . set datetime("VER")=$$Date^HL7($get(date("VER"))_","_$get(time("VER")))
+	
+	. set datetime("EXE")=$$Date^HL7($get(OrdDetail(115))_","_$get(OrdDetail(116)))
+	. set DATA("OBR",7)=datetime("EXE"),DATA("OBR",22)=datetime("VER"),DATA("OBR",25)=status,DATA("OBR",27)=""
+	
+	kill OrdDetail,OrdSpecimen,ItemOrdered,ExternalCode,doctor,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckOBX ;; build DATA array - OBX
+OBX()	set intOrdNum=$get(intOrdNum),intResNum=$get(intResNum),textfile=$get(textfile) kill DATA,Repeat,Lines
+	set (count,ResultText,SQLCODE)=""
+	
+	// extract questions
+	if msgtype'="ORU^R01",msgtype'="REF^I12",$piece(msgtype,"^")'="ADT" do
+	. set row="" for  set row=$order(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"QA",row)) quit:row=""  do  if count=1,repeat'="Y" quit
+	. . set intQuesNum=intOrdNum_"||"_row kill comment
+	. . kill Question set SQLCODE=$$Question^HL7OutExtract8(intQuesNum,.Question)
+	. . if SQLCODE quit
+	
+	. . // extract code table detail
+	. . set mtable="OE_OrdQuestion" do CodeTable^HL7OutExtract8(mtable)
+	
+	. . set code=$piece(Question(3),"^"),desc=$piece(Question(3),"^",2),type=$piece(Question(3),"^",3)
+	. . set intQuestion=Question(3),answer=Question(4) if answer="",type'="CheckBox" quit
+	. . // convert question type to HL7 data type
+	. . set datatype=$select(type="CheckBox":"CE",type="ComboBox":"TX",type="DateTextBox":"DT",type="Number":"NM",type="MultilineText":"TX",type="TextBox":"TX",type="TimeTextBox":"TM",1:"")
+	. . // convert check box
+	. . if type="CheckBox" set answer=$select(answer="on":"T^True^TRAKCARE",1:"F^False^TRAKCARE")
+	. . // convert multiline text
+	. . if type="MultilineText" do
+	. . . set comm=$get(answer),comment="" if $length(comm) do  set answer=comment
+	. . . . for j=1:1:$length(comm) set comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($piece(comm,"|",j),"O"),$char(13,10),HL7("LINEBK"))
+	. . // convert HL7 reserved characters
+	. . if datatype="TX",type'="MultilineText" do
+	. . . set answer=$$TextConversion^HL7Common12(answer,"O")
+	. . set count=count+1
+	. . if count=1 set DATA("OBX",1)=count,DATA("OBX",2)=datatype,DATA("OBX",3)=code_"^"_desc_"^TRAKCARE",DATA("OBX",5)=answer,DATA("OBX",11)="F",DATA("OBX",17)="COM"
+	. . if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)=datatype,Repeat("OBX",count,3)=code_%1_desc_%1_"TRAKCARE",Repeat("OBX",count,5)=answer,Repeat("OBX",count,11)="F",Repeat("OBX",count,17)="COM"
+	// extract additional admission information
+	if $piece(msgtype,"^")="ADT" do
+	. // extract admission detail
+	. kill AdmDetail if $$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail,.AdmDetailx) quit
+	. // extract code table detail
+	. do CodeTable^HL7OutExtract2A("PA_Adm")
+	. set intMRAdm=$get(AdmDetail(152))
+	. // med record admission detail
+	. if intMRAdm'="" do
+	. . kill MRAdm if $$MRAdmDetail^HL7OutExtract4(intMRAdm,.MRAdm) quit
+	. . set mtable="MR_Adm" do CodeTable^HL7OutExtract4(mtable)
+	. kill datetime
+	. if $get(AdmDetailx(98))'="" set datetime("AMBDEST")=$$Date^HL7($get(AdmDetailx(98))_","_$get(AdmDetailx(99)))
+	. set j=""
+	. kill AdmissionOBX
+	. if $get(datetime("AMBDEST")) set AdmissionOBX($increment(j))="TS~AMBDEST^Ambulance at Destination Date/Time^AUSTIN~"_$get(datetime("AMBDEST"))
+	. if $get(MRAdm(88))'="" set AdmissionOBX($increment(j))="ST~AMBCASE^Ambulance Case Number^AUSTIN~"_MRAdm(88)
+	. if $get(MRAdm(99))'="" set AdmissionOBX($increment(j))="CE~VTYPE^Visit Type^AUSTIN~"_MRAdm(99)
+	. if $piece($get(AdmDetail(70)),"^")="L" set AdmissionOBX($increment(j))="ST~LMOFLAG^LMO Flag^AUSTIN~"_$piece(AdmDetail(70),"^")
+	. if $piece($get(AdmDetail(196)),"^")="Y" set AdmissionOBX($increment(j))="ST~ADMVER^Admission Verified^AUSTIN~"_$piece(AdmDetail(196),"^")
+	. set j="" for  set j=$order(AdmissionOBX(j),1,detail) quit:j=""  do
+	. . set datatype=$piece(detail,"~"),codedesc=$piece(detail,"~",2),value=$piece(detail,"~",3)
+	. . set count=count+1
+	. . if count=1 set DATA("OBX",1)=count,DATA("OBX",2)=datatype,DATA("OBX",3)=codedesc,DATA("OBX",5)=value
+	. . if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)=datatype,Repeat("OBX",count,3)=codedesc,Repeat("OBX",count,5)=value
+	. kill AdmissionOBX
+	// extract results
+	if msgtype="ORU^R01" do  if SQLCODE quit SQLCODE
+	
+	. if $translate(intResNum,"||")'="",table="EPVISITTESTSET" do  quit
+	. . // extract atmoic results
+	. . set res1=$piece(intResNum,"||"),res2=$piece(intResNum,"||",2),res3=$piece(intResNum,"||",3)
+	. . set res4="" for  set res4=$order(^TEPI(res1,1,res2,res3,"DATA",res4)) quit:res4=""  do
+	. . . set detail=$get(^TEPI(res1,1,res2,res3,"DATA",res4)),result=$piece(detail,"\"),rangeL=$piece(detail,"\",4),rangeH=$piece(detail,"\",5),flags=$piece(detail,"\",8)
+	. . . set range=rangeL_$select((rangeL'=""&(rangeH'="")):"-",1:"")_rangeH
+	. . . set detail=$get(^TTAB("TC",res4)),code=res4,desc=$piece(detail,"\"),units=$piece(detail,"\",2)
+	. . . // comment
+	. . . if result="",$data(^TEPI(res1,1,res2,res3,"DATA",res4,"REM")) do
+	. . . . set line=0 for  set line=$order(^TEPI(res1,1,res2,res3,"DATA",res4,"REM",line)) quit:line=""  set result=result_$select($length(result):"~",1:"")_$get(^TEPI(res1,1,res2,res3,"DATA",res4,"REM",line))
+	. . . set count=count+1
+	. . . if count=1 set DATA("OBX",1)=count,DATA("OBX",3)=code_"^"_desc_"^TRAKCARE",DATA("OBX",5)=result,DATA("OBX",6)=units,DATA("OBX",7)=range,DATA("OBX",8)=flags
+	. . . if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,3)=code_"^"_desc_"^TRAKCARE",Repeat("OBX",count,5)=result,Repeat("OBX",count,6)=units,Repeat("OBX",count,7)=range,Repeat("OBX",count,8)=flags
+	
+	. if $translate(intResNum,"||")'="",table="OEORDRESULT" do  if SQLCODE quit
+	. . if webdocument'="" do  quit
+	. . . // extract websys document
+	. . . kill HTMLText if $$HTMLDocument^HL7Common13(webdocument,.HTMLText)
+	. . . set line="" for  set line=$order(HTMLText(line)) quit:line=""  set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(HTMLText(line),"O"),$char(13,10),HL7("LINEBK"))
+	. . if textfile'="" do  quit
+	. . . // extract word result from matching text document
+	. . . set directory=""
+	. . . &SQL(SELECT PATH_Path INTO :directory FROM CF_SystemFileDefinition, CF_SystemFilePath WHERE FILE_Type = 'RW' AND FILE_FileExtension = 'TXT' AND PATH_ParRef = FILE_RowId)
+	. . . if directory="" quit
+	. . . // import result from file
+	. . . set SQLCODE="" do Import if SQLCODE quit
+	. . . // compile results into one line
+	. . . set line="" for  set line=$order(Lines(line)) quit:line=""  set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(Lines(line)),$char(13,10),HL7("LINEBK"))
+	. if $translate(intResNum,"||")'="",table="OETEXTRESULTSECTION" do  if SQLCODE quit
+	. . // extract text report
+	. . &SQL(SELECT SEC_Text INTO :Lines FROM OE_TextResultSection WHERE SEC_RowId = :intResNum)
+	. . if SQLCODE quit
+	. . for j=1:1:$listlength(Lines) set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(Lines,j),"O"),$char(13,10),HL7("LINEBK"))
+	. set DATA("OBX",1)=$increment(count),DATA("OBX",2)="FT",DATA("OBX",5)=ResultText
+	
+	// discharge summary
+	if msgtype="REF^I12" do
+	. kill field,datetime
+	
+	. // extract discharge summary detail
+	. kill DischSum if $$DischSum^HL7OutExtract14(intDSNum,.DischSum)
+	
+	. // extract code table detail
+	. do CodeTable^HL7OutExtract14("PA_DischargeSummary")
+	
+	. // extract admission detail
+	. kill AdmDetail if $$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail)
+	
+	. // extract code table detail
+	. do CodeTable^HL7OutExtract2A("PA_Adm")
+	
+	. kill datetime
+	. set datetime("DISSUM")=$$Date^HL7(DischSum(7)_","_DischSum(8))
+	. set datetime("ADM")=$$Date^HL7(AdmDetail(216)_","_AdmDetail(217))
+	
+	. set j=""
+	. set field($increment(j))="Version: "_$get(DischSum(13))
+	. set field(j,"DATETIME")=datetime("DISSUM"),field(j,"USER")=$get(DischSum(9))
+	
+	. set comment=$$Comment($get(DischSum(25))) if comment'="" set field($increment(j))="Treating Clinicians: "_comment
+	. set field(j,"DATETIME")=datetime("DISSUM"),field(j,"USER")=$get(DischSum(9))
+	
+	. set field($increment(j))="Department: "_$piece($get(AdmDetail(5)),"^",2)
+	. set field(j,"DATETIME")=datetime("ADM"),field(j,"USER")=$get(AdmDetail(218))
+	
+	. set field($increment(j))="Admission Date/Time: "_$zdate($get(AdmDetail(7)),4)_" "_$piece($ztime($get(AdmDetail(8))),":",1,2)
+	. set field(j,"DATETIME")=datetime("ADM"),field(j,"USER")=$get(AdmDetail(218))
+	
+	. set field($increment(j))="Admission Source: "_$piece($get(AdmDetail(10)),"^",2)
+	. set field(j,"DATETIME")=datetime("ADM"),field(j,"USER")=$get(AdmDetail(218))
+	
+	. if $get(AdmDetail(22))'="" set field($increment(j))="Discharge Date/Time: "_$zdate($get(AdmDetail(22)),4)_" "_$piece($ztime($get(AdmDetail(23))),":",1,2)
+	. set field(j,"DATETIME")=datetime("ADM"),field(j,"USER")=$get(AdmDetail(218))
+	
+	. set field($increment(j))="Discharge Destination: "_$piece($get(DischSum(21)),"^",2)
+	. set field(j,"DATETIME")=datetime("DISSUM"),field(j,"USER")=$get(DischSum(9))
+	
+	. for jj=10,11,14,15,16,17,18 do
+	. . set desc=$select(jj=10:"Principal Diagnosis",jj=11:"Active Problems",jj=14:"Procedures",jj=15:"Progress Notes",jj=16:"Clinical Opinion",jj=17:"Suggestions",1:"Other Results")
+	. . set comment=$$Comment($get(DischSum(jj))) if comment'="" set field($increment(j))=desc_": "_comment
+	. . set field(j,"DATETIME")=datetime("DISSUM"),field(j,"USER")=$get(DischSum(9))
+	
+	. // extract 'discharged/referred to' providers
+	. set row="0" for  set row=$order(^PA("DISSUM",intDSNum,"REF",row)) quit:row=""  do
+	. . set detail=$get(^PA("DISSUM",intDSNum,"REF",row)) if $translate(detail,"^")="" quit
+	. . set drid=$piece(detail,"^"),clinic=$piece(detail,"^",2) quit:drid=""
+	. . kill RefDoctor if $$RefDoctor^HL7OutExtract10(drid,.RefDoctor) quit
+	. . kill RefClinic if $$RefClinic^HL7OutExtract10(clinic,.RefClinic)
+	. . for jj=3,51 if $get(RefDoctor(jj))'="" set RefDoctor(jj)=$$TextConversion^HL7Common12(RefDoctor(jj),"O")
+	. . set (name,contact,address)=""
+	. . set name=$get(RefDoctor(3)) if $length($get(RefDoctor(51))) set name=$get(RefDoctor(51))_" "_$get(RefDoctor(3))
+	. . for jj=4,12,13 if $get(RefClinic(jj))'="" set RefClinic(jj)=$$TextConversion^HL7Common12(RefClinic(jj),"O")
+	. . set address=$get(RefClinic(4))
+	. . if $get(RefClinic(13))'="" set contact="Email: "_RefClinic(13)
+	. . if contact="",$get(RefClinic(12))'="" set contact="Fax: "_RefClinic(12)
+	. . set field($increment(j))="Referred To: "_name_$select(contact'="":", "_contact,1:"")_$select(address'="":", Address: "_address,1:"")
+	. . set field(j,"DATETIME")=datetime("DISSUM")
+	. . set field(j,"USER")=$get(DischSum(9))
+	
+	. // contact care provider
+	. set drid=$get(DischSum(19)) if drid'="" do
+	. . kill CareProv if $$CareProvider^HL7OutExtract10(drid,.CareProv) quit
+	. . for jj=3,57 if $get(CareProv(jj))'="" set CareProv(jj)=$$TextConversion^HL7Common12(CareProv(jj),"O")
+	. . set name=$get(CareProv(3)),text=$get(CareProv(57))
+	. . set field($increment(j))="Contact Doctor: "_name_$select(text'="":", "_text,1:"")
+	. . set field(j,"DATETIME")=datetime("DISSUM")
+	. . set field(j,"USER")=$get(DischSum(9))
+	
+	. // extract allergies
+	. set seq=0 for  set seq=$order(^PAPER(intRegMrn,"ALG",seq)) quit:seq=""  do  if count,repeat'="Y" quit
+	. . // extract allergy detail
+	. . set intAlgNum=intRegMrn_"||"_seq
+	. . kill Allergy if $$Allergy^HL7OutExtract9(intAlgNum,.Allergy) quit
+	. . // extract code table detail
+	. . do CodeTable^HL7OutExtract9("PA_Allergy")
+	. . for alg=5,8,31,36 if $get(Allergy(alg))'="" set field($increment(j))="Allergy: "_$piece($get(Allergy(alg)),"^",2) quit
+	. . set field(j,"DATETIME")=$select($get(Allergy(26))'="":$$Date^HL7($get(Allergy(26))_","_$get(Allergy(27))),1:datetime("DISSUM")),field(j,"USER")=$get(Allergy(19))
+	
+	. // extract alerts
+	. set seq=0 for  set seq=$order(^PAPER(intRegMrn,"ALM",seq)) quit:seq=""  do  if count,repeat'="Y" quit
+	. . // extract alert detail
+	. . set intAltNum=intRegMrn_"||"_seq
+	. . kill Alert if $$Alert^HL7OutExtract9(intAltNum,.Alert) quit
+	. . // extract code table detail
+	. . do CodeTable^HL7OutExtract9("PA_AlertMsg") if $piece($get(Alert(21)),"^",2)="" quit
+	. . set field($increment(j))="Alert: "_$piece($get(Alert(21)),"^",2)
+	. . set field(j,"DATETIME")=$select($get(Alert(11)):$$Date^HL7($get(Alert(11))_","_$get(Alert(12))),1:datetime("DISSUM")),field(j,"USER")=$get(Alert(13))
+	
+	. set field($increment(j))="Summary Status: "_$get(DischSum(2)),field(j,"DATETIME")=datetime("DISSUM"),field(j,"USER")=$get(DischSum(9))
+	
+	. set j="" for  set j=$order(field(j)) quit:j=""  do
+	. . set upduser="" if $get(field(j,"USER"))'="" do
+	. . . set user=field(j,"USER")
+	. . . &SQL(SELECT SSUSR_Initials, SSUSR_Surname, SSUSR_GivenName, SSUSR_Name, SSUSR_Title INTO :login, :surname, :given, :name, :title FROM SS_User WHERE SSUSR_RowId = :user)
+	. . . for var="login","surname","given","name","title" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. . . set upduser=login_"^"_surname_"^"_given_"^^^"_title
+	. . set count=count+1
+	. . if count=1 set DATA("OBX",1)=count,DATA("OBX",2)="TX",DATA("OBX",3)="CEDA^Emergency Department Attendance^AUSPD",DATA("OBX",5)=field(j),DATA("OBX",11)="F",DATA("OBX",14)=field(j,"DATETIME"),DATA("OBX",16)=upduser
+	. . if count>1,repeat="Y" do
+	. . . set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)="TX",Repeat("OBX",count,3)="CEDA^Emergency Department Attendance^AUSPD",Repeat("OBX",count,5)=field(j),Repeat("OBX",count,11)="F"
+	. . . set Repeat("OBX",count,14)=field(j,"DATETIME"),Repeat("OBX",count,16)=upduser
+	
+	kill OrdSpecimen,Question,Lines,DischSum,AdmDetail,MRAdm,Allergy,Alert,field,datetime,date,time
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+	// build line from list build field
+Comment(comm) new (comm,field,HL7) set comm=$get(comm),comment=""
+	for jj=1:1:$listlength(comm) set comment=comment_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,jj),"O"),$char(13,10),HL7("LINEBK"))
+	quit comment
+	
+	// import text result from file
+Import	set $ztrap="ImportError^"_$zname kill Lines
+	set directory=$select($extract(directory,$length(directory))'=filesep:directory_filesep,1:directory)
+	set file=directory_textfile
+	open file:("RS"::$char(10,13)):2 else  set SQLCODE=100 quit
+	use file for i=1:1 read x:10 set Lines(i)=x
+ImportFinish	close file
+	quit
+	
+	// error log
+ImportError if $zerror'["ENDOFFILE" do BACK^%ETN quit
+	goto ImportFinish
+
+
+

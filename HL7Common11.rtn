@@ -1,0 +1,81 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Common11^MAC^^^0
+HL7Common11	// ML 11/05/2005 ; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common11.rtn#1 $
+	quit
+ 
+	// add/update specimen code table details
+MoveOrder(intOrdNum,moveOrdNum,moveFillerNum) new (HL7,intOrdNum,moveOrdNum,moveFillerNum)
+	set intOrdNum=$get(intOrdNum),moveOrdNum=$get(moveOrdNum),moveFillerNum=$get(moveFillerNum),HL7("USER")=$get(HL7("USER"))
+ 
+	// extract visit test set rowid
+	set VISTSRowId=""
+	&SQL(SELECT OEORI_LabTestSetRow INTO :VISTSRowId FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+ 
+	// setup TEPI to reflect new order number
+	if $translate($get(VISTSRowId),"||")'="" do
+	.set OrdNum=$piece($get(VISTSRowId),"||"),ts=$piece($get(VISTSRowId),"||",2),seq=$piece($get(VISTSRowId),"||",3)
+	.set ^TEPI(moveOrdNum)=$get(^TEPI(OrdNum))
+	.merge ^TEPI(moveOrdNum,1,ts,seq)=^TEPI(OrdNum,1,ts,seq)
+ 
+	. // update debtor number with new order number
+	.set debtor=$piece(^TEPI(moveOrdNum),"\",18)
+	.set date="" for  set date=$order(^TDEB(debtor,date)) quit:date=""  do
+	..if $data(^TDEB(debtor,date,0,OrdNum)) do
+	...kill ^TDEB(debtor,date,0,OrdNum)
+	...set ^TDEB(debtor,date,0,moveOrdNum)=0
+ 
+	. // extract result type
+	.set ResultType=$$ResultType^HL7Common1(intOrdNum) if ResultType="AT"!(ResultType="AI") do
+	.. // update atomic transaction queue
+	..if '$data(^TEPIi("MEDTRAKi",OrdNum,ts,seq)) quit
+	..set transDetail=$get(^TEPIi("MEDTRAKi",OrdNum,ts,seq))
+	..set intRegMrn=$piece(transDetail,"\"),colldate=$piece(transDetail,"\",2),colltime=$piece(transDetail,"\",3)
+	..set intAdmNum=$piece(transDetail,"\",4),MedCat=$piece(transDetail,"\",6)
+	.. // remove number from old patient
+	..kill ^TEPIi("MEDTRAK",intRegMrn,colldate,colltime,intAdmNum,intOrdNum,MedCat,ts,seq,OrdNum)
+	..kill ^TEPIi("MEDTRAKi",OrdNum,ts,seq)
+	.. // insert cancelled number against old patient
+	..set ^TEPIi("MEDTRAKi",moveOrdNum,ts,seq)=intRegMrn_"\"_colldate_"\"_colltime_"\"_intAdmNum_"\"_intOrdNum_"\"_MedCat
+	..set ^TEPIi("MEDTRAK",intRegMrn,colldate,colltime,intAdmNum,intOrdNum,MedCat,ts,seq,moveOrdNum)=2
+ 
+	.set $piece(VISTSRowId,"||")=moveOrdNum
+ 
+	// update order item to reflect changes
+	set OrdDetail(88)=moveOrdNum,OrdDetail(136)=VISTSRowId,OrdDetail(163)=moveFillerNum
+	do OrderUpdate^HL7Common3(intOrdNum,"","","",1)
+ 
+	quit
+ 
+	// add test comments to order
+OrderComments(intOrdNum,cnt1,cnt2,cnt3) new (intOrdNum,cnt1,cnt2,cnt3) set intOrdNum=$get(intOrdNum),cnt1=$get(cnt1),cnt2=$get(cnt2),cnt3=$get(cnt3)
+	set comments=""
+ 
+	set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR-NTE",3,i)) quit:i=""  set comments=$get(comments)_$listbuild(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR-NTE",3,i))
+	if $length(comments) do
+	. &SQL(UPDATE OE_OrdItem SET OEORI_TestSetComments = :comments WHERE OEORI_RowID = :intOrdNum)
+ 
+	quit
+ 
+	// subcategory type
+SubCatType(OrderedItem) new (OrderedItem) set OrderedItem=$get(OrderedItem),type=""
+	set subcat=$piece($get(^ARCIM(+OrderedItem,1,1)),"^",10) if subcat="" quit "SUBCAT"
+	set ordtype=$piece($get(^ARC("IC",+subcat)),"^",7),exectype=$piece($get(^ARC("IC",+subcat)),"^",9)
+	if ordtype="N",exectype="" quit "EXECTYPE"
+	if ordtype="N" set exectype=$piece($get(^OEC("EXEC",exectype)),"^")
+	// pharmacy subcategory
+	if ordtype="I"!(ordtype="R") set type="PHA"
+	// lab subcategory
+	if ordtype="L" set type="LAB"
+	if ordtype="N",exectype="LAB" set type="LAB"
+	// radiology subcategory
+	if ordtype="N",exectype="F" set type="RAD"
+	quit type
+	// ordered item
+OrderedItem(intOrdNum) new (intOrdNum) set intOrdNum=$get(intOrdNum),OrderedItem=""
+	&SQL(SELECT OEORI_ItmMast_DR INTO :OrderedItem FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	quit OrderedItem
+
+
+

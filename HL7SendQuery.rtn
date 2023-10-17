@@ -1,0 +1,175 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SendQuery^MAC^^^0
+HL7SendQuery // ML 27/12/2002 ; HL7 Interface - send query messages
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SendQuery.rtn#1 $
+	quit
+ 
+	// for each message to be sent
+Send(headdetail) set headdetail=$get(headdetail),(failack,failtimeout,action)=""
+ 
+	// check for created segments
+	if '$data(queue) quit
+ 
+	lock +^SSHL7(link,"LOCK"):2 if $test do  quit
+	.do trace^HL7Trace("*****",$h,"Interface is not running","","","INF")
+	.lock -^SSHL7(link,"LOCK")
+	. // setup screen notification
+	.set ^TMP("HL7-ERR",$job,"MSG")="1^Interface "_link_" is not running.  Unable to query external source",^TMP("HL7-ERR-LINK",link,$job)=""
+	do trace^HL7Trace("*****",$h,"Interface is running","","","INF")
+ 
+	// find next available port for use
+	set newport="" for newport=HL7("PORT-LOW"):1:HL7("PORT-HIGH") lock +^SSHL7(link,"LOCK-PORT",newport):1 if $test quit
+	if '$test set ^TMP("HL7-ERR",$job,"MSG")="1^All available connections to external system in use, unable to open connection to external system.",^TMP("HL7-ERR-LINK",link,$job)="" quit
+ 
+	set port="|TCP|"_newport
+ 
+	// store web port for re-use to avoid problems which may arise due to HL7 port not closing correctly - no longer required as process jobbed
+	//s webport=$io
+ 
+	do trace^HL7Trace("*****",$h,"Starting new thread as job "_$job_".  Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP")),"","","INF")
+ 
+	// open device - if ip is not "", we are the client
+	if $$CheckStop^HL7(link) do trace^HL7Trace("*****",$h,"Flag Stopped","","","INF") do Shutdown^HL7(1) quit
+	do trace^HL7Trace("*****",$h,"Attempting to open Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP")),"","","INF")
+ 
+	open port:(INT("IP"):INT("DEV"):$select(INT("IP")="":"A",1:"")_"S":$char(13)):TIMEOUT("PORT-CON") else  do  quit
+	.set ^TMP("HL7-ERR",$job,"MSG")="1^Unable to open Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP")),^TMP("HL7-ERR-LINK",link,$job)=""
+	.do trace^HL7Trace("*****",$h,"Unable to open Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP")),"","","INF")
+ 
+	do trace^HL7Trace("*****",$h,"Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP"))_" opened","","","INF")
+ 
+	use port
+ 
+ 	// check for character set
+	if INT("CS")'="" do SetIO^%NLS(INT("CS")) do trace^HL7Trace("*****",$h,"Using character set "_INT("CS"),"","","INF")
+ 
+	set readcount=""
+ 
+	set (failack,failtimeout,action,controlId)=""
+	kill trace,tracerowid,tracecopy,tracequeue
+ 
+	// build and send 'msh' record
+	set headdetail=$get(headdetail)
+	set record=$$SendHead^HL7Send(headdetail)
+	write ESC("VT"),record,ESC("CR") set trace=1,trace(1)=record
+ 
+	do
+	.set x1="" for  set x1=$order(queue(x1)) quit:x1=""  do  if action'="" quit
+	..set record=$get(queue(x1)) write record,ESC("CR") set trace=$get(trace)+1,trace(trace)=record
+	..if $piece(record,"|")="QRD" do
+	... // setup cross check between interface and query id
+	...set uniqueid=$piece(record,"|",5),^TMP("HL7-QUERY",uniqueid,"LINK")=link
+	.write ESC("FS"),ESC("CR"),!
+	.merge tracequeue=trace
+	.do trace^HL7Trace("M-->E",$h,"","","Y")
+	.set actionmessage="" do Response(.actionmessage)
+ 
+	. // check response action
+	.set actiontype=""
+	.if pass="Fail-1" do
+	..set failtimeout=failtimeout+1,failack=""
+	..set actiontype=$select(failtimeout=MaxNum("noresp"):ActionMax("noresp"),1:Action("noresp"))
+	..set actionmessage=$select(failtimeout=MaxNum("noresp"):MaxNum("noresp")_" consecutive timeouts have occurred.",1:actionmessage)
+	.if actiontype'="" do  quit
+	..set action=$$Action^HL7(actiontype,actionmessage)
+	..if actiontype="SH"!(actiontype="SE")!(actiontype="RT") quit
+	..if actiontype="RM"!(actiontype="SK") set (failack,failtimeout)=""
+	..if action'="" xecute action set (action,actiontype)=""
+ 
+	. // count number of messages sent
+	.if $increment(^SSHL7(link,"COUNT"))
+ 
+	// close connection
+	close port do trace^HL7Trace("*****",$h,"Closing thread started as job "_$job_".  Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address "_INT("IP")),"","","INF")
+	lock -^SSHL7(link,"LOCK-PORT",newport)
+ 
+	//u webport
+ 
+	quit
+ 
+	// read response
+Response(reject) set (pass,reject,uniqueid)=""
+	kill trace
+ 
+	set pass=$$Read^HL7("Y",TIMEOUT("RESPONSE")) do
+	. // check for response
+	.if '$data(trace)!(pass="")!(pass="RDERR") set reject="No response received.",pass="Fail-1" quit
+	. // build segment data
+	.if $data(trace) do
+	..set j="" for  set j=$order(trace(j)) quit:j=""  set seg=trace(j) do Data^HL7Data set previd=$piece(seg,%,1)
+	..if $data(trace)>1 do trace^HL7Trace("E-->M",$h,"",tracerowid)
+	..kill tracecopy merge tracecopy=trace kill trace
+	..if 'T set reject="Timeout receiving next segment, continuing."
+ 
+	. // check if acknowledged
+	.set check=$get(DATA("MSA",1)) if ",AA,AE,AR,CA,CE,CR,"'[(","_check_",") do  quit
+	..set reject="NAK - Message Failed with unknown MSA-2 code "_check_", MSA-3 description "_$get(DATA("MSA",3)),pass="Fail-2"
+	..set ^TMP("HL7-ERR",$job,"MSG")="1^External Interface Notification: "_$get(DATA("MSA-3")),^TMP("HL7-ERR-LINK",link,$job)=""
+	. // check if rejected
+	.if check'="AA",check'="CA" do  quit
+	..set ErrMsg=$get(DATA("MSA",3)) if $get(DATA("MSA",1))="CE",ErrMsg="" set ErrMsg="No response received from external source"
+	..set reject=$get(DATA("MSA",1))_" - "_ErrMsg_".",pass="Fail-2"
+	..set ^TMP("HL7-ERR",$job,"MSG")="1^External Interface Notification: "_ErrMsg,^TMP("HL7-ERR-LINK",link,$job)=""
+	. // message id match
+	.if $get(DATA("MSA",2))'=$get(controlId),reject'="" set reject="Control Id received in MSA "_$get(DATA("MSA",2))_" does not match Id "_$get(controlId)_" sent.",pass="Fail-2"
+ 
+	set (uniqueid,totalcnt,respcnt,status,querycurrent,queryremain,pat,sched)=""
+	set j="" for  set j=$order(tracecopy(j)) quit:j=""  do  if uniqueid'="" quit
+	.if $piece(tracecopy(j),"|")="QRD" set uniqueid=$piece(tracecopy(j),"|",5)
+ 
+	// remove continuation flag
+	if uniqueid'="" kill ^TMP("HL7-QUERY",uniqueid,"CONTINUE")
+ 
+	// setup result marker
+	if pass'["Fail" do
+	.if $piece(headdetail,"\")="QRY^A19" do
+	..set j="" for  set j=$order(tracecopy(j)) quit:j=""  do
+	...set seg=$get(tracecopy(j))
+	... // ignore standard message response segments
+	...if $piece(seg,"|")="MSH"!($piece(seg,"|")="MSA")!($piece(seg,"|")="ERR") quit
+	...if $piece(seg,"|")="QAK" set status=$piece(seg,"|",3),totalcnt=$piece(seg,"|",4),respcnt=$piece(seg,"|",5),querycurrent=$piece(seg,"|",6),queryremain=$piece(seg,"|",7) quit
+	... // extract unique id
+	...if $piece(seg,"|")="QRD" set uniqueid=$piece(seg,"|",5),run=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",""),-1)+1,^TMP("HL7-QUERY",uniqueid,"TOTAL-CNT")=totalcnt,^TMP("HL7-QUERY",uniqueid,"RESP-CNT")=respcnt,^TMP("HL7-QUERY",uniqueid,"STATUS")=status,^TMP("HL7-QUERY",uniqueid,"RESP-CURRENT")=querycurrent,^TMP("HL7-QUERY",uniqueid,"RESP-REMAIN")=queryremain quit
+	...if $piece(seg,"|")="QRF" quit
+	...if $piece(seg,"|")="DSC" set ^TMP("HL7-QUERY",uniqueid,"CONT")=seg quit
+	...if $piece(seg,"|")="PID" set pat=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",run,"PAT",""),-1)+1
+	...set num=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",run,"PAT",pat,""),-1)+1
+	...set ^TMP("HL7-QUERY",uniqueid,"RESULT",run,"PAT",pat,num)=seg
+	..if pat<1 set pass="Fail-2"
+ 
+	.if $piece(headdetail,"\")="SQM^S25" do
+	..set uniqueid=$get(^TMP("HL7-OUT-QUERY",$job,"ID"))
+	..set j="" for  set j=$order(tracecopy(j)) quit:j=""  do
+	...set seg=$get(tracecopy(j))
+	... // ignore standard message response segments
+	...if $piece(seg,"|")="MSH"!($piece(seg,"|")="MSA")!($piece(seg,"|")="ERR") quit
+	...if $piece(seg,"|")="QAK" do  quit
+	....set status=$piece(seg,"|",3),totalcnt=$piece(seg,"|",4),respcnt=$piece(seg,"|",5),querycurrent=$piece(seg,"|",6),queryremain=$piece(seg,"|",7)
+	.... // extract unique id
+	....set run=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",""),-1)+1,^TMP("HL7-QUERY",uniqueid,"TOTAL-CNT")=totalcnt,^TMP("HL7-QUERY",uniqueid,"RESP-CNT")=respcnt,^TMP("HL7-QUERY",uniqueid,"STATUS")=status,^TMP("HL7-QUERY",uniqueid,"RESP-CURRENT")=querycurrent,^TMP("HL7-QUERY",uniqueid,"RESP-REMAIN")=queryremain quit
+	...if $piece(seg,"|")="QRF" quit
+	...if $piece(seg,"|")="DSC" set ^TMP("HL7-QUERY",uniqueid,"CONT")=seg quit
+	...if $piece(seg,"|")="SCH" set sched=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",run,"SCH",""),-1)+1
+	...set num=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",run,"SCH",sched,""),-1)+1
+	...set ^TMP("HL7-QUERY",uniqueid,"RESULT",run,"SCH",sched,num)=seg
+	..if sched<1 set pass="Fail-2"
+ 
+	// setup no response marker - use original msg to extract data as no response received
+	if pass="Fail-1" do
+	.set j="" for  set j=$order(tracequeue(j)) quit:j=""  do  if uniqueid'="" quit
+	..if $piece(tracequeue(j),"|")="QRD" set uniqueid=$piece(tracequeue(j),"|",5)
+	.set ^TMP("HL7-QUERY",uniqueid,"NO-RESP")=""
+ 
+	// setup no result marker - use received response to extract data
+	if pass="Fail-2" do
+	.set seg=""
+	.set j="" for  set j=$order(tracecopy(j)) quit:j=""  do  if $piece(tracecopy(j),"|")="ERR" set seg=$get(tracecopy(j))
+	..if $piece(tracecopy(j),"|")="QRD" set uniqueid=$piece(tracecopy(j),"|",5)
+	.set ^TMP("HL7-QUERY",uniqueid,"NO-RES")=seg
+ 
+	kill DATA,trace,message
+	quit
+
+
+

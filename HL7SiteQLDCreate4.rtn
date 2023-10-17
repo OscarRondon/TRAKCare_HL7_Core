@@ -1,0 +1,9 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteQLDCreate4^MAC^^^0
+HL7SiteQLDCreate4 // ML 06/05/2003 ; HL7 interface : create transmission packets - Queensland Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteQLDCreate4.rtn#1 $
+	quit
+
+
+

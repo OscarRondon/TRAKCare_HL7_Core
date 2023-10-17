@@ -1,0 +1,106 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OrderO02^MAC^^^0
+HL7OrderO02 // ML 20/9/01 ; HL7 interface : order confirmation response message update
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OrderO02.rtn#1 $
+	quit
+	
+	// O02 - order response
+O02()	set cnt1="" for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. // extract internal/external registration numbers
+	. set numbers=$$RegNum^HL7Common2(.reject,"O02")
+	. set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+	. if reject'="" quit
+	. // check if merged
+	. set merge="",masternum=$$patto^CPAPerson(intRegMrn)
+	. if masternum'=intRegMrn set merge="Y",intRegMrn=masternum,RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+	. // check patient details
+	. if merge'="Y",$$PatCheck^HL7Common3(intRegMrn,RegMrn) quit
+	. // check admission details
+	. set cnt2="" for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . if '$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")),('$data(^TMP("HL7",$job,cnt1,cnt2,"ORC"))) quit
+	. . // get order control and status
+	. . set OrderControl=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ORC",1)),"^")
+	. . set OrderStatus=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ORC",5)),"^")
+	. . // check order status
+	. . if OrderControl'="",OrderStatus="" do
+	. . . if OrderControl="OK" quit
+	. . . // set status to 'D - Discontinued'
+	. . . if ",UA,DC,OD,CA,OC,"[(","_OrderControl_",") set OrderStatus="D"
+	. . . // set status to 'H - On Hold'
+	. . . if ",HD,OH,"[(","_OrderControl_",") set OrderStatus="H"
+	. . if $order(^TMP("HL7",$job,cnt1,cnt2,""))'="" do  quit
+	. . . set cnt3="" for  set cnt3=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3)) quit:cnt3=""  do  quit:reject'=""
+	. . . . // process radiology / pathology order
+	. . . . if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR")) do  quit:reject'=""
+	. . . . . set (intOrdNum,OrdNum,FillerNum,tests)="" kill date,time,OrdDetail
+	. . . . . // get order and filler number
+	. . . . . set numbers=$$OrderNumExtract^HL7Common5(cnt1,cnt2,cnt3)
+	. . . . . set OrdNum=$piece(numbers,"|"),FillerNum=$piece(numbers,"|",2),AccessionNum=$piece(numbers,"|",4)
+	. . . . . do OrdNum^HL7Common2("Y",.reject) if reject'="" quit
+	. . . . . // get external code for test
+	. . . . . set tests=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",4))
+	. . . . . set orddet=$$ExternalCode^HL7Common1(.reject,$piece(tests,"^"),$piece(tests,"^",2))
+	. . . . . set OrderedItem=$piece(orddet,"^"),recloc=$piece(orddet,"^",2) if OrderedItem="" do  quit
+	. . . . . . set rejected(tests)="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	. . . . . set (SQLCODE,OrderMaster,intOrdNum)=""
+	. . . . . &SQL(SELECT OEORI_OEORD_ParRef INTO :OrderMaster FROM OE_OrdItem WHERE OEORI_LabEpisodeNo = :OrdNum)
+	. . . . . if 'SQLCODE do
+	. . . . . . set intOrdNum=$$Order^HL7Common1(OrderedItem,OrderMaster,OrdNum,FillerNum,AccessionNum)
+	. . . . . if intOrdNum="NOT-RECEIVED" do  quit
+	. . . . . . set reject="Unable to add/update order "_OrdNum_", test "_$piece(tests,"^")_".  Valid accession number not received" do Reject^HL7Reject(reject,"R")
+	. . . . . if intOrdNum="" do  quit
+	. . . . . . set reject="Unable to find order "_OrdNum_", test "_$piece(tests,"^"),reject("Detail")="OBR^"_$get(^TMP("HL7",$job,cnt1,"OBR",1))_"^4~207" do Reject^HL7Reject(reject,"R")
+	. . . . . set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2)
+	. . . . . // update the order with new date/time/qty
+	. . . . . set datetime=$$Date^HL7(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",36)) if datetime'="" do
+	. . . . . . set date=$piece(datetime,","),time=$piece(datetime,",",2),HL7Flag="Y"
+	. . . . . . &SQL(UPDATE OE_OrdItem SET OEORI_SttDat =:date, OEORI_SttTim = :time WHERE OEORI_RowID = :intOrdNum)
+	. . . . . . kill HL7Flag
+	. . . . . // update order status
+	. . . . . do OrderUpdate^HL7Common3(intOrdNum,"OS",OrderStatus)
+	. . . . . // add filler number to order
+	. . . . . if FillerNum'="" do OrderUpdate^HL7Common3(intOrdNum,"FN",FillerNum)
+	. . . . . // update order with updated fields
+	. . . . . if $data(OrdDetail) do OrderUpdate^HL7Common3(intOrdNum,"","","",1) kill OrdDetail
+	. . . . // process pharmacy order
+	. . . . if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"RXO")) do  quit:reject'=""
+	. . . . . set (intOrdNum,PrescriptionNum,FillerNum,tests)="" kill date,time,OrdDetail
+	. . . . . // get prescription number
+	. . . . . set numbers=$$OrderNumExtract^HL7Common5(cnt1,cnt2,cnt3)
+	. . . . . set FillerNum=$piece(numbers,"|",2),PrescriptionNum=$piece(numbers,"|",5)
+	. . . . . // check if valid prescription number received
+	. . . . . if PrescriptionNum'="",'$data(^OEORD(0,"PrescNo",PrescriptionNum)) do  quit
+	. . . . . . set reject="Prescription number "_PrescriptionNum_" received for order confirmation does not exist in TrakCare"
+	. . . . . // get external code for ordered item
+	. . . . . set tests=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"RXO",1))
+	. . . . . set orddet=$$ExternalCode^HL7Common1(.reject,$piece(tests,"^"),$piece(tests,"^",2))
+	. . . . . set OrderedItem=$piece(orddet,"^"),recloc=$piece(orddet,"^",2) if OrderedItem="" do  quit
+	. . . . . . set rejected(tests)="" set (reject,SQLCODE)=""
+	. . . . . set (SQLCODE,OrderMaster,intOrdNum)=""
+	. . . . . &SQL(SELECT OEORI_OEORD_ParRef INTO :OrderMaster FROM OE_OrdItem WHERE OEORI_PrescNo = :PrescriptionNum)
+	. . . . . if 'SQLCODE do
+	. . . . . . set intOrdNum=$$Order^HL7Common1(OrderedItem,OrderMaster,OrdNum,FillerNum,AccessionNum)
+	. . . . . . &SQL(SELECT OEORI_RowId INTO :intOrdNum FROM OE_OrdItem WHERE OEORI_ItmMast_DR = :OrderedItem AND OEORI_OEORD_ParRef = :OrderMaster
+		AND OEORI_PrescNo = :PrescriptionNum AND ((OEORI_FillerNo = :FillerNum) OR (OEORI_FillerNo IS NULL)))
+	. . . . . if intOrdNum="" do  quit
+	. . . . . . set reject="Unable to find Prescription number "_PrescriptionNum_", item "_$piece(tests,"^"),reject("Detail")="RXO^^1~207" quit
+	. . . . . // update order status
+	. . . . . if OrderStatus'="" do OrderUpdate^HL7Common3(intOrdNum,"OS",OrderStatus)
+	. . . . . // add filler number to order
+	. . . . . if FillerNum'="" do OrderUpdate^HL7Common3(intOrdNum,"FN",FillerNum)
+	. . . . . // update order with updated fields
+	. . . . . if $data(OrdDetail) do OrderUpdate^HL7Common3(intOrdNum,"","","",1) kill OrdDetail
+	if $data(rejected) do
+	. set (rejectx,testreject)="" for  set rejectx=$order(rejected(rejectx)) quit:rejectx=""  do
+	. . set testreject=testreject_$select($length(testreject):", ",1:"")_$piece(rejectx,"^")_" ("_$piece(rejectx,"^",2)_")"
+	. set reject="Test code/s "_testreject_" not found in TrakCare",reject("Detail")="RXO^^4~103"
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	kill reject,rejected
+	// no ack/nak required
+	quit ""
+
+
+

@@ -1,0 +1,141 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7MastFileM12^MAC^^^0
+HL7MastFileM12 // ML 22/11/2005 ; HL7 interface : master file notification categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7MastFileM12.rtn#1 $
+	quit
+	
+	// M12 - order items, additional info
+M12()
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if '$data(^TMP("HL7",$job,cnt1,"MFI")) quit
+	. set mode=$get(^TMP("HL7",$job,cnt1,"MFI",3))
+	
+	. // only allow updates
+	. if mode="UPD" do
+	. . // extract table to update
+	. . set table=$piece($get(^TMP("HL7",$job,cnt1,"MFI",1)),"^")
+	. . // check if table set to update
+	. . set reject=""
+	. . set updtable=$$TableCheck^HL7MastFile(event,table,.reject) if reject'="" do  quit
+	. . . set reject("Detail")="MFI^^1~206"
+	
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,"MFE")) quit
+	. . . set updtype=$get(^TMP("HL7",$job,cnt1,cnt2,"MFE",1))
+	. . . set date=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"MFE",3)),1,8),date=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	
+	. . . // only type 'MUP' allowed
+	. . . if updtype'="MUP" do  quit
+	. . . . set reject="Updates only allowed for message MFN_M12.  Type "_updtype_" not catered for.",reject("Detail")="MFE^^1~206"
+	
+	. . . // extract order details
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"OM1",2)),code=$piece(detail,"^"),desc=$piece(detail,"^",2)
+	
+	. . . // specimen used
+	. . . set specused=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"OM1",4)),"^")
+	
+	. . . // extract order category
+	. . . set ordsubcat=$get(^TMP("HL7",$job,cnt1,cnt2,"OM1",47)),ordercat=$get(^TMP("HL7",$job,cnt1,cnt2,"OM7",3))
+	
+	. . . set ordcatRowId=$$OrdCat($piece(ordercat,"^"),$piece(ordercat,"^",2)) if ordcatRowId="" do  quit
+	. . . . set reject="Unable to add/locate order category "_$piece(ordercat,"^")_" ("_$piece(ordercat,"^",2)_")",reject("Detail")="OM7^^3~206"
+	. . . set ordsubcatRowId=$$SubCat($piece(ordsubcat,"^"),$piece(ordsubcat,"^",2),ordcatRowId,specused) if ordsubcatRowId="" do  quit
+	. . . . set reject="Unable to add/locate order subcategory "_$piece(ordsubcat,"^")_" ("_$piece(ordsubcat,"^",2)_")",reject("Detail")="OM1^^47~206"
+	
+	. . . do UpdateTable(updtable,updtype,code,desc,date,ordsubcatRowId)
+	
+	if mode'="UPD" do
+	. set reject="Master file mode "_mode_" received is not catered for.  Only catering for mode 'UPD'",reject("Detail")="MFI^^3~206"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// add/update order item
+UpdateTable(updtable,updtype,code,desc,date,ordsubcatRowId) set updtable=$get(updtable),updtype=$get(updtype),code=##class(%Collation).AlphaUp($get(code))
+	set desc=$get(desc),date=$get(date),ordsubcatRowId=$get(ordsubcatRowId)
+	set RowId="" kill PLIST
+	
+	set tablename=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7MasterFileTables",updtable))
+	
+	if updtable'="ARCItmMast" quit
+	
+	&SQL(SELECT * INTO :PLIST() FROM ARC_ItmMast WHERE ARCIM_Code = :code)
+	
+	set Exists='(SQLCODE)
+	
+	// reject if it doesn't exist
+	if 'Exists do  quit
+	. set reject="Order Item code "_code_" ("_desc_") does not exist in TrakCare.  Please send an MFN_M08 to create this Order Item.",reject("Detail")="OM1^^2^206"
+	
+	// update existing order item
+	if Exists do
+	. set RowId=PLIST(1) kill PLIST(1) set PLIST(3)=desc,PLIST(4)=code,PLIST(9)=ordsubcatRowId,PLIST(83)="Y"
+	. set PLIST(89)=+$h,PLIST(90)=$piece($h,",",2),PLIST(102)="Y"
+	. &SQL(UPDATE ARC_ItmMast VALUES :PLIST() WHERE ARCIM_RowId = :RowId)
+	
+	. set RowId=%ROWID
+	
+	set OrdItemRowId=RowId
+	
+	quit
+	
+	// extract order category
+OrdCat(code,desc) new (code,desc,MASTFILE) set code=##class(%Collation).AlphaUp($get(code)),desc=$get(desc),MASTFILE("M08-DEFACCESSPROF")=$get(MASTFILE("M08-DEFACCESSPROF"))
+	set RowId="" kill PLIST
+	
+	&SQL(SELECT * INTO :PLIST() FROM OEC_OrderCategory WHERE ORCAT_Code = :code AND ORCAT_Desc = :desc)
+	
+	set Exists='(SQLCODE)
+	
+	// update existing order category detail
+	if Exists do
+	. set RowId=PLIST(1) kill PLIST(1) set PLIST(3)=$select(desc="":PLIST(3),1:desc)
+	. &SQL(UPDATE OEC_OrderCategory VALUES :PLIST() WHERE ORCAT_RowId = :RowId)
+	
+	// insert new order category
+	if 'Exists do
+	. kill PLIST set PLIST(2)=code,PLIST(3)=desc
+	. &SQL(INSERT INTO OEC_OrderCategory VALUES :PLIST())
+	. set RowId=%ROWID
+	
+	// assign to access profile
+	if MASTFILE("M08-DEFACCESSPROF")'="" do
+	. kill PLIST
+	. &SQL(SELECT * INTO :PLIST() FROM SS_ProfileOrderCategory WHERE OC_ParRef = :MASTFILE("M08-DEFACCESSPROF") AND OC_OrdCat_DR = :RowId)
+	. if SQLCODE do
+	. . kill PLIST set PLIST(0)=MASTFILE("M08-DEFACCESSPROF"),PLIST(2)=RowId,PLIST(3)="Y",PLIST(4)="N",PLIST(5)="N"
+	. . &SQL(INSERT INTO SS_ProfileOrderCategory VALUES :PLIST())
+	
+	quit RowId
+	
+	// extract order sub category
+SubCat(code,desc,ordcatRowId,specused) new (code,desc,ordcatRowId,specused) set code=##class(%Collation).AlphaUp($get(code)),desc=$get(desc),ordcatRowId=$get(ordcatRowId)
+	set specused=$get(specused)
+	set RowId="" kill PLIST
+	
+	// extract execute category
+	set ExecCode=$select(specused'="":"LAB",1:"F")
+	&SQL(SELECT EXEC_RowId INTO :ExecRowId FROM OEC_ExecCateg WHERE EXEC_Code = :ExecCode)
+	
+	&SQL(SELECT * INTO :PLIST() FROM ARC_ItemCat WHERE ARCIC_Code = :code)
+	
+	set Exists='(SQLCODE)
+	
+	// update existing sub category
+	if Exists do
+	. set RowId=PLIST(1) kill PLIST(1) set PLIST(3)=desc,PLIST(8)=$select(ExecCode="LAB":"L",1:"N"),PLIST(9)=ordcatRowId,PLIST(10)=ExecRowId
+	. set PLIST(19)="IM",PLIST(28)="Y"
+	. &SQL(UPDATE ARC_ItemCat VALUES :PLIST() WHERE ARCIC_RowId = :RowId)
+	
+	// insert new sub category
+	if 'Exists do
+	. kill PLIST set PLIST(2)=code,PLIST(3)=desc,PLIST(8)=$select(ExecCode="LAB":"L",1:"N"),PLIST(9)=ordcatRowId,PLIST(10)=ExecRowId,PLIST(12)="N"
+	. set PLIST(19)="IM",PLIST(28)="Y"
+	. &SQL(INSERT INTO ARC_ItemCat VALUES :PLIST())
+	. set RowId=%ROWID
+	
+	quit RowId
+
+
+

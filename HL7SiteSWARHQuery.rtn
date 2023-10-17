@@ -1,0 +1,97 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteSWARHQuery^MAC^^^0
+HL7SiteSWARHQuery // IF 03/04/2012 ; HL7 interface : A19 query for SWARH
+	quit
+         
+CheckA19 ;; A19 - query
+QueryA19(reject,event) set event=$get(event)
+	set (error,err,datefrom,dateto)="",$ztrap="Error^HL7Query" kill ^TMP("HL7-OUT",$job)
+	for i=1:1:13 set ^TMP("HL7",$job,"QRF",i)=$get(^TMP("HL7",$job,"QRF",i))
+ 
+	// check for deferred response
+	if ^TMP("HL7",$job,"QRD",3)="D" quit ""
+	// check for immediate response
+	if ^TMP("HL7",$job,"QRD",3)'="I" quit ""
+ 
+	// convert dates
+	if ^TMP("HL7",$job,"QRF",2)'="" set datefrom=$zdateh($extract(^TMP("HL7",$job,"QRF",2),1,8),8)
+	if ^TMP("HL7",$job,"QRF",3)'="" set dateto=$zdateh($extract(^TMP("HL7",$job,"QRF",3),1,8),8)
+ 
+	// set maximum recs to return (if 0)
+	set ^TMP("HL7",$job,"QRD",7)=+^TMP("HL7",$job,"QRD",7) if ^TMP("HL7",$job,"QRD",7)=0 set ^TMP("HL7",$job,"QRD",7)=40
+	set max=^TMP("HL7",$job,"QRD",7)
+ 
+	set dept=##class(%Collation).AlphaUp($piece(^TMP("HL7",$job,"QRF",1),%2))
+	kill QUERY,PLIST set (QUERY,PLIST)=0
+ 
+	set lookup=$piece(^TMP("HL7",$job,"QRD",9),%2),(intRegMrn,intAdmNum)=""
+ 
+	set x="" for  set x=$order(^TMP("HL7",$job,"QRD",8,x)) quit:x=""  do  if QUERY>^TMP("HL7",$job,"QRD",7) quit
+	. // 'ANU' - ward lookup
+	.if lookup="ANU" do AnuLook^HL7Query
+	. // 'DEM' - mrn lookup
+	.if lookup="DEM" do
+	..set RegMrn=$piece(^TMP("HL7",$job,"QRD",8,x),%1,1) do Lookup^HL7Query
+	. // 'APN' - name lookup
+	.if lookup="APN" do
+	..set surname=##class(%Collation).AlphaUp($piece(^TMP("HL7",$job,"QRD",8,x),%1,2)),given=##class(%Collation).AlphaUp($piece(^TMP("HL7",$job,"QRD",8,x),%1,3))
+	..do Lookup^HL7Query
+	. // 'APP' - care provider lookup
+	.if lookup="APP" do
+	..set name=##class(%Collation).AlphaUp($piece(^TMP("HL7",$job,"QRD",8,x),%1,2)) do Lookup^HL7Query
+	// extract current/most recent admission
+	set found=""
+	if intRegMrn do
+	.set intAdmNum="" for  set intAdmNum=$order(^PAPERdr(intRegMrn,"ADM","I",intAdmNum),-1) quit:intAdmNum=""  do  quit:found
+	..set current="" &SQL(SELECT PAADM_Current INTO :current FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+	..if current="Y" set found=1 quit
+	.if 'intAdmNum set intAdmNum=$order(^PAPERdr(intRegMrn,"ADM","E",intAdmNum),-1)
+	.if 'intAdmNum set intAdmNum=$order(^PAPERdr(intRegMrn,"ADM","I",intAdmNum),-1)
+	.if 'intAdmNum set intAdmNum=$order(^PAPERdr(intRegMrn,"ADM","O",intAdmNum),-1)
+ 	.set QUERY($order(QUERY(0)))=$listbuild(intRegMrn,intAdmNum)
+	// build the reply
+Build	set ^TMP("HL7-OUT",$job,"MSA",1)="AA"
+	set ^TMP("HL7-OUT",$job,"MSA",2)=^TMP("HL7",$job,"MSH",9)
+	set ^TMP("HL7-OUT",$job,"MSA",3)=$$Esc^HL7(error)
+	if error'="" set ^TMP("HL7-OUT",$job,"MSA",5)=%1_$$Esc^HL7(error)_%1_"Medtrak"
+ 
+	do Build^HL7Queue("MSA",12)
+ 
+	if error="" do
+	.merge ^TMP("HL7-OUT",$job,"QRD")=^TMP("HL7",$job,"QRD"),^TMP("HL7-OUT",$job,"QRF")=^TMP("HL7",$job,"QRF")
+	.do Build^HL7Queue("QRD",12)
+	. // sent QRF if received
+	.if ^TMP("HL7-OUT",$job,"QRF",1)'="" do Build^HL7Queue("QRF",9)
+	. // return episode list
+	.set query="" for  set query=$order(QUERY(query)) quit:query=""  do Reply
+	.if '$data(^TMP("HL7-OUT",$job,"PV1")) do Build^HL7Queue("PV1",52)
+ 
+	// send message immediately
+	set trace=1,(trace(1),record)=$$SendHead^HL7Send("ADR^A19")
+	write ESC("VT"),record,ESC("CR")
+	if $order(queue("")) do
+	.set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	.write ESC("FS"),ESC("CR"),*-3
+ 	kill queue
+	do trace^HL7Trace("M-->E",$h,"",tracerowid)
+	// log error in trace
+	if error'="" do trace^HL7Trace("*****",$h,err)
+	quit
+	// build reply for each item found
+Reply	set intRegMrn=$list(QUERY(query),1),intAdmNum=$list(QUERY(query),2),(intRegCheck,msgtype,trigger)=""
+	for segment="PID","PD1","PV1" do
+	.set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment",segment),maxlength=$list(detail,2)
+	.set table=$select(segment="PV1":"PAADM",1:"PAPERSON"),mandatory="N"
+	.set routefound="" for route=1:1:4,"Z" do  if routefound quit
+	..for routine="HL7Site"_HL7("OUTCODE")_"Create"_route,"HL7Create"_route do  quit:routefound
+	...set LineRoutine="Check"_segment_"^"_routine if $length($text(@LineRoutine),";;")=2 do  quit
+	....xecute "s fail=$$"_segment_"^"_routine set routefound=1
+	.if fail quit
+	.if segment'="ZID" set ^TMP("HL7-OUT",$job,segment,1)=query
+	.do Build^HL7Queue(segment,maxlength)
+ 
+	quit
+
+
+

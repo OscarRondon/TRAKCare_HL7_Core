@@ -1,0 +1,254 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutboundREF^MAC^^^0
+HL7OutboundREF // ML 01/05/2006 ; HL7 Interface - Outbound REF message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutboundREF.rtn#1 $
+	quit
+check(table,rowid,trigger) new (table,rowid,trigger,%d,%e,%old,%before,%after,insert,TFORM,LogonUser) set (type,ok)="" kill old,curr
+	set table=$get(table),rowid=$get(rowid),trigger=$get(trigger),insert=$get(insert),TFORM=$get(TFORM),LogonUser=$get(LogonUser)
+ 	merge old(table)=%old,curr(table)=%d
+	// check for discharge summary update - called direct from websysSaveDisSum.web.PAAdmDischargeSummary
+ 	if table="PADISCHARGESUMMARY",trigger="Insert" set ok=1,type="I12"
+	// check for patient referral
+	if table="RBREFERRAL",trigger="Update" do
+	. // referral modified
+	.if $data(%d(17)),$piece($get(%d(17)),$char(1))'="",$piece($get(%old(17)),$char(1))'="",$piece($get(%d(17)),$char(1))'=$piece($get(%old(17)),$char(1)) set ok=1,type="I13"
+	if 'ok kill old,curr,array quit
+	set type="REF_"_type
+	set tablesave=table
+	// extract links to send message to
+	kill SendTo if '$$sendto^HL7Outbound(type,table) if $order(SendTo(""))="" quit
+	set cnt="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do
+	.set link=SendTo(cnt)
+	. // check for site specific criteria for creating REF message [log 79249]
+	. &SQL(SELECT HL7_RoutineSiteCodeOutbound INTO :sitecode FROM SS_HL7 WHERE HL7_Code = :link)
+	.set routine="HL7Site"_sitecode_"OutboundREF",LineRoutine="CheckRefer^"_routine
+	.if $length($text(@LineRoutine),";;")=2 xecute "d Refer^"_routine_"("""_table_""","""_rowid_""","""_trigger_""","""_type_""")" set table=tablesave quit
+	.do Refer(rowid,link,type,trigger)
+	.set table=tablesave
+	kill old,curr,array
+	quit
+	// build segments and message
+Refer(intNum,link,msgtype,trigger) new (intNum,link,msgtype,trigger,table,%session,%request,%d,%old,curr,old,forwardnum,fwdcnt,insert)
+	set intNum=$get(intNum),link=$get(link),msgtype=$get(msgtype),trigger=$get(trigger),table=$get(table)
+	set (intRegMrn,intAdmNum,intDSNum,RegMrn)="" kill queue,OrdItem,ReferredItem,Questionnaire,^TMP("HL7-OUT",$job)
+ 
+	// remove error messages for job
+	if $data(^TMP("HL7-ERR-LINK",link,$job)) do
+	.kill ^TMP("HL7-ERR",$job),^TMP("HL7-ERR-LINK",link,$job)
+ 
+	// check link status
+	if '$$Init^HL7Create() quit
+ 
+	// discharge summary
+	if msgtype="REF_I12",table="PADISCHARGESUMMARY" do
+ 
+	. // extract required rowids
+	.set intDSNum=intNum
+	.set intAdmNum=$order(^PAADMi("DISSUM",intDSNum,"")),intRegMrn=$$AdmPatNum^HL7OutExtract2(intAdmNum)
+	.if intDSNum=""!(intAdmNum="") quit
+ 
+	.kill OrdItem
+	. // find included orders
+	.set intOrdNum="" for  set intOrdNum=$order(^PA("DISSUM",intDSNum,"DET",0,"OEOrdItem",intOrdNum)) quit:intOrdNum=""  do
+	.. // check for required order details
+	..set OrderedItem=$$OrderedItem^HL7Common11(intOrdNum) if OrderedItem="" quit
+	.. // extract order type - LAB, RAD, PHA
+	..set ordertype=$$SubCatType^HL7Common11(OrderedItem) if ordertype="" quit
+	..if $$OrdNum^HL7OutExtract8(intOrdNum,ordertype)="" quit
+	..set OrdItem(ordertype,intOrdNum)=""
+	.kill ReferredItem
+	. // find included referred items
+	.set row="" for  set row=$order(^PA("DISSUM",intDSNum,"REFER",row),1,detail) quit:row=""  do
+	.. // check for ordered item
+	..if $piece(detail,"^",2)="" quit
+	..set intRefItem=intDSNum_"||"_row set ReferredItem(intRefItem)=""
+	. // find included lab results
+	.set intOrdNum="" for  set intOrdNum=$order(^PA("DISSUM",intDSNum,"DET",0,"LabResultDR",intOrdNum)) quit:intOrdNum=""  do
+	.. // check for required order details
+	..set OrderedItem=$$OrderedItem^HL7Common11(intOrdNum) if OrderedItem="" quit
+	..set OrdNum=$$extOrdNum^HL7Common2(intOrdNum) if OrdNum="" quit
+	.. // extract order type - LAB, RAD, PHA
+	..set ordertype=$$SubCatType^HL7Common11(OrderedItem) if ordertype="" quit
+	..set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2)
+	..set intResNum=$piece(^OEORD(ord1,"I",ord2,3),"^",35) if intResNum="" quit
+	..set OrdItem(ordertype,intOrdNum)="EPVISITTESTSET^"_$get(intResNum)
+	. // find included text results
+	.set TextId="" for  set TextId=$order(^PA("DISSUM",intDSNum,"DET",0,"TextResult",TextId)) quit:TextId=""  do
+	..set ord1=$piece($get(^OETR(TextId)),"^") if ord1="" quit
+	..set ord2=$order(^OEORDi(0,"TextRes",ord1,TextId,"")) if ord2="" quit
+	..set intOrdNum=ord1_"||"_ord2
+	.. // check for required order details
+	..set OrderedItem=$$OrderedItem^HL7Common11(intOrdNum) if OrderedItem="" quit
+	..set OrdNum=$$extOrdNum^HL7Common2(intOrdNum) if OrdNum="" quit
+	.. // extract order type - LAB, RAD, PHA
+	..set ordertype=$$SubCatType^HL7Common11(OrderedItem) if ordertype="" quit
+	..set OrdItem(ordertype,intOrdNum)="OETEXTRESULTSECTION^"_TextId_"||"_$get(^OETR(TextId,"SEC",0))
+	. // find included word results
+	.set intResNum="" for  set intResNum=$order(^PA("DISSUM",intDSNum,"DET",0,"WordResult",intResNum)) quit:intResNum=""  do
+	..set ord1=$piece(intResNum,"||"),ord2=$piece(intResNum,"||",2),ord3=$piece(intResNum,"||",3) quit:ord3=""
+	..set intResNumx=intResNum
+	..set detail=$get(^OEORD(ord1,"I",ord2,"RES",ord3)),file=$piece(detail,"^"),nonstdrep=$piece(detail,"^",29),webdocument=$piece(detail,"^",43)
+	..if nonstdrep="",file'[".txt",file'[".rtf" quit
+	..set txtrtf=""
+	.. // search for associated .rtf
+	..if nonstdrep="",file[".txt" do  if txtrtf quit
+	... // check if web document is type 'TXT'
+	...set doc=##class(websys.Document).%OpenId(webdocument)
+	...set txtrtf=$select(doc="":1,doc.DataType'="TXT":1,1:"") kill doc if txtrtf quit
+	...set ord3x=$order(^OEORD(ord1,"I",ord2,"RES",ord3),-1) if $piece($get(^OEORD(ord1,"I",ord2,"RES",ord3x)),"^")'[".rtf" set txtrtf=1
+	...set intResNumx=ord1_"||"_ord2_"||"_ord3x
+	.. // search for associated .txt
+	..if nonstdrep="",file[".rtf" do  if txtrtf quit
+	...if $order(^OEORD(ord1,"I",ord2,"RES",ord3),1,detail) quit:detail=""
+	...set textfile=$piece(detail,"^"),webdocument=$piece(detail,"^",43)
+	...if textfile[".txt",webdocument'="" do
+	.... // check if web document is type 'TXT'
+	....set doc=##class(websys.Document).%OpenId(webdocument)
+	....set txtrtf=$select(doc="":1,doc.DataType'="TXT":1,1:"") kill doc if txtrtf quit
+	...if textfile'[".txt" set txtrtf=1
+	..set intOrdNum=$piece(intResNumx,"||",1,2)
+	.. // check for required order details
+	..set OrderedItem=$$OrderedItem^HL7Common11(intOrdNum) if OrderedItem="" quit
+	..set OrdNum=$$extOrdNum^HL7Common2(intOrdNum) if OrdNum="" quit
+	.. // extract order type - LAB, RAD, PHA
+	..set ordertype=$$SubCatType^HL7Common11(OrderedItem) if ordertype="" quit
+	..set OrdItem(ordertype,intOrdNum)="OEORDRESULT^"_$get(intResNumx)
+	. // find included questionnaires
+	.set intQnaire="" for  set intQnaire=$order(^PA("DISSUM",intDSNum,"DET",0,"QuesCode",intQnaire)) quit:intQnaire=""  do
+	..if $piece(intQnaire,"Q",2)="" quit
+	..set qid=$order(^SSU("WIN",0,"Code",$piece(intQnaire,"Q",2),"")) if 'qid quit
+	..set found="",row=0 for  set row=$order(^SSU("WIN",qid,"CON",row)) quit:row=""  do  if found quit
+	... // ignore questionnaire if everything is marked as 'Label'
+	...if $piece(^(row),"^")'="Label" set found=1
+	..if 'found quit
+	..set row="" for  set row=$order(^PA("DISSUM",intDSNum,"DET",0,"QuesCode",intQnaire,row)) quit:row=""  do
+	...set rowx=$piece($get(^PA("DISSUM",intDSNum,"DET",row)),"^",18)
+	...set exe="s ques=##class(questionnaire."_intQnaire_").%OpenId("_rowx_")" xecute exe
+	...if ques set Questionnaire(intQnaire_"||"_rowx)="" do ques.%Close()
+	. // extract segments required
+	.kill SEG if '$$Segment^HL7Create(msgtype)
+	.if $order(SEG(""))="" quit
+	.set msgtype=$translate(msgtype,"_","^")
+	. // build segment information
+	.set seg="" for  set seg=$order(SEG(seg)) quit:seg=""  do  quit:fail
+	..set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment",$piece(SEG(seg),"^"))
+	..set maxlength=$list(detail,2),segment=$piece(SEG(seg),"^"),mandatory=$piece(SEG(seg),"^",2),repeat=$piece(SEG(seg),"^",3),repeatnum=$piece(SEG(seg),"^",4)
+	.. // extract orders/results/questionnaires
+	..if segment="OBR" do  quit
+	...set (textfile,nonstdrep,webdocument)=""
+	...set xseg=$order(SEG(seg)) quit:xseg=""  set xsegment=$piece(SEG(xseg),"^") do  set seg=xseg
+	....if xsegment'="OBX" quit
+	.... // orders and results
+	....for ordertype="LAB","RAD" set intOrdNum="" for  set intOrdNum=$order(OrdItem(ordertype,intOrdNum)) quit:intOrdNum=""  do
+	.....set table=$piece(OrdItem(ordertype,intOrdNum),"^"),intResNum=$piece(OrdItem(ordertype,intOrdNum),"^",2)
+	.....set msgtype=$select(table'="":"ORU^R01",1:"ORM^O01")
+	.....if table="OEORDRESULT" do
+	...... // search for text file and matching web document / non-standard report
+	...... &SQL(SELECT RES_NonSTDRepIssReason_DR INTO :nonstdrep FROM OE_OrdResult WHERE RES_RowId = :intResNum)
+	......if nonstdrep'="" quit
+	......if $order(^OEORD($piece(intResNum,"||"),"I",$piece(intResNum,"||",2),"RES",$piece(intResNum,"||",3)),1,detail) quit:detail=""
+	......set textfile=$piece(detail,"^"),webdocument=$piece(detail,"^",43)
+	..... // process OBR
+	.....do BuildSegment(seg) set xseg=$order(SEG(seg)) quit:xseg=""
+	..... // process OBX
+	.....do BuildSegment(xseg)
+	....set msgtype="REF^I12",table="PADISCHARGESUMMARY"
+	.... // referred items
+	....set intRefItem="" for  set intRefItem=$order(ReferredItem(intRefItem)) quit:intRefItem=""  do
+	.....set refertype="REFERREDITEM"
+	.....do BuildSegment(seg) set xseg=$order(SEG(seg)) quit:xseg=""
+	..... // process OBX
+	.....do BuildSegment(xseg)
+	.... // questionnaires
+	....set intQnaire="" for  set intQnaire=$order(Questionnaire(intQnaire)) quit:intQnaire=""  do
+	.....set refertype="QUESTIONNAIRE"
+	..... // process OBR
+	.....do BuildSegment(seg) set xseg=$order(SEG(seg)) quit:xseg=""
+	..... // process OBX
+	.....do BuildSegment(xseg)
+	.... // nursing notes
+	....set intNursing="" for  set intNursing=$order(^PA("DISSUM",intDSNum,"DET",0,"MRNursingNotes",intNursing)) quit:intNursing=""  do
+	.....set refertype="NURSINGNOTES"
+	..... // process OBR
+	.....do BuildSegment(seg) set xseg=$order(SEG(seg)) quit:xseg=""
+	..... // process OBX
+	.....do BuildSegment(xseg)
+	.... // present illness
+	....set intIllness="" for  set intIllness=$order(^PA("DISSUM",intDSNum,"DET",0,"MRPresentIllness",intIllness)) quit:intIllness=""  do
+	.....set refertype="PRESENTILLNESS"
+	..... // process OBR
+	.....do BuildSegment(seg) set xseg=$order(SEG(seg)) quit:xseg=""
+	..... // process OBX
+	.....do BuildSegment(xseg)
+	.... // skip ahead to next group of segments
+	....set xseg=seg for  set xseg=$order(SEG(xseg)) if $piece(SEG(xseg),"^")="OBX" set seg=xseg quit
+ 
+	.. // extract medications
+	..if segment="RXO" do  quit
+	...set intOrdNum="" for  set intOrdNum=$order(OrdItem("PHA",intOrdNum)) quit:intOrdNum=""  do
+	....set table=$piece(OrdItem("PHA",intOrdNum),"^")
+	.... // process RXO
+	....do BuildSegment(seg) set xseg=$order(SEG(seg)) quit:xseg=""
+	.... // process RXR
+	....do BuildSegment(xseg)
+	... // skip ahead to next group of segments
+	...set xseg=seg for  set xseg=$order(SEG(xseg)) if $piece(SEG(xseg),"^")="RXR" set seg=xseg quit
+ 
+	.. // extract all patient problems
+	..//i segment="PRB" d  q
+	...//s intClinPath="" f  s intClinPath=$o(ClinPath(intClinPath)) q:intClinPath=""  d BuildSegment(seg)
+	.. // extract goals
+	..//i segment="GOL" d  q
+	...//s intClinPath="" f  s intClinPath=$o(ClinPath(intClinPath)) q:intClinPath=""  d BuildSegment(seg)
+	.. // extract care pathways
+	..//i segment="PTH" d  q
+	...//s intClinPath="" f  s intClinPath=$o(ClinPath(intClinPath)) q:intClinPath=""  d BuildSegment(seg)
+	.. // build all other segments normally
+	..do BuildSegment(seg) if fail kill ^TMP("HL7-OUT",$job) quit
+ 
+	// modify referral
+	if msgtype="REF_I13" do
+	.set intRefNum=$piece(intNum,"^"),intWaitNum=$piece(intNum,"^",2),intRegMrn=""
+	. &SQL(SELECT REF_PAPMI_DR INTO :intRegMrn FROM RB_Referral WHERE REF_RowId = :intRefNum)
+	. // extract segments required
+	.kill SEG if '$$Segment^HL7Create(msgtype)
+	.if $order(SEG(""))="" quit
+	.set msgtype=$translate(msgtype,"_","^")
+ 
+	. // build segment information
+	.do BuildSegment^HL7Create if fail kill ^TMP("HL7-OUT",$job) quit
+ 
+	// add to interface queue
+	if $get(HL7("SEND-NOW"))'="Y",$data(queue) do
+	.do Queue^HL7Queue(link,msgtype,"","","")
+ 
+	// do not add to interface queue - instant connection/send on job by job basis to Ensemble/external system
+	if $get(HL7("SEND-NOW"))="Y",$data(queue) do Send^HL7SendInstant(msgtype)
+ 
+	kill queue,OrdItem,ReferredItem,Questionnaire,^TMP("HL7-OUT",$job)
+	quit
+ 
+	// build segment detail
+BuildSegment(segcnt) set fail="" kill Repeat,count("PID"),count("PV1")
+	set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment",$piece(SEG(segcnt),"^"))
+	set maxlength=$list(detail,2),segment=$piece(SEG(segcnt),"^"),mandatory=$piece(SEG(segcnt),"^",2),repeat=$piece(SEG(segcnt),"^",3),repeatnum=$piece(SEG(segcnt),"^",4)
+ 
+	// check all routines for segment label
+	set routefound="" for route=0:1:8,"Z" do  if routefound quit
+	.for routine="HL7Site"_HL7("OUTCODE")_"Create"_route,"HL7Create"_route do  quit:routefound
+	..set LineRoutine="Check"_segment_"^"_routine if $length($text(@LineRoutine),";;")=2 do  quit
+	...xecute "s fail=$$"_segment_"^"_routine set routefound=1
+	...if fail!'$data(^TMP("HL7-OUT",$job,segment)) quit
+	...do Build^HL7Queue(segment,maxlength) kill ^TMP("HL7-OUT",$job,segment)
+	... // check for repeatable segments
+	...if repeat="Y" do  kill Repeat(segment)
+	....set j="" for i=1:1 set j=$order(Repeat(segment,j))  quit:j=""  do  if i=repeatnum quit
+	.....merge ^TMP("HL7-OUT",$job,segment)=Repeat(segment,j)
+	.....do Build^HL7Queue(segment,maxlength) kill ^TMP("HL7-OUT",$job,segment)
+ 
+	if fail do trace^HL7Trace("*****",$h,"Error building segment "_segment_" in message "_msgtype_" for "_$select(msgtype["ORM":"order ",1:"patient ")_$select(msgtype["ORM":OrdNum,1:RegMrn),"","","INF") quit
+	quit
+
+
+

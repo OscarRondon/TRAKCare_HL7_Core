@@ -1,0 +1,164 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteQLDCreate3^MAC^^^0
+HL7SiteQLDCreate3 // ML 14/07/2003 ; HL7 interface : create transmission packets - Queensland Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteQLDCreate3.rtn#1 $
+	quit
+ 
+CheckORC ;; build DATA array - ORC
+ORC()	set intOrdNum=$get(intOrdNum) kill DATA
+ 
+	// extract order detail
+	kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+	if SQLCODE quit SQLCODE
+ 
+	// check for new null fields and change to ""
+	if $data(old("OEORI")) do NullChange^HL7Common3("OEORI")
+ 
+	// extract code table detail
+	do CodeTable^HL7OutExtract8("OE_OrdItem")
+ 
+	set ordstatus=$piece($get(OrdDetail(10)),"^"),priority=$piece($get(OrdDetail(23)),"^"),quantity=OrdDetail(29),OrdNum=OrdDetail(88)
+	set accession=OrdDetail(148),FillerNum=OrdDetail(163)
+	kill datetime for i="17^18^START^^4","81^90^PLACED^^4","192^193^UPD^Y" do
+	.set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(OrdDetail($piece(i,"^"))),$get(OrdDetail($piece(i,"^",2))),$piece(i,"^",4),$piece(i,"^",5))
+ 
+	// extract doctors
+	kill doctor set drcodes=""
+	for i=14,246 if $get(OrdDetail(i))'="" do
+	.if OrdDetail(i)=""""!(OrdDetail(i)="""""") quit
+	.set drcode=$$Provider^HL7Common5($get(OrdDetail(i)),"","","","C","O")
+	.set OrdDetail(i)=""
+	.for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	..set drcodetype=$piece(dr,$char(2),7)
+	..set OrdDetail(i)=OrdDetail(i)_$select($length(OrdDetail(i)):"~",1:"")_$piece(dr,$char(2),1)_"^"_$piece(dr,$char(2),2)_"^"_$piece(dr,$char(2),3)_"^^^^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	for i=14,246 set doctor($select(i=14:"ORD",1:"AUTH"))=OrdDetail(i)
+ 
+	set DATA("ORC",1)=$select(ordstatus="D":"OC",1:"NW")
+	set field="" for  set field=$order(OrderNum("ORC",field)) quit:field=""  do
+	.set type=OrderNum("ORC",field) quit:type=""
+	.set DATA("ORC",field)=$select(type="MO":OrdNum,type="FI":FillerNum,1:$piece(intOrdNum,"||")_"_"_$piece(intOrdNum,"||",2))
+	set DATA("ORC",5)=$select(ordstatus="D":"CA",1:"IP"),DATA("ORC",7)=quantity_%1_%1_%1_$get(datetime("PLACED"))_%1_%1_priority
+	set DATA("ORC",9)=$get(datetime("UPD")),DATA("ORC",12)=doctor("ORD"),DATA("ORC",15)=$get(datetime("START"))
+	set DATA("ORC",19)=doctor("AUTH")
+ 
+	kill OrdDetail,doctor,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckOBR ;; build DATA array - OBR
+OBR()	set intOrdNum=$get(intOrdNum) kill DATA
+ 
+	// extract order detail
+	kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+	if SQLCODE quit SQLCODE
+ 
+	// check for new null fields and change to ""
+	if $data(old("OEORI")) do NullChange^HL7Common3("OEORI")
+ 
+	// extract item ordered detail
+	kill ItemOrdered set SQLCODE=$$ItemOrdered^HL7OutExtract8(OrdDetail(4),.ItemOrdered)
+	if SQLCODE quit SQLCODE
+	// extract external code for item ordered
+	kill ExternalCode do ExternalCodeOut^HL7Common1(intOrdNum,.ExternalCode)
+ 
+	if HL7("CHAPPFACOUT")="Y" set ReceivingApp=$get(ExternalCode(13)),ReceivingFac=$get(ExternalCode(14))
+ 
+	// extract code table detail
+	for mtable="OE_OrdItem","ARC_ItmMast" do CodeTable^HL7OutExtract8(mtable)
+ 
+	set priority=$piece($get(OrdDetail(23)),"^"),quantity=OrdDetail(29),OrdNum=OrdDetail(88),accession=OrdDetail(148),FillerNum=OrdDetail(163),ordstatus=$piece($get(OrdDetail(10)),"^")
+	kill datetime for i="81^90^PLACED^^4" do
+	.set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(OrdDetail($piece(i,"^"))),$get(OrdDetail($piece(i,"^",2))),$piece(i,"^",4),$piece(i,"^",5))
+ 
+	// extract doctors
+	kill doctor set drcode=$$Provider^HL7Common5(OrdDetail(14),"","","","C","O")
+	set doctor("ORD")="" for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	.set drcodetype=$piece(dr,$char(2),7)
+	.set doctor("ORD")=doctor("ORD")_$select($length(doctor("ORD")):"~",1:"")_$piece(dr,$char(2),1)_"^"_$piece(dr,$char(2),2)_"^"_$piece(dr,$char(2),3)_"^^^^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+ 
+	set field="" for  set field=$order(OrderNum("OBR",field)) quit:field=""  do
+	.set type=OrderNum("OBR",field) quit:type=""
+	.set DATA("OBR",field)=$select(type="MO":OrdNum,type="FI":FillerNum,1:$piece(intOrdNum,"||")_"_"_$piece(intOrdNum,"||",2))
+	set DATA("OBR",4)=ItemOrdered(2)_%1_ItemOrdered(3)_%1_"MEDTRAK"
+	if $data(ExternalCode) set DATA("OBR",4)=$get(ExternalCode(6))_%1_$get(ExternalCode(8))_%1_$piece(ItemOrdered(74),"^")_%1_ItemOrdered(2)_%1_ItemOrdered(3)_%1_"MEDTRAK"
+	set DATA("OBR",16)=$get(doctor("ORD")),DATA("OBR",25)=ordstatus,DATA("OBR",27)=quantity_%1_%1_%1_$get(datetime("PLACED"))_%1_%1_priority
+ 
+	kill OrdDetail,ItemOrdered,ExternalCode,doctor,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckOBX ;; build DATA array - OBX
+OBX()	set intOrdNum=$get(intOrdNum),count="" kill DATA
+ 
+	// extract admission detail
+	kill AdmDetail set SQLCODE=$$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail)
+ 
+	// extract order detail
+	kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+ 
+	// extract order item notes
+	kill comment set OrderNotes=$get(OrdDetail(53)) if OrderNotes'="" do
+	.set comm=$get(OrderNotes),comment="" if $listlength(comm) do
+	..for j=1:1:$listlength(comm) set comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,j),"O"),$char(13,10),HL7("LINEBK"))
+	.if comment="" quit
+	.set count=count+1
+	.if count=1 set DATA("OBX",1)=count,DATA("OBX",2)="TX",DATA("OBX",3)="OE_OIN^Order Item Notes^MEDTRAK",DATA("OBX",5)=comment,DATA("OBX",11)="F",DATA("OBX",17)="COM"
+	.if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)="TX",Repeat("OBX",count,3)="OE_OIN^Order Item Notes^MEDTRAK",Repeat("OBX",count,5)=comment,Repeat("OBX",count,11)="F",Repeat("OBX",count,17)="COM"
+ 
+	// extract clinical detail - current
+	kill comment set intMRAdmNum=$get(AdmDetail(152)) if intMRAdmNum'="" do
+	.set row="" set row=$order(^MR(intMRAdmNum,"EVO",""),-1) if row=""!(row=0) quit
+	.set intMREvoNum=intMRAdmNum_"||"_row
+	.kill Evolution if $$Evolution^HL7OutExtract4(intMREvoNum,.Evolution) quit
+	.set comm=$get(Evolution(3)),comment="" if $listlength(comm) do
+	..for j=1:1:$listlength(comm) set comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,j),"O"),$char(13,10),HL7("LINEBK"))
+	.if comment="" quit
+	.set count=count+1
+	.if count=1 set DATA("OBX",1)=count,DATA("OBX",2)="TX",DATA("OBX",3)="OE_CDC^Clinical Details Current^MEDTRAK",DATA("OBX",5)=comment,DATA("OBX",11)="F",DATA("OBX",17)="COM"
+	.if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)="TX",Repeat("OBX",count,3)="OE_CDC^Clinical Details Current^MEDTRAK",Repeat("OBX",count,5)=comment,Repeat("OBX",count,11)="F",Repeat("OBX",count,17)="COM"
+ 
+	// extract clinical detail - previous
+	kill comment do
+	.set row="" set row=$order(^PAPER(intRegMrn,"PHIST",""),-1) if row=""!(row=0) quit
+	.set intPHistNum=intRegMrn_"||"_row
+	.kill PHistDetail if $$PatHistCond^HL7OutExtract1(intPHistNum,.PHistDetail) quit
+	.set comm=$get(PHistDetail(8)),comment="" if $listlength(comm) do
+	..for j=1:1:$listlength(comm) set comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,j),"O"),$char(13,10),HL7("LINEBK"))
+	.if comment="" quit
+	.set count=count+1
+	.if count=1 set DATA("OBX",1)=count,DATA("OBX",2)="TX",DATA("OBX",3)="OE_CDP^Clinical Details Previous^MEDTRAK",DATA("OBX",5)=comment,DATA("OBX",11)="F",DATA("OBX",17)="COM"
+	.if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)="TX",Repeat("OBX",count,3)="OE_CDP^Clinical Details Previous^MEDTRAK",Repeat("OBX",count,5)=comment,Repeat("OBX",count,11)="F",Repeat("OBX",count,17)="COM"
+ 
+	// extract questions
+	set row="" for  set row=$order(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"QA",row)) quit:row=""  do  if count=1,repeat'="Y" quit
+	.set intQuesNum=intOrdNum_"||"_row kill comment
+	.kill Question set SQLCODE=$$Question^HL7OutExtract8(intQuesNum,.Question)
+	.if SQLCODE quit
+ 
+	. // extract code table detail
+	.set mtable="OE_OrdQuestion" do CodeTable^HL7OutExtract8(mtable)
+ 
+	.set code=$piece(Question(3),"^"),desc=$piece(Question(3),"^",2),type=$piece(Question(3),"^",3)
+	.set intQuestion=Question(3),answer=Question(4) if answer="",type'="CheckBox" quit
+	. // convert question type to HL7 data type
+	.set datatype=$select(type="CheckBox":"CE",type="ComboBox":"TX",type="DateTextBox":"DT",type="Number":"NM",type="MultilineText":"TX",type="TextBox":"TX",type="TimeTextBox":"TM",1:"")
+	. // convert check box
+	.if type="CheckBox" set answer=$select(answer="on":"T^True^MEDTRAK",1:"F^False^MEDTRAK")
+	. // convert multiline text
+	.if type="MultilineText" do
+	..set comm=$get(answer),comment="" if $listlength(comm) do  set answer=comment
+	...for j=1:1:$listlength(comm) set comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,j),"O"),$char(13,10),HL7("LINEBK"))
+	. // convert HL7 reserved characters
+	.if datatype="TX",type'="MultilineText" do
+	..set answer=$$TextConversion^HL7Common12(answer,"O")
+ 	.set count=count+1
+	.if count=1 set DATA("OBX",1)=count,DATA("OBX",2)=datatype,DATA("OBX",3)=code_"^"_desc_"^MEDTRAK",DATA("OBX",5)=answer,DATA("OBX",11)="F",DATA("OBX",17)="COM"
+	.if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)=datatype,Repeat("OBX",count,3)=code_%1_desc_%1_"MEDTRAK",Repeat("OBX",count,5)=answer,Repeat("OBX",count,11)="F",Repeat("OBX",count,17)="COM"
+ 
+	kill AdmDetail,OrdDetail,Evolution,Question,PHistDetail
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

@@ -1,0 +1,182 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SiteRIECreate^MAC^^^0
+HL7SiteRIECreate // ML 18/9/01 ; HL7 interface : create transmission packets - Royal Infirmary Edinburgh
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteRIECreate.rtn#1 $
+	quit
+	
+Check1 ;; get data and build packets
+ORDER(intOrdNum,link) new (intOrdNum,link) set intOrdNum=$get(intOrdNum),link=$get(link),type="" kill queue,^TMP("HL7-OUT",$job)
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2)
+	
+	// check link status
+	if '$$Init^HL7Create quit
+	
+	// find rowid's for segments
+	&SQL(SELECT OEORI_LabEpisodeNo, PAADM_PAPMI_DR, PAADM_RowID
+		INTO :OrdNum, :intRegMrn, :intAdmNum FROM OE_Order, OE_OrdItem, PA_Adm
+		WHERE OEORI_OEORD_ParRef = OEORD_RowId AND PAADM_RowID = OEORD_Adm_DR AND OEORI_RowId = :intOrdNum)
+	
+	if SQLCODE do trace^HL7Trace("*****",$h,"SQL error locating admission/registration number for order "_OrdNum,"","","INF") quit
+	
+	set RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+	
+	// get external system for location
+	set ExternalSys=$$ExternalSys^HL7Common1(intOrdNum,.reject) if reject'="" do  quit
+	. do trace^HL7Trace("*****",$h,reject,"","","INF")
+	
+	// build data arrays
+	set fail="" for label="PID","PD1","AL1","PV1","ORC","OBX" do  quit:fail
+	. set intnum=$select((label="PID"!(label="PD1")!(label="AL1")):intRegMrn,label="PV1":intAdmNum,1:intOrdNum)
+	. set routine=$select((label="ORC"!(label="OBX")):"HL7SiteRIECreate2",1:"HL7SiteRIECreate1")
+	. xecute "s fail=$$"_label_"^"_routine_"("""_intnum_""")"
+	. if fail do trace^HL7Trace("*****",$h,"SQL error building segment "_$select(label="ORC":"ORC/OBR",1:label)_" for order "_OrdNum,"","","INF")
+	if fail quit
+	
+	set type="ORM"_%1_"O01"
+	for label="PID:31","PD1:31","AL1:8","PV1:52","ORC:20","OBR:44","OBX:17" do
+	. if label["AL1" do  quit
+	. . kill ^TMP("HL7-OUT",$job,"AL1") set x="" for  set x=$order(Allergy(x)) quit:x=""  merge ^TMP("HL7-OUT",$job,"AL1")=Allergy(x) do Build^HL7Queue($piece(label,":"),$piece(label,":",2))
+	. do Build^HL7Queue($piece(label,":"),$piece(label,":",2))
+	
+	// build questions from order
+	set count=1 set x="" for  set x=$order(^OEORD(ord1,"I",ord2,"QA",x)) quit:x=""  do
+	. set count=count+1 do Question^HL7SiteRIECreate2(intOrdNum,x,count) if '$data(^TMP("HL7-OUT",$job,"OBX")) set count=count-1 quit
+	. do Build^HL7Queue("OBX",14) kill ^TMP("HL7-OUT",$job,"OBX")
+	
+	if $length(queue) do Queue^HL7Queue(link,type) kill queue,^TMP("HL7-OUT",$job)
+	quit
+	
+Check2 ;; unsolicited ADT messages
+ADT(intNum,link,type) new (intNum,link,type) set intNum=$get(intNum),link=$get(link),type=$get(type) kill queue,^TMP("HL7-OUT",$job)
+	
+	// check link status
+	if '$$Init^HL7Create quit
+	
+	// sort out 'pat from' and 'pat to' for merge
+	if type="ADT_A34" set intRegFrom=$piece(intNum,"||"),intRegTo=$piece(intNum,"||",2),intRegMrn=intRegTo
+	
+	// is this a person or admission update
+	if type'="A31",(type'="A28"),(type'="A34") do
+	. set intAdmNum=intNum
+	. &SQL(SELECT PAADM_PAPMI_DR INTO :intRegMrn FROM PA_Adm WHERE PAADM_RowID = :intAdmNum)
+	if type="A31"!(type="A28") set intRegMrn=intNum
+	
+	// build data arrays
+	set fail="" for label="PID","PD1","PV1" do  quit:fail
+	. if label="PD1",type="A34" quit
+	. if label="PV1",(type="A28"!(type="A31")!(type="A34")) quit
+	. set intnum=$select((label="PID"!(label="PD1")):intRegMrn,1:intAdmNum)
+	. xecute "s fail=$$"_label_"^HL7SiteRIECreate1("""_intnum_""")"
+	. if fail do trace^HL7Trace("*****",$h,"SQL error building segment for "_label_"<"_intnum_">","","","INF")
+	if fail quit
+	if type="A34" set fail=$$MRG^HL7SiteRIECreate1(intRegFrom) ##; noalert
+	
+	set type=$translate(type,"_",%1) //"ADT"_%1_type
+	set ^TMP("HL7-OUT",$job,"EVN",1)=type,^TMP("HL7-OUT",$job,"EVN",2)=$$Date^HL7
+	
+	for label="EVN:6","PID:31","PD1:31","NK1:10","PV1:52","MRG:7" do
+	. if label["PD1",type["A34" quit
+	. if label["NK1",type'["A34" do  quit
+	. . // build next of kin array
+	. . if $data(^PAPER(intRegMrn,"NOK")) do
+	. . . set x=0 for  set x=$order(^PAPER(intRegMrn,"NOK",x)) quit:x=""  set xx=^(x) do
+	. . . . set fail=$$NK1^HL7SiteRIECreate1(xx,2) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for NK1 <"_intRegMrn_">","","","INF") quit ##; noalert
+	. . . . set count=count+1,^TMP("HL7-OUT",$job,"NK1",1)=count do Build^HL7Queue($piece(label,":"),$piece(label,":",2)) kill ^TMP("HL7-OUT",$job,"NK1")
+	. if label["PV1",(type["A28"!(type["A31")!(type["A34")) quit
+	. if label["MRG",type'["A34" quit
+	. do Build^HL7Queue($piece(label,":"),$piece(label,":",2))
+	
+	if $data(queue) do Queue^HL7Queue(link,type) kill queue,^TMP("HL7-OUT",$job)
+	quit
+	
+Check3 ;; get data and build packets
+Appointment(appointment,intOrdNum,link,sendon) new (appointment,intOrdNum,link,sendon)
+	set appointment=$get(appointment),intOrdNum=$get(intOrdNum),link=$get(link),sendon=$get(sendon),type="" kill queue,^TMP("HL7-OUT",$job)
+	
+	// check link status
+	if '$$Init^HL7Create quit
+	
+	// find rowid's for segments
+	&SQL(SELECT PAADM_PAPMI_DR, PAADM_RowID INTO :intRegMrn, :intAdmNum FROM OE_Order, OE_OrdItem, PA_Adm
+		WHERE OEORI_OEORD_ParRef = OEORD_RowId AND PAADM_RowID = OEORD_Adm_DR AND OEORI_RowId = :intOrdNum)
+	
+	// check if appointment exists on order
+	if intOrdNum'="",sendon="PA" do  if appointment'="" quit
+	. &SQL(SELECT OEORI_APPT_DR INTO :appointment FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	
+	// extract order item rowid based on appointment
+	if intOrdNum="",appointment'="" do
+	. &SQL(SELECT OEORI_RowID INTO :intOrdNum FROM OE_OrdItem WHERE OEORI_APPT_DR = :appointment)
+	
+	if SQLCODE do trace^HL7Trace("*****",$h,"SQL error locating admission for order <"_intOrdNum_">","","","INF") quit
+	
+	// get external system for location
+	set ExternalSys=$$ExternalSys^HL7Common1(intOrdNum)
+	
+	// check if med record type 'dicom' requested for appointment session
+	set (dicom,session)="",rowid=$piece(appointment,"||",1,2)
+	if sendon="NRA" do
+	. &SQL(SELECT AS_RBEffDateSession_DR INTO :session FROM RB_ApptSchedule WHERE AS_RowId = :rowid)
+	if session'="" do
+	. set x1=$piece(session,"||",1),x2=$piece(session,"||",2),x3=$piece(session,"||",3) if x1=""!(x2="")!(x3="" ) quit
+	. set x=0 for  set x=$order(^RB("RES",x1,"DATE",x2,"SESS",x3,"RTMAV",x)) quit:x=""  do  quit:dicom
+	. . set mrtype=$piece(^(x),"^",2),mrcode=$piece(^RTC("TYPE",mrtype),"^",1) if mrcode="DCM" set dicom=1 quit
+	if sendon="NRA",dicom="" quit
+	if dicom do
+	. set fail=$$SCH^HL7SiteRIECreate2(intOrdNum,appointment) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for SCH <"_intOrdNum_">","","","INF") quit ##; noalert
+	
+	set fail=$$PID^HL7SiteRIECreate1(intRegMrn) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for PID <"_intRegMrn_">","","","INF") quit
+	set fail=$$PV1^HL7SiteRIECreate1(intAdmNum) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for PV1 <"_intAdmNum_">","","","INF") quit ##; noalert
+	
+	if 'dicom do  if fail quit
+	. set fail=$$ORC^HL7SiteRIECreate2(intOrdNum,appointment) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for ORC/OBR <"_intOrdNum_">","","","INF") quit ##; noalert
+	
+	set type=$select(sendon="NRA":"SIU"_%1_"S12",1:"ORM"_%1_"O01")
+	
+	for label="SCH:25","PID:31","PV1:52","ORC:20","OBR:44" do
+	. if 'dicom,label["SCH" quit
+	. if dicom,(label["ORC"!(label["OBR")) quit
+	. do Build^HL7Queue($piece(label,":"),$piece(label,":",2))
+	
+	if $data(queue) do Queue^HL7Queue(link,type) kill queue,^TMP("HL7-OUT",$job)
+	quit
+	
+Check4 ;; get data and build packets
+Results(ordresult,link,ExternalSys) new (ordresult,link,ExternalSys)
+	set ordresult=$get(ordresult),link=$get(link),ExternalSys=$get(ExternalSys),intOrdNum=$piece(ordresult,"||",1,2) kill queue,^TMP("HL7-OUT",$job)
+	// check link status
+	if '$$Init^HL7Create quit
+	
+	// find rowid's for segments
+	&SQL(SELECT PAADM_PAPMI_DR, PAADM_RowID INTO :intRegMrn, :intAdmNum FROM OE_Order, OE_OrdItem, PA_Adm
+		WHERE OEORI_OEORD_ParRef = OEORD_RowId AND PAADM_RowID = OEORD_Adm_DR AND OEORI_RowId = :intOrdNum)
+	
+	// extract appointment
+	set appointment=""
+	&SQL(SELECT OEORI_APPT_DR INTO :appointment FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	
+	// extract path
+	set filepath=""
+	&SQL(SELECT RES_FileName INTO :filepath FROM OE_OrdResult WHERE RES_RowId = :ordresult)
+	
+	set fail=$$PID^HL7SiteRIECreate1(intRegMrn) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for PID <"_intRegMrn_">","","","INF") quit
+	set fail=$$PV1^HL7SiteRIECreate1(intAdmNum) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for PV1 <"_intAdmNum_">","","","INF") quit ##; noalert
+	set fail=$$ORC^HL7SiteRIECreate2(intOrdNum,appointment) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for ORC/OBR <"_intOrdNum_">","","","INF") quit ##; noalert
+	set fail=$$OBX^HL7SiteRIECreate2(intOrdNum,ordresult,filepath) if fail do trace^HL7Trace("*****",$h,"SQL error building segment for OBX <"_filepath_">","","","INF") quit ##; noalert
+	
+	set type="ORU"_%1_"O01"
+	
+	for label="PID:31","PV1:52","OBR:44","OBX:10" do
+	. do Build^HL7Queue($piece(label,":"),$piece(label,":",2))
+	
+	if $data(queue) do Queue^HL7Queue(link,type) kill queue,^TMP("HL7-OUT",$job)
+	quit
+	
+	// check link status
+Init() lock +^SSHL7(link,"LOCK"):0 if  lock -^SSHL7(link,"LOCK") job Start^HL7(link)
+	// check if link is setup
+	quit $$Init^HL7
+
+
+

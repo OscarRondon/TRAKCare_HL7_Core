@@ -1,0 +1,55 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract5^MAC^^^0
+HL7OutExtract5 // ML 06/06/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract5.rtn#1 $
+	quit
+ 
+	// extract hospital number detail
+HospMrn(intHospMrn,HospMrn) new (intHospMrn,HospMrn,old,curr)
+	&SQL(SELECT * INTO :HospMrn() FROM RT_Master WHERE RTMAS_RowId = :intHospMrn)
+	quit SQLCODE
+ 
+	// extract hospital number volume detail
+HospMrnVol(volrowid,Volume) new (volrowid,Volume,old,curr)
+	&SQL(SELECT * INTO :Volume() FROM RT_MasVol WHERE RTMAV_RowId = :volrowid)
+	quit SQLCODE
+ 
+	// extract hospital number volume transaction detail
+HospMrnVolTrans(transrowid,VolTrans) new (transrowid,VolTrans,old,curr)
+	&SQL(SELECT * INTO :VolTrans() FROM RT_MVTrans WHERE RTMVT_RowId = :transrowid)
+	quit SQLCODE
+ 
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable),(code,desc,other)=""
+ 
+	if mtable="RT_Master" do
+	.for i=9 if $get(HospMrn(i))'="" do  set HospMrn(i)=code_"^"_desc,(code,desc,other)=""
+	..set value=HospMrn(i) quit:value=""""""
+	..if i=9 do
+	... &SQL(SELECT TYP_Code, TYP_Desc INTO :code, :desc FROM RTC_MRecordType WHERE TYP_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(HospMrn(""),-1) if $data(HospMrn(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",9,"[(","_i_",") quit
+	..set HospMrn(i)=$$TextConversion^HL7Common12(HospMrn(i),"O")
+ 
+	if mtable="RT_MVTrans" do
+	.for i=12,13 if $get(VolTrans(i))'="" do  set VolTrans(i)=$select($get(VolTrans(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=VolTrans(i) quit:value=""""""
+	..if i=12 do
+	... &SQL(SELECT CTLOC_Code, CTLOC_Desc INTO :code, :desc FROM CT_Loc WHERE CTLOC_RowId = :value)
+	..if i=13 do
+	... &SQL(SELECT CTPCP_Code, CTPCP_Desc INTO :code, :desc FROM CT_CareProv WHERE CTPCP_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(VolTrans(""),-1) if $data(VolTrans(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",12,13,"[(","_i_",") quit
+	..set VolTrans(i)=$$TextConversion^HL7Common12(VolTrans(i),"O")
+ 
+	quit
+
+
+

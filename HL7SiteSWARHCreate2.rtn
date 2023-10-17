@@ -1,0 +1,21 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteSWARHCreate2^MAC^^^0
+HL7SiteSWARHCreate2 // ML 21/01/2004 ; HL7 interface : create transmission packets - South West Alliance of Rural Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteSWARHCreate2.rtn#1 $
+	quit
+ 
+CheckPV1 ;; build DATA array - PV1
+PV1()	set intRegMrn=$get(intRegMrn),intAdmNum=$get(intAdmNum) kill DATA
+ 
+	do
+	.if mandatory'="Y" quit
+	.if mandatory="Y" set DATA("PV1",1)=$increment(count("PV1")),DATA("PV1",2)="N"
+	.merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+ 
+	kill AdmDetail,AdmInsurance,MRAdm,doctor
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

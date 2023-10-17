@@ -1,0 +1,124 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteSBAHCCreate3^MAC^^^0
+HL7SiteSBAHCCreate3 // ML 05/05/2003 ; HL7 interface : create transmission packets - Sultan bin Abdulaziz Humanitarian Centre
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteSBAHCCreate3.rtn#1 $
+	quit
+ 
+CheckORC ;; build DATA array - ORC
+ORC()	set intOrdNum=$get(intOrdNum) kill DATA
+ 
+	// extract order detail
+	kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+	if SQLCODE quit SQLCODE
+ 
+	// check for new null fields and change to ""
+	if $data(old("OEORI")) do NullChange^HL7Common3("OEORI")
+ 
+	// extract code table detail
+	do CodeTable^HL7OutExtract8("OE_OrdItem")
+ 
+	set location=OrdDetail(6),ordstatus=$piece($get(OrdDetail(10)),"^"),priority=$piece($get(OrdDetail(23)),"^"),quantity=OrdDetail(29),OrdNum=OrdDetail(88)
+	set accession=OrdDetail(148),FillerNum=OrdDetail(163)
+	kill datetime for i="17^18^ST^Y","189^190^ARR^Y","192^193^UPD^Y" do
+	.set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(OrdDetail($piece(i,"^"))),$get(OrdDetail(i,"^",2)),$piece(i,"^",4))
+ 
+	// extract doctors
+	kill doctor if $$OrdDoctor^HL7OutExtract8(intOrdNum,.doctor)
+ 
+	set DATA("ORC",1)=$select(ordstatus="D":"OC",1:"NW")
+	set field="" for  set field=$order(OrderNum("ORC",field)) quit:field=""  do
+	.set type=OrderNum("ORC",field) quit:type=""
+	.if type="MO" set DATA("ORC",field)=OrdNum_"_"_$piece(intOrdNum,"||",2)
+	.if type="FI" set DATA("ORC",field)=FillerNum
+	set DATA("ORC",5)=$select(ordstatus="D":"CA",1:"IP")
+	set DATA("ORC",7)=quantity_%1_%1_%1_$get(datetime("ST"))_%1_%1_$select(priority="STAT":"S",priority="PRN":"PRN",1:"R")
+	set (DATA("ORC",9),DATA("ORC",15))=$$Date^HL7	
+	set (DATA("ORC",10),DATA("ORC",12))=$piece($get(doctor("ORDER")),"^")_%1_$piece($get(doctor("ORDER")),"^",2)
+	set DATA("ORC",14)=$piece($get(doctor("ORDER")),"^",3)_" X"_$piece($get(doctor("ORDER")),"^",4)
+	set DATA("ORC",17)=$piece(location,"^")_%1_$piece(location,"^",2)
+ 
+	kill OrdDetail,doctor,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckOBR ;; build DATA array - OBR
+OBR()	set intOrdNum=$get(intOrdNum) kill DATA
+ 
+	// extract order detail
+	kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+	if SQLCODE quit SQLCODE
+ 
+	// check for new null fields and change to ""
+	if $data(old("OEORI")) do NullChange^HL7Common3("OEORI")
+ 
+	// extract item ordered detail
+	kill ItemOrdered set SQLCODE=$$ItemOrdered^HL7OutExtract8(OrdDetail(4),.ItemOrdered)
+	if SQLCODE quit SQLCODE
+	// extract external code for item ordered
+	kill ExternalCode do ExternalCodeOut^HL7Common1(intOrdNum,.ExternalCode)
+ 
+	if HL7("CHAPPFACOUT")="Y" set ReceivingApp=$get(ExternalCode(13)),ReceivingFac=$get(ExternalCode(14))
+ 
+	// extract code table detail
+	for mtable="OE_OrdItem","ARC_ItmMast" do CodeTable^HL7OutExtract8(mtable)
+	
+	set priority=$piece($get(OrdDetail(23)),"^"),quantity=OrdDetail(29),OrdNum=OrdDetail(88),accession=OrdDetail(148),FillerNum=OrdDetail(163)
+	// ab 4.05.05 51947
+	set dateexec=OrdDetail(115),timeexec=OrdDetail(116),executed=$select(dateexec'="":$$Date^HL7(dateexec_","_timeexec),1:"")
+	kill datetime for i="17^18^ST^Y","189^190^ARR^Y","192^193^UPD^Y" do
+	.set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(OrdDetail($piece(i,"^"))),$get(OrdDetail(i,"^",2)),$piece(i,"^",4))
+ 
+	set ordertype=$$SubCatType^HL7Common11(OrdDetail(4))
+	// extract specimen for a lab order
+	set (speccode,collected,site)="" if ordertype="LAB" do
+	.set row=$order(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"SPEC",0)) quit:row=""  do
+	.set intSpecNum=intOrdNum_"||"_row
+	.kill OrdSpecimen set SQLCODE=$$OrdSpecimen^HL7OutExtract8(intSpecNum,.OrdSpecimen)
+	.if SQLCODE quit
+	.set speccode=OrdSpecimen(3),date=OrdSpecimen(6),time=OrdSpecimen(7),collected=$select(date'="":$$Date^HL7(date_","_time),1:"")
+	.set rowx=$order(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"SPEC",row,"SITE",0)) quit:rowx=""
+	.set site=$piece(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"SPEC",row,"SITE",rowx),"^")
+	. // check for daybook specimen site
+	.if OrdDetail(232)'="" set site=$piece($piece(OrdDetail(232),","),"|",2)
+	
+	// extract doctors
+	kill doctor if $$OrdDoctor^HL7OutExtract8(intOrdNum,.doctor)
+	
+	// ab 4.05.05 51947 - extract questions
+	set (provdiag,exam)=""
+	set row="" for  set row=$order(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"QA",row)) quit:row=""  do
+	.set intQuesNum=intOrdNum_"||"_row
+	.kill Question set SQLCODE=$$Question^HL7OutExtract8(intQuesNum,.Question)
+	.if SQLCODE quit
+	.set intQuestion=Question(3),answer=Question(4)
+	.if answer="" quit
+	.if (" 52 53 ")'[(" "_intQuestion_" ") quit
+	. // extract code table detail
+	.do CodeTable^HL7OutExtract8("OE_OrdQuestion")
+	.set type=$piece(Question(3),"^",3)
+	.set answer=$select(type="CheckBox":$select(answer="on":"YES",1:"NO"),1:answer)
+	.// check for generic answers
+	.if type="ComboBox"!(type="TextBox") do
+	..set ans=##class(%Collation).AlphaUp(answer) quit:ans=""  quit:'$data(^PAC("QANS",0,"Desc",ans))
+	..set rowx=$order(^PAC("QANS",0,"Desc",ans,"")) if rowx'="" set answer=$piece($get(^PAC("QANS",rowx)),"^")
+	.if intQuestion=52 set provdiag=answer
+	.if intQuestion=53 set exam=answer
+ 
+	set field="" for  set field=$order(OrderNum("OBR",field)) quit:field=""  do
+	.set type=OrderNum("OBR",field) quit:type=""
+	.if type="MO" set DATA("OBR",field)=OrdNum_"_"_$piece(intOrdNum,"||",2)
+	.if type="FI" set DATA("OBR",field)=FillerNum
+	set DATA("OBR",4)=$get(ItemOrdered(2))_%1_$get(ItemOrdered(3))_%1_"MEDTRAK"
+	if $data(ExternalCode) set DATA("OBR",4)=$get(ExternalCode(6))_%1_$get(ExternalCode(8))_%1_$piece($get(ItemOrdered(74)),"^")_%1_$get(ItemOrdered(2))_%1_$get(ItemOrdered(3))_%1_"MEDTRAK"
+	if ordertype="L" set DATA("OBR",7)=executed,DATA("OBR",11)="S",DATA("OBR",15)=speccode_%1_%1_%1_site
+	set DATA("OBR",16)=$piece($get(doctor("ORDER")),"^")_%1_$piece($get(doctor("ORDER")),"^",2),DATA("OBR",17)=$piece($get(doctor("ORDER")),"^",3)_" X"_$piece($get(doctor("ORDER")),"^",4)
+	set DATA("OBR",27)=quantity_%1_%1_%1_$get(datetime("ST"))_%1_%1_$select(priority="STAT":"S",priority="PRN":"PRN",1:"R")
+	set DATA("OBR",13)=provdiag,DATA("OBR",31)=exam
+ 
+	kill OrdDetail,OrdSpecimen,ItemOrdered,ExternalCode,doctor,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

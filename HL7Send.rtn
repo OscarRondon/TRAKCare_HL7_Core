@@ -1,0 +1,142 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Send^MAC^^^0
+HL7Send // ML 27/12/2002 ; HL7 Interface - send outbound messages
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Send.rtn#1 $
+	quit
+	
+	// for each message to be sent
+Send()	set (failack,failtimeout,action)=""
+	
+	// wait before sending messages
+	set StopNow="" if TIMEOUT("BEF-SEND")>0 do
+	. do trace^HL7Trace("*****",$h,"Wait before send timeout set - sending messages in "_TIMEOUT("BEF-SEND")_" seconds","","","INF")
+	. for i=1:1:TIMEOUT("BEF-SEND") do  quit:StopNow
+	. . if $$CheckStop^HL7(link) set flagstop=1,StopNow=1 quit
+	. . h 1
+	if StopNow do Shutdown^HL7(1)
+	
+	// read in unwanted traffic
+	set xx=$$Read^HL7(,TIMEOUT("RESPONSE")) set readcount=""
+	
+	// send any replay messages
+	if $data(^SSHL7(link,"REPLAY")) do
+	. set x1="" for  set x1=$order(^SSHL7(link,"REPLAY",x1)) quit:x1=""  do
+	. . // prevent sending till message build complete
+	. . lock +^SSHL7(link,"REPLAY",x1):5 else  quit
+	. . // send one message at a time
+	. . set controlId=""
+	. . set x2=0 for  set x2=$order(^SSHL7(link,"REPLAY",x1,"MSG",x2)) quit:x2=""  do
+	. . . set record=$get(^SSHL7(link,"REPLAY",x1,"MSG",x2)) if record["MSH" set controlId=$piece(record,"|",10) do
+	. . . . kill trace,tracerowid do trace^HL7Trace("*****",$h,"Sending queued REPLAY message - message control Id "_controlId,"","","INF") kill trace,tracerowid
+	. . . . write ESC("VT")
+	. . . write record,ESC("CR") set trace=$get(trace)+1,trace(trace)=record
+	. . write ESC("FS"),ESC("CR"),!
+	. . do trace^HL7Trace("M-->E",$h,"","","Y")
+	. . set actionmessage="" do Response(.actionmessage)
+	. . do DelReplay^HL7Replay(link,x1)
+	. . kill trace,tracerowid do trace^HL7Trace("*****",$h,"Queued REPLAY message of control Id "_controlId_" sent and removed from REPLAY queue","","","INF")
+	
+	set (failack,failtimeout,action,controlId)=""
+	set x1="" for  set x1=$order(^SSHL7(link,"QUEUE",x1)) quit:x1=""  do  if action'="" quit
+	. // prevent sending till message build complete
+	. lock +^SSHL7(link,"QUEUE",x1):5 else  quit
+	. kill trace,tracerowid
+	. // send one message at a time
+	. set headdetail=$get(^SSHL7(link,"QUEUE",x1)) set record=$$SendHead(headdetail) set trace=1,trace(1)=record
+	. write ESC("VT"),record,ESC("CR")
+	. set x2=0 for  set x2=$order(^SSHL7(link,"QUEUE",x1,"MSG",x2)) quit:x2=""  do
+	. . set record=$get(^SSHL7(link,"QUEUE",x1,"MSG",x2)) write record,ESC("CR") set trace=$get(trace)+1,trace(trace)=record
+	. write ESC("FS"),ESC("CR"),!
+	. do trace^HL7Trace("M-->E",$h,"","","Y")
+	. set actionmessage="" do Response(.actionmessage)
+	
+	. // check response action
+	. set actiontype=""
+	. if pass="Fail-1" do
+	. . set failtimeout=failtimeout+1,failack=""
+	. . set actiontype=$select(failtimeout=MaxNum("noresp"):ActionMax("noresp"),1:Action("noresp"))
+	. . set actionmessage=$select(failtimeout=MaxNum("noresp"):MaxNum("noresp")_" consecutive timeouts have occurred.",1:actionmessage)
+	. if pass="Fail-2" do
+	. . set failack=failack+1,failtimeout=""
+	. . set actiontype=$select(failack=MaxNum("nak"):ActionMax("nak"),1:Action("nak"))
+	. . set actionmessage=$select(failack=MaxNum("nak"):MaxNum("nak")_" consecutive rejections have occurred.",1:actionmessage)
+	. if actiontype'="" do  quit
+	. . set action=$$Action^HL7(actiontype,actionmessage)
+	. . if actiontype="SH"!(actiontype="SE")!(actiontype="RT") quit
+	. . if actiontype="RM"!(actiontype="SK") set (failack,failtimeout)=""
+	. . if action'="" xecute action set (action,actiontype)=""
+	
+	. // count number of messages sent
+	. if $increment(^SSHL7(link,"COUNT"))
+	
+	. // remove sent message from queue
+	. lock -^SSHL7(link,"QUEUE",x1) do DelQueue^HL7Queue(link,x1)
+	
+	quit action
+	
+	// read response
+Response(reject) set reject="" kill trace
+	set pass=$$Read^HL7("Y",TIMEOUT("RESPONSE")) do
+	. // check for response
+	. if '$data(trace)!(pass="")!(pass="RDERR") set reject="No response received.",pass="Fail-1" quit
+	. // build segment data
+	. if $data(trace) do
+	. . set j="" for  set j=$order(trace(j)) quit:j=""  set seg=trace(j) do Data^HL7Data set previd=$piece(seg,%,1)
+	. . if $data(trace)>1 do trace^HL7Trace("E-->M",$h,"",tracerowid) kill trace
+	. . if 'T set reject="Timeout receiving next segment, continuing."
+	
+	. set readcount=""
+	. // check if acknowledged
+	. set check=$get(DATA("MSA",1)) if ",AA,AE,AR,CA,CE,CR,"'[(","_check_",") set reject="NAK - Message Failed with unknown MSA-2 code "_check_", MSA-3 description "_$get(DATA("MSA",3)),pass="Fail-2" quit
+	. // check if rejected
+	. if check'="AA",check'="CA" set reject=$get(DATA("MSA",1))_" - "_$get(DATA("MSA",3))_".",pass="Fail-2" quit
+	. // message id match
+	. if $get(DATA("MSA",2))'=controlId,reject'="" set reject="Control Id received in MSA "_$get(DATA("MSA",2))_" does not match Id "_controlId_" sent.",pass="Fail-2"
+	. // check if ORR^O02 - order confirmation response message update
+	. if $piece($get(DATA("MSH",8)),"^",1,2)="ORR^O02" do
+	. . kill ^TMP($zname,$job) merge ^TMP($zname,$job)=DATA kill DATA
+	. . if $$Check^HL7Order("ORR^O02")
+	// setup rejections for outbound messages
+	if pass="Fail-2" do
+	. kill PLIST for i=1:1:24 set PLIST(i)=""
+	. kill PLIST(1) set PLIST(2)=link,PLIST(9)=+$h,PLIST(10)=$piece($h,",",2),PLIST(14)=reject,PLIST(19)=$translate($piece($get(^SSHL7(link,"QUEUE",x1)),"\"),"^","_")
+	. set PLIST(24)=$get(tracerowid),PLIST(27)="R"
+	. set x2=0 for  set x2=$order(^SSHL7(link,"QUEUE",x1,"MSG",x2)) quit:x2=""  do
+	. . set segment=^(x2)
+	. . // setup required patient details
+	. . if $piece(segment,"|")="PID" do
+	. . . // extract patient number
+	. . . set PLIST(3)="" do NumTypeDetail^HL7Common2(PatNum("REG"),"",.field,"","","","",.usetype,.usecode)
+	. . . set numbers=$piece(segment,"|",field+1) quit:'$length($translate(numbers,"^~"))
+	. . . for i=1:1:$length(numbers,"~") set number=$piece(numbers,"~",i) do  quit:PLIST(3)'=""  quit:reject'=""
+	. . . . if $piece($piece(number,"^",usetype),"&")'=usecode!($piece(number,"^")="") quit
+	. . . . set PLIST(3)=$piece(number,"^")
+	. . . set PLIST(5)=$translate($piece(segment,"|",6),"^","_"),PLIST(6)=$select($piece($piece(segment,"|",8),"^")'?8N:"",1:$zdateh($extract($piece($piece(segment,"|",8),"^"),1,8),8))
+	. . . set PLIST(7)=$piece(segment,"|",9)
+	. . if $piece(segment,"|")="OBR" do
+	. . . set PLIST(4)=$piece($piece(segment,"|",3),"^"),PLIST(8)=$translate($piece($piece(segment,"|",5),"~"),"^","_"),PLIST(15)=$piece($piece(segment,"|",4),"^")
+	. &SQL(INSERT INTO OE_HL7Messages VALUES :PLIST())
+	. set rejrowid=%ROWID
+	. do reject^HL7Trace(tracerowid,rejrowid)
+	quit
+	
+	// build and send 'msh' record
+SendHead(headdetail) set headdetail=$get(headdetail),type=$piece(headdetail,"\") kill DATA
+	
+	set record=""
+	set routefound="" for routine="HL7Site"_HL7("OUTCODE")_"Create0","HL7Create0" do  quit:routefound
+	. set LineRoutine="CheckMSH^"_routine if $length($text(@LineRoutine),";;")=2 do  quit
+	. . xecute "s record=$$MSH^"_routine set routefound=1
+	
+	set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7AcknowledgeSegment","MSH")
+	set maxlength=$list(detail,2)
+	
+	set record="MSH"_DATA("MSH",1)_DATA("MSH",2)
+	for i=3:1:maxlength set record=record_"|"_$get(DATA("MSH",i))
+	
+	kill DATA
+	quit record
+
+
+

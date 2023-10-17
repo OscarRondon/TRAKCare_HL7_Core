@@ -1,0 +1,124 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteMONCreate4^MAC^^^0
+HL7SiteMONCreate4 // ab 23.11.05
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteMONCreate4.rtn#1 $
+	quit
+Check ;;
+  
+CheckDSP ;; build data array - DSP
+DSP()	set searchtype=$get(searchtype),rowid=$get(rowid) kill DATA
+	set line=""
+	set delim="\"
+	
+	if searchtype="APN" do
+	. set intAdmNum="",intRegMrn=rowid
+	. kill PatDetail,PatDetailx set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	. do BuildAddress^HL7OutExtract1
+	. for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+	. kill number set SQLCODE=$$PatNum^HL7OutExtract1(intRegMrn,intAdmNum,.number)
+	. set Address("PERM")=""
+	. if $data(PermAddress) do
+	. . for k="CTY","PRV","PST" set PermAddress(k)=$piece($$Address^HL7Common7(.reject,"O",k,$get(PermAddress(k))),"|",$select(k="CTY":2,1:1))
+	. . set Address("PERM")=$get(PermAddress("LINE1"))_%1_$get(PermAddress("LINE2"))_%1_$get(PermAddress("CTY"))_%1_$get(PermAddress("PRV"))_%1_$get(PermAddress("PST"))_%1_%1_"P"_%1_$get(PermAddress("ADDR2"))_%1_%1_%1
+	. //
+	. set $piece(line,delim,1)="" if $data(number("REG")) set $piece(line,delim,1)=$piece($get(number("REG")),"^",1)
+	. set $piece(line,delim,2)="" if $data(number("GOV")) set $piece(line,delim,2)=$piece($get(number("GOV")),"^",1)
+	. set $piece(line,delim,3)=$get(PatDetail(5)),$piece(line,delim,4)=$get(PatDetail(4))
+	. set $piece(line,delim,5)=$piece($get(PatDetail(15)),"^",1)
+	. set dob=$get(PatDetail(11)) if dob'="" set dob=$$DateConv^HL7Common2(.reject,"IE",PatDetail(11),"B")
+	. set $piece(line,delim,6)=dob
+	. set $piece(line,delim,7)=$piece($get(Address("PERM")),%1,1),$piece(line,delim,8)=$piece($get(Address("PERM")),%1,2),$piece(line,delim,9)=$piece($get(Address("PERM")),%1,3)
+	. set $piece(line,delim,10)=$piece($get(Address("PERM")),%1,4),$piece(line,delim,11)=$piece($get(Address("PERM")),%1,5)
+	. set $piece(line,delim,12)=$piece($get(PatDetail(77)),"^"),$piece(line,delim,13)=$get(PatDetail(38)),$piece(line,delim,14)=$get(PatDetail(138))
+	
+	if searchtype="APP" do
+	. set $piece(line,delim,1)=$piece($get(^CTPCP(+rowid,3)),"^",27)
+	. set $piece(line,delim,2)=$piece($get(^CTPCP(+rowid,3)),"^",30)
+	. set dob=$piece($get(^CTPCP(+rowid,3)),"^",5),dob=$$DateConv^HL7Common2(.reject,"IE",dob,"B")
+	. set $piece(line,delim,4)=dob
+	. set $piece(line,delim,5)=$piece($get(^CTPCP(+rowid,1)),"^",1)
+	
+	if searchtype="OTH" do
+	. set arcim=$piece($get(^RBC("SER",+rowid)),"^",1)
+	. set $piece(line,delim,1)="" if arcim set $piece(line,delim,1)=$piece($get(^ARCIM(+$piece(arcim,"||",1),+$piece(arcim,"||",2),1)),"^",1)
+	. set $piece(line,delim,2)=$piece($get(^RBC("SER",+rowid)),"^",6)
+	. set loc=$piece($get(^RBC("SER",+rowid)),"^",7)
+	. set $piece(line,delim,4)="" if loc set $piece(line,delim,4)=$piece($get(^CTLOC(+loc)),"^",1)
+	. set $piece(line,delim,6)="" if arcim do
+	. . set urgent=$piece($get(^ARCIM(+$piece(arcim,"||",1),+$piece(arcim,"||",2),8)),"^",5)
+	. . set $piece(line,delim,6)=$select(urgent="Y":"Y",1:"N")
+	. . set $piece(line,delim,5)="",$piece(line,delim,7)="",$piece(line,delim,8)=""
+	. . if arcim do
+	. . . set ageind=0 for  set ageind=$order(^ARCIM(+$piece(arcim,"||",1),+$piece(arcim,"||",2),"AGE",ageind)) quit:ageind=""  do
+	. . . . set sex=$piece($get(^ARCIM(+$piece(arcim,"||",1),+$piece(arcim,"||",2),"AGE",ageind)),"^",1)
+	. . . . if sex set $piece(line,delim,5)=$piece($get(^CT("SEX",+sex)),"^",1)
+	. . . . set $piece(line,delim,8)=$piece($get(^ARCIM(+$piece(arcim,"||",1),+$piece(arcim,"||",2),"AGE",ageind)),"^",2)
+	. . . . set $piece(line,delim,7)=$piece($get(^ARCIM(+$piece(arcim,"||",1),+$piece(arcim,"||",2),"AGE",ageind)),"^",3)
+ 
+	if searchtype="OTH2" do
+	. set (rescode,resdesc,loccode,locdesc)=""
+	. &SQL(SELECT RES_Code,RES_Desc,RES_CTLOC_DR->CTLOC_Code,RES_CTLOC_DR->CTLOC_Desc INTO :rescode,:resdesc,:loccode,:locdesc FROM SQLUser.RB_Resource WHERE RES_RowID = :rowid)
+	. set $piece(line,delim,1)=rescode
+	. set $piece(line,delim,2)=resdesc
+	. set $piece(line,delim,3)=loccode
+	. set $piece(line,delim,4)=locdesc
+	
+	if searchtype="SSA" do
+	. set $piece(line,delim,1)=$get(sercode)
+	. set $piece(line,delim,2)="" if $get(serid)'="" set $piece(line,delim,2)=$piece($get(^RBC("SER",+serid)),"^",6)
+	. set $piece(line,delim,3)=$translate(rowid,"|","_")
+	. set resid=+$piece(rowid,"||",1),(rescode,resdesc,loccode,locdesc)=""
+	. &SQL(SELECT RES_Code,RES_Desc,RES_CTLOC_DR->CTLOC_Code,RES_CTLOC_DR->CTLOC_Desc INTO :rescode,:resdesc,:loccode,:locdesc FROM SQLUser.RB_Resource WHERE RES_RowID = :resid)
+	. set $piece(line,delim,4)=$get(rescode)
+	. set $piece(line,delim,5)=$get(resdesc)
+	. set $piece(line,delim,6)=$get(loccode)
+	. set $piece(line,delim,7)=$get(locdesc)
+	. set scheddate=$piece($get(^RBAS(+$piece(rowid,"||",1),+$piece(rowid,"||",2))),"^",1),scheddate=$$DateConv^HL7Common2(.reject,"IE",scheddate,"B")
+	. set schedtime=$piece($get(^RBAS(+$piece(rowid,"||",1),+$piece(rowid,"||",2))),"^",4),schedtime=$$TimeConv^HL7Common2("IE",schedtime)
+	. set $piece(line,delim,8)=scheddate_$translate(schedtime,":","")
+	
+	if searchtype="SAL" do
+	. set intAdmNum="",intRegMrn=$piece(rowid,"^",1)
+	. set ApptID=$piece(rowid,"^",2)
+	. kill PatDetail,PatDetailx set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	. do BuildAddress^HL7OutExtract1
+	. for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+	. kill number set SQLCODE=$$PatNum^HL7OutExtract1(intRegMrn,intAdmNum,.number)
+	. //
+	. set $piece(line,delim,1)="" if $data(number("REG")) set $piece(line,delim,1)=$piece($get(number("REG")),"^",1)
+	. set $piece(line,delim,2)="" if $data(number("GOV")) set $piece(line,delim,2)=$piece($get(number("GOV")),"^",1)
+	. set $piece(line,delim,3)=$get(PatDetail(5)),$piece(line,delim,4)=$get(PatDetail(4))
+	. set $piece(line,delim,5)=$piece($get(PatDetail(15)),"^",1)
+	. set dob=$get(PatDetail(11)) if dob'="" set dob=$$DateConv^HL7Common2(.reject,"IE",$get(PatDetail(11)),"B")
+	. set $piece(line,delim,6)=dob
+	. set $piece(line,delim,7)=$get(PatDetail(38))
+	. set $piece(line,delim,8)="",$piece(line,delim,9)=""
+	. set $piece(line,delim,11)=$translate(ApptID,"|","_")
+	. if ApptID'="" do
+	. . set serid=$piece($get(^RBAS(+$piece(ApptID,"||",1),+$piece(ApptID,"||",2),"APPT",+$piece(ApptID,"||",3))),"^",15)
+	. . if serid do
+	. . . set arcim=$piece($get(^RBC("SER",+serid)),"^",1)
+	. . . if arcim set $piece(line,delim,8)=$piece($get(^ARCIM(+$piece(arcim,"||",1),+$piece(arcim,"||",2),1)),"^",1)
+	. . . set $piece(line,delim,9)=$piece($get(^RBC("SER",+serid)),"^",6)
+	. . set resid=+$piece(ApptID,"||",1),(rescode,resdesc,loccode,locdesc)=""
+	. . &SQL(SELECT RES_Code,RES_Desc,RES_CTLOC_DR->CTLOC_Code,RES_CTLOC_DR->CTLOC_Desc INTO :rescode,:resdesc,:loccode,:locdesc FROM SQLUser.RB_Resource WHERE RES_RowID = :resid)
+	. . set $piece(line,delim,12)=rescode
+	. . set $piece(line,delim,13)=resdesc
+	. . set $piece(line,delim,14)=loccode
+	. . set $piece(line,delim,15)=locdesc
+	. . set scheddate=$piece($get(^RBAS(+$piece(ApptID,"||",1),+$piece(ApptID,"||",2))),"^",1),scheddate=$$DateConv^HL7Common2(.reject,"IE",scheddate,"B")
+	. . set schedtime=$piece($get(^RBAS(+$piece(ApptID,"||",1),+$piece(ApptID,"||",2))),"^",4),schedtime=$$TimeConv^HL7Common2("IE",schedtime)
+	. . set $piece(line,delim,16)=scheddate_$translate(schedtime,":","")
+	. . set $piece(line,delim,17)=$piece(ApptID,"||",1)_"__"_$piece(ApptID,"||",2)
+	
+	//s ^zab($zn,"rowid")=searchtype_"^"_rowid
+ 	//s ^zab($zn,$g(searchtype,0),$g(rowid,0))=$g(line)
+	
+	set DATA("DSP",3)=$get(line)
+ 
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

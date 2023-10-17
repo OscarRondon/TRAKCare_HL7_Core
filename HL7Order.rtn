@@ -1,0 +1,24 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Order^MAC^^^0
+HL7Order // ML 31/10/2006 ; HL7 interface : orders
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Order.rtn#1 $
+	quit
+	// decide what ORM/ORR processing needs to occur
+Check(event) // n (event,link,INT,HL7,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,version,PatNum,OrderNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum)
+	set event=$get(event),(forward,forwardnum,forwardtable,ok,reject,reject("Detail"))="" kill forwardnum,old
+	set (intRegMrn,RegMrn,intAdmNum,AdmNum,intOrdNum,OrdNum,FillerNum,AccessionNum,tests,forwardok)="" kill OrdDetail,rejected,date,time
+	// check for site specific code
+	set found="",routine="HL7Site"_HL7("INCODE")_"Order"_$piece(event,"^",2),LineRoutine="Check"_$piece(event,"^",2)_"^"_routine if $length($text(@LineRoutine),";;")=2 do
+	.xecute "s ok=$$"_$piece(event,"^",2)_"^"_routine_"()" set found=1
+	if 'found do
+	. // ORM^O01 - general order
+	.if event="ORM^O01" set ok=$$O01^HL7OrderO01() quit
+	. // ORR^O02 - order confirmation response message update
+	.if event="ORR^O02" set ok=$$O02^HL7OrderO02() quit
+ 	. // OML^O33 - lab order for multiple orders related to a single specimen
+ 	.if event="OML^O33" set ok=$$O33^HL7OrderO33() quit 
+ 	quit ok
+
+
+

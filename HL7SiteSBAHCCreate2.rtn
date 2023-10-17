@@ -1,0 +1,17 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteSBAHCCreate2^MAC^^^0
+HL7SiteSBAHCCreate2 // ML 12/01/2005 ; HL7 interface : create transmission packets - Sultan bin Abdulaziz Humanitarian Centre
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteSBAHCCreate2.rtn#1 $
+ 
+CheckIN1 ;; build DATA array - IN1
+IN1()	set intRegMrn=$get(intRegMrn),intAdmNum=$get(intAdmNum),(intAdmIns,found,SQLCODE)="" kill DATA
+ 
+	set DATA("IN1",1)=1,DATA("IN1",3)="SP"
+	
+	kill AdmInsurance,PatDetail,PatDetailx
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

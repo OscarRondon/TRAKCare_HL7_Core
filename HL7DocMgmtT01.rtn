@@ -1,0 +1,70 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7DocMgmtT01^MAC^^^0
+HL7DocMgmtT01 // ML 07/05/2009 ; HL7 interface : original document notification
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7DocMgmtT01.rtn#1 $
+	quit
+	
+	// T01 - original document notification
+T01()
+	
+	set cnt1="" for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. // extract internal/external registration numbers
+	. set numbers=$$RegNum^HL7Common2(.reject,"T01")
+	. set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+	. if reject'="" quit
+	
+	. // check if merged
+	. set merge="",masternum=$$patto^CPAPerson(intRegMrn)
+	. if masternum'=intRegMrn set merge="Y",intRegMrn=masternum,RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+	
+	. // check admission details
+	. set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . set AdmNum=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",19)),"^"),intAdmNum=""
+	. . if $order(^TMP("HL7",$job,cnt1,cnt2,""))'="" do  quit
+	. . . set cnt3="" for  set cnt3=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3)) quit:cnt3=""  if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"TXA")) do  quit:reject'=""
+	
+	. . . . // check patient details
+	. . . . if merge'="Y",$$PatCheck^HL7Common3(intRegMrn,RegMrn) quit
+	
+	. . . . // get order and filler number
+	. . . . set numbers=$$OrderNumExtract^HL7Common5(cnt1,cnt2,cnt3)
+	. . . . set OrdNum=$piece(numbers,"|"),FillerNum=$piece(numbers,"|",2)
+	. . . . if OrdNum=""!(FillerNum="") do  quit
+	. . . . . set reject="No "_$select(OrdNum="":"order number",1:"filler number")_" received on Patient Id "_RegMrn,reject("Detail")="TXA^"_$get(^TMP("HL7",$job,cnt1,"TXA",1))_"^14~207"
+	. . . . do OrdNum^HL7Common2("Y",.reject) if reject'="" quit
+	
+	. . . . // check admission exists
+	. . . . do AdmNum^HL7Common2(.reject) if reject'="" quit
+	
+	. . . . set intOrdNum=""
+	. . . . &SQL(SELECT OEORI_RowId INTO :intOrdNum FROM OE_OrdItem WHERE OEORI_LabEpisodeNo = :OrdNum AND OEORI_FillerNo = :FillerNum)
+	. . . . if SQLCODE!(intOrdNum="") do  quit
+	. . . . . set reject="Unable to locate order "_OrdNum_", filler "_FillerNum_" on Patient Id "_RegMrn,reject("Detail")="TXA^"_$get(^TMP("HL7",$job,cnt1,"TXA",1))_"^14~207"
+	
+	. . . . set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2)
+	
+	. . . . // extract file path
+	. . . . set filename=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"TXA",16)) if filename="" do  quit
+	. . . . . set reject="No path to document for order "_OrdNum_", filler "_FillerNum_" on Patient Id "_RegMrn,reject("Detail")="TXA^"_$get(^TMP("HL7",$job,cnt1,"TXA",1))_"^16~207"
+	
+	. . . . // check if result exists
+	. . . . kill Result set TextId=$order(^OEORD(ord1,"I",ord2,"TR",0)),exists=1 if TextId'="" set TextId=$get(^OEORD(ord1,"I",ord2,"TR",TextId))
+	. . . . kill PLIST if $$SelImageResult^HL7ResultImage(TextId) do  quit
+	. . . . . set exists="" for j=2:1:12 set PLIST(j)=""
+	. . . . . set PLIST(2)=ord1,PLIST(6)=+$h,PLIST(7)=$piece($h,",",2),PLIST(42)=filename
+	. . . . . set err=$$InsImageResult^HL7ResultImage() if err quit
+	. . . . . set par=$piece($get(%ROWID),$char(1))
+	. . . . . kill PLIST set PLIST(3)=par,err=$$InsOrdImageResult^HL7ResultImage(intOrdNum)
+	
+	. . . . // add filename to plist and update HL7ResultImage
+	. . . . set PLIST(42)=filename
+	. . . . if $$UpdImageResult^HL7ResultImage(TextId) kill PLIST
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+
+
+

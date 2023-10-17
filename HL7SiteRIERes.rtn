@@ -1,0 +1,173 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SiteRIERes^MAC^^^0
+HL7SiteRIERes // ML 5/11/01 ; HL7 interface : result processing - Royal Infirmary Edinburgh
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteRIERes.rtn#1 $
+	quit
+	
+Check	;; results in data array
+Update	set $ztrap="Error^"_$zname
+	
+	// get patient
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  if SQLCODE quit
+	. if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. set reject=""
+	. if '$data(^TMP("HL7",$job,cnt1,"PID")) do  quit
+	. . set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100
+	. . do Reject^HL7Reject(reject),AckNak^HL7AckNak("AR",reject,$piece(reject("Detail"),"~"),$piece(reject("Detail"),"~",2))
+	. // extract internal/external registration numbers
+	. set numbers=$$RegNum^HL7Common2(.reject,"R01","","Y")
+	. set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2),othermatch=$piece(numbers,"|",3)
+	. if reject'="" do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece(reject("Detail"),"~"),$piece(reject("Detail"),"~",2)) quit
+	
+	. // check if merged
+	. set merge="",masternum=$$patto^CPAPerson(intRegMrn)
+	. if masternum'=intRegMrn do
+	. . set merge="Y",intRegMrn=masternum,RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+	
+	. // get episode
+	. set (FoundPV1,AdmNum,intAdmNum)=""
+	. set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . if 'FoundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) quit
+	. . if 'FoundPV1 do  set FoundPV1=cnt2
+	. . . set AdmNum=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",19)),"^"),intAdmNum=""
+	
+	. . // get order
+	. . set (TestStatus,parent)=""
+	. . set cnt3=0 for x=0:1 set cnt3=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3)) quit:cnt3=""  do  if SQLCODE quit
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR")) quit
+	. . . set (intOrdNum,OrdNum,FillerNum,tests)="" kill date,time,OrdDetail
+	. . . // check patient details
+	. . . if $$PatCheck^HL7Common3(intRegMrn,RegMrn,othermatch,merge) do  quit
+	. . . . do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece(reject("Detail"),"~"),$piece(reject("Detail"),"~",2)) kill rejected quit
+	
+	. . . set (reject,RefDr)=""
+	
+	. . . // check if unsolicted GP order
+	. . . set gporder="" if ##class(%Collation).AlphaUp($piece(^TMP("HL7",$job,cnt1,cnt2,"ORC",4),"^"))["UNKNOWN" set gporder=1
+	
+	. . . // check order details
+	. . . set numbers=$$OrderNumExtract^HL7Common5(cnt1,cnt2,cnt3)
+	. . . set OrdNum=$piece(numbers,"|"),FillerNum=$piece(numbers,"|",2)
+	. . . do OrdNum^HL7Common2("Y",.reject) if reject'="" do  quit
+	. . . . do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece($get(reject("Detail")),"~"),$piece($get(reject("Detail")),"~",2))
+	
+	. . . // check admission exists
+	. . . do AdmNum^HL7Common2(.reject) if reject'="" do  quit
+	. . . . do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece($get(reject("Detail")),"~"),$piece($get(reject("Detail")),"~",2))
+	
+	. . . // unsolicited result - create admission based on dr
+	. . . if AdmNum="none" do  if reject'="" quit
+	. . . . do CreateAdm(.reject)
+	
+	. . . // check for 'incorrect' multiple tests in OBR records, file results against all tests
+	. . . for count=1:1:$length(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",4),"~") do
+	. . . . set tests=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",4),"~",count) quit:tests=""
+	. . . . // check for use of parent reference
+	. . . . set parent=cnt3
+	. . . . if cnt3'=1,$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",26))'="" set parent=1,tests=$piece(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",4),"~")
+	
+	. . . . // extract test status
+	. . . . set TestStatus=$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",25)),"^")
+	
+	. . . . // check if test sent
+	. . . . if $piece(tests,"^")="" do  quit
+	. . . . . set reject="No test sent on order "_OrdNum_", Patient Id "_RegMrn do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^4",101) kill rejected
+	
+	. . . . // check remaining details
+	. . . . set (intOrdNum,OrderedItem,OrderMaster)="" kill OrdDetail,res
+	. . . . // use placer order number
+	. . . . set orddet=$$ExternalCode^HL7Common1(.reject,$piece(tests,"^"),$piece(tests,"^",2))
+	. . . . if reject'="" do  set (reject,SQLCODE)="" quit
+	. . . . . do Reject^HL7Reject(reject,"N") set rejected("ts",tests)=""
+	. . . . set OrderedItem=$piece(orddet,"^"),reclocat=$piece(orddet,"^",2)
+	. . . . // order item subcategory type
+	. . . . set SubCatType=$$SubCatType^HL7Common11(OrderedItem)
+	. . . . if SubCatType="SUBCAT"!(SubCatType="EXECTYPE") do  quit
+	. . . . . set reject="No "_$select(SubCatType="SUBCAT":"sub-category setup against",1:"execution type setup against sub-category on")_" test "_$piece(tests,"^")_", order "_OrdNum do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",1))_"^4",207)
+	. . . . // collection date and time
+	. . . . kill date,time
+	. . . . set datetime=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",7),"^") do
+	. . . . . set date("COL")=$extract(datetime,1,8),date("COL")=$select(date("COL")?8N:$$DateConv^HL7Common2(.reject,"EI",date("COL")),1:"") if date("COL")="-1" set date("COL")="" quit
+	. . . . . set time("COL")=$extract(datetime,9,12),time("COL")=+$select(time("COL")?4N:$$TimeConv^HL7Common2("EI",$extract(time("COL"),1,2)_":"_$extract(time("COL"),3,4))/60,1:0)
+	
+	. . . . set specimen="" if SubCatType="LAB" do
+	. . . . . // add/update specimen detail
+	. . . . . set specimen=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",15),"^") if $piece(specimen,"&")="" quit
+	. . . . . do Specimen^HL7Common9($piece(specimen,"&"),$piece(specimen,"&",2),OrderedItem)
+	
+	. . . . set OrderRow=$$CheckLab^HL7Common1(OrdNum,FillerNum,intAdmNum,RegMrn,OrderedItem,"",reclocat,"","",.date,.time,$piece(specimen,"&"))
+	. . . . set intOrdNum=$piece(OrderRow,"^"),OrderNew=$piece(OrderRow,"^",2)
+	. . . . if intOrdNum="" do  quit
+	. . . . . set reject="Unable to add order "_OrdNum_", test "_tests do Reject^HL7Reject(reject,"R")
+	. . . . . set rejected("ord-ts",OrdNum_"/"_tests)=""
+	
+	. . . . // get external info system
+	. . . . set ExternalSys=$$ExternalSys^HL7Common1(intOrdNum,.reject) if reject'="" do  quit
+	. . . . . do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^4",207) kill rejected
+	
+	. . . . // get HL7 result type : AT - Atomic
+	. . . . //                       IM - Image
+	. . . . set ResultType=$$ResultType^HL7Common1(intOrdNum)
+	
+	. . . . // extract text result type
+	. . . . set TextType="" if ResultType="IM" do  quit:reject'=""
+	. . . . . set TextType=$$TextType^HL7Common3(intOrdNum)
+	. . . . . if TextType="" set reject="No text result type setup against sub-category for image result on test "_$piece(tests,%1)_", order "_OrdNum do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^4",207) kill rejected
+	
+	. . . . // perform result filing
+	. . . . set %routine=$$ResultFile^HL7Common1(ExternalSys)
+	. . . . if $length(%routine) xecute "d File^"_%routine_"("""_intOrdNum_""","""_TextType_""","""_tests_""","""_ResultType_""","""_TestStatus_""","""",.reject)"
+	. . . . if reject'="" quit
+	
+	. . . . // mark unsolicited GP order as read
+	. . . . if gporder do OrderUpdate^HL7Common3(intOrdNum,"RD",HL7("USER"))
+	
+	. . . . // add filler number to order
+	. . . . if FillerNum'="" do OrderUpdate^HL7Common3(intOrdNum,"FN",FillerNum)
+	
+	. . . . // update order with updated fields
+	. . . . if $data(OrdDetail) do OrderUpdate^HL7Common3(intOrdNum,"","","",1) kill OrdDetail
+	
+	. . if x=0,'SQLCODE do AckNak^HL7AckNak("AR","No results sent for Patient Id "_RegMrn,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^4",100) kill rejected
+	
+	// unlock all  - unable to unlock OEORD by itself
+	zdeallocate
+	
+	if $data(rejected) do  kill reject,rejected
+	. set (reject,testreject,ordtsreject)="" do
+	. . for rej="ts","ord-ts" do
+	. . . set rejx="" for  set rejx=$order(rejected(rej,rejx)) quit:rejx=""  do
+	. . . . if rej="ts" set testreject=testreject_$select($length(testreject):", ",1:"")_$piece(rejx,"^")_" ("_$piece(rejx,"^",2)_")" quit
+	. . . . if rej="ord-ts" set ordtsreject=ordtsreject_$select($length(ordtsreject):", ",1:"")_rejx quit
+	. if $length(testreject) set reject=reject_$select($length(reject):", ",1:"")_"Test code/s "_testreject_" not found in MedTrak"
+	. if $length(ordtsreject) set reject=reject_$select($length(reject):", ",1:"")_"Unable to add Order number/test combinations "_ordtsreject
+	. do AckNak^HL7AckNak("AR",reject,"OBR^^4",103) set SQLCODE=100
+	
+	if 'SQLCODE do AckNak^HL7AckNak("AA")
+	kill rejected
+	quit
+	
+CheckAdm	;; unsolicited result - create admission based on dr
+CreateAdm(reject) set RefDoc=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ORC",12)),"^")
+	if RefDoc'="" set RefDoc=$order(^PAC("REFD",0,"Code",RefDoc,""))
+	set:RefDoc="" RefDoc=HL7("DEFREFDR")
+	// check for previously created admission for referring dr
+	set (ok,intAdmNum)="" set intAdmNum=$order(^PAADMi("RefDoc",intRegMrn,RefDoc,intAdmNum),-1) if intAdmNum'="" set ok=1
+	if 'ok do  if reject'="" quit
+	. // setup admission for doctor
+	. set AdmDate=+$h,AdmTime=$piece($h,",",2),HL7Flag="Y"
+	. set intAdmNum=$$ADMInsert^CPAAdm(intRegMrn,AdmDate,AdmTime,"",HL7("DEFADMDEPT"),RefDoc,"","","","","","","",HL7("DEFADMTYPE"),"","","","","")
+	. kill HL7Flag
+	. if intAdmNum="" set reject="Unable to create/locate admission episode for unsolicited result order "_OrdNum_", Patient Id "_RegMrn do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"",207)
+	set AdmNum=$piece(^PAADM(intAdmNum),"^",81)
+	quit
+	
+	// log errors
+Error	if $zerror["READ"!$zerror["WRITE" set WriteRead=1
+	do AckNak^HL7AckNak("AR","TrakCare Cache Error","",207,"Cache Error: "_$zerror)
+	do BACK^%ETN set $ztrap="Error^"_$zname
+	set SQLCODE=100
+
+
+

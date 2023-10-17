@@ -1,0 +1,220 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7PatEv3^MAC^^^0
+HL7PatEv3 // ML 18/9/01 ; HL7 interface : patient event category processes
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7PatEv3.rtn#1 $
+	quit
+ 
+	// extract purpose of room
+RoomQuery(intRoomNum) new (intRoomNum) set intRoomNum=$get(intRoomNum),purpose=""
+	&SQL(SELECT ROOM_Query INTO :purpose FROM PAC_Room WHERE ROOM_RowId = :intRoomNum)
+	quit purpose
+ 
+	// is bed available
+BedAvailable(intBedNum,intAdmNum) new (intBedNum,intAdmNum) set intBedNum=$get(intBedNum),intAdmNum=$get(intAdmNum),intNum=""
+	set avail="Y"
+	set x="" for  set x=$order(^PAWARDA($piece(intBedNum,"||"),"BED",$piece(intBedNum,"||",2),"ADM",x)) quit:x=""  do  quit:avail="N"
+	. // if occupied not available
+	.set intNum=$piece(^(x),"^") if intNum'=intAdmNum,$piece(^(x),"^",2)="O" set avail="N"
+	quit avail_"|"_$select(avail="Y":"",1:intNum)
+ 
+	// discharge patient
+Discharge(intAdmNum,admtype,AdmDetail,MRAdmDetail) new (intAdmNum,admtype,AdmDetail,MRAdmDetail,link)
+	set intAdmNum=$get(intAdmNum),admtype=$get(admtype),link=$get(link),msg="",HL7Flag="Y"
+ 
+	// %session required if discontinuing all orders at discharge [Log 68656]
+	set %session=##class(%CSP.Session).%New($h)
+	set %session.Data("LOGON.LANGID")=$listget($get(^websys.ConfigurationD(1)),15)
+ 
+	set date("DIS")=$get(AdmDetail(22)),time("DIS")=$get(AdmDetail(23)),upduser=$get(AdmDetail(218)),updhosp=$get(AdmDetail(344))
+	set dischargeclassif=$get(MRAdmDetail(58)),caretype=$get(MRAdmDetail(63))
+ 
+	do Discharge^CPAAdm1(intAdmNum,"_zz","_zz","_zz","_zz","_zz","_zz","_zz","_zz",date("DIS"),time("DIS"),"","_zz","_zz","_zz",upduser,updhosp,"_zz","_zz","_zz","_zz","_zz","_zz",caretype,"_zz","_zz","_zz","_zz","_zz","_zz","_zz","_zz","_zz","_zz","_zz","_zz",dischargeclassif)
+ 
+	// discharge summary required - Y/N
+	kill AdmDetail2,RULES
+	if $$Rules^HL7Common7(link)
+	set AdmDetail2(19)=$select((","_$get(RULES(3))_",")[(","_admtype_","):"Y",1:"N")
+	&SQL(UPDATE PA_Adm2 VALUES :AdmDetail2() WHERE PAADM2_RowId = :intAdmNum)
+	kill AdmDetail2
+ 
+	// update user details
+	kill updDetail
+	set updDetail(218)=$get(AdmDetail(218)),updDetail(216)=$get(AdmDetail(216)),updDetail(217)=$get(AdmDetail(217)),updDetail(344)=$get(AdmDetail(344))
+	&SQL(UPDATE PA_Adm VALUES :updDetail() WHERE PAADM_RowId = :intAdmNum)
+	kill updDetail
+ 
+	quit
+ 
+	// undischarge patient
+unDischarge(intAdmNum) new (intAdmNum,PAADM,link,upddate,updtime)
+	set intAdmNum=$get(intAdmNum),HL7Flag="Y",msg=""
+ 
+	// %session required if discontinuing all orders at discharge [Log 68656]
+	set %session=##class(%CSP.Session).%New($h)
+	set %session.Data("LOGON.LANGID")=$listget($get(^websys.ConfigurationD(1)),15)
+ 
+	set upddate=$get(upddate),updtime=$get(updtime)
+	set uuser=$get(PAADM(218)),UserHospitalID=$get(PADDM(344))
+	do Undischarge^CPAAdm1(intAdmNum)
+	quit
+ 
+	// leave of absence
+LeaveAbs(intAdmNum,OutDate,OutTime) new (intAdmNum,OutDate,OutTime)
+	set intAdmNum=$get(intAdmNum),OutDate=$get(OutDate),OutTime=$get(OutTime)
+	// updating user and location
+	do UpdateUser^HL7PatEv1("EX"),UpdateUser^HL7PatEv1("CT")
+	set PLIST(0)=intAdmNum,PLIST(4)=OutDate,PLIST(5)=OutTime,PLIST(19)=upduser,PLIST(20)=updhosp,HL7Flag="Y"
+	&SQL(INSERT INTO PA_AdmLeave VALUES :PLIST())
+	kill HL7Flag
+	quit SQLCODE_"^"_$get(%ROWID)
+ 
+	// cancel leave of absence
+LeaveAbsCan(rowid) new (rowid) set rowid=$get(rowid),HL7Flag="Y"
+	&SQL(DELETE FROM PA_AdmLeave WHERE ADML_RowId = :rowid)
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// leave of absence return
+LeaveAbsRet(rowid,BackDate,BackTime) new (rowid,BackDate,BackTime)
+	set rowid=$get(rowid),BackDate=$get(BackDate),BackTime=$get(BackTime)
+	// updating user and location
+	do UpdateUser^HL7PatEv1("EX"),UpdateUser^HL7PatEv1("CT")
+	set PLIST(11)=BackDate,PLIST(12)=BackTime,PLIST(19)=upduser,PLIST(20)=updhosp,HL7Flag="Y"
+	&SQL(UPDATE PA_AdmLeave VALUES :PLIST() WHERE ADML_RowId = :rowid)
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// cancel leave of absence return
+LeaveAbsRetCan(rowid) new (rowid) set rowid=$get(rowid)
+	// updating user and location
+	do UpdateUser^HL7PatEv1("EX"),UpdateUser^HL7PatEv1("CT")
+	set (PLIST(11),PLIST(12))="",PLIST(19)=upduser,PLIST(20)=updhosp,HL7Flag="Y"
+	&SQL(UPDATE PA_AdmLeave VALUES :PLIST() WHERE ADML_RowId = :rowid)
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// select leave of absence data
+SelectAbs(rowid) new (rowid) set rowid=$get(rowid)
+	&SQL(SELECT * INTO :PLIST() FROM PA_AdmLeave WHERE ADML_RowId = :rowid)
+	quit SQLCODE
+ 
+	// update leave of absence details
+UpdateAbs(rowid,OutDate,OutTime) new (rowid,OutDate,OutTime)
+	set rowid=$get(rowid),OutDate=$get(OutDate),OutTime=$get(OutTime)
+	// updating user and location
+	do UpdateUser^HL7PatEv1("EX"),UpdateUser^HL7PatEv1("CT")
+	set PLIST(4)=OutDate,PLIST(5)=OutTime,PLIST(19)=upduser,PLIST(20)=updhosp,HL7Flag="Y"
+	&SQL(UPDATE PA_AdmLeave VALUES :PLIST() WHERE ADML_RowId = :rowid)
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// add/update/delete adverse reaction/allergy
+AdverseReaction set HL7Flag="Y" kill ALERT,ALLERGY
+	set segid="" for  set segid=$order(AdverseReact(segid)) quit:segid=""  do
+	.set type="" for  set type=$order(AdverseReact(segid,type)) quit:type=""  do
+	.. // alerts
+	..if type="ALT" do
+	...kill ALERT merge ALERT=AdverseReact(segid,type) kill ALERT("Action")
+	...do CodeTable^HL7PatEv4("PA_AlertMsg")
+	...set ALERT(25)=$$DateConv^HL7Common2(.reject,"EI",AdverseReact(segid,type,25))
+	... // updating user and location
+	...do UpdateUser^HL7PatEv1("CT")
+	...set ALERT(11)=upddate,ALERT(12)=updtime,ALERT(13)=upduser
+ 
+	.. // allergies
+	..if type="ALG" do
+	...kill ALLERGY merge ALLERGY=AdverseReact(segid,type) kill ALLERGY("Action")
+	...do CodeTable^HL7PatEv4("PA_Allergy")
+	...set ALLERGY(22)="N" if ALLERGY(11)="I" set ALLERGY(22)="Y"
+	...set ALLERGY(13)=$$DateConv^HL7Common2(.reject,"EI",AdverseReact(segid,type,13))
+	... // updating user and location
+	...do UpdateUser^HL7PatEv1("CT")
+	...set ALLERGY(19)=upduser,ALLERGY(26)=upddate,ALLERGY(27)=updtime
+ 
+	..if AdverseReact(segid,type,"Action")="X" do  quit
+	... // remove all alerts and add new
+	...if type="ALT" do
+	.... &SQL(DELETE FROM PA_AlertMsg WHERE ALM_PAPMI_ParRef = :intRegMrn)
+	.... // add new addition
+	....set ALERT(0)=intRegMrn do AlertAllergy(type,"I")
+ 
+	... // remove all allergies and add new
+	...if type="ALG" do
+	.... &SQL(DELETE FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn)
+	.... // add new addition
+	....set ALLERGY(0)=intRegMrn do AlertAllergy(type,"I")
+ 
+	..if AdverseReact(segid,type,"Action")="A" do  quit
+	... // add new alert
+	...if type="ALT" do
+	....do AlertAllergy(type,"S")
+	.... // ignore new additions if number exists
+	....if 'SQLCODE quit
+	....set ALERT(0)=intRegMrn do AlertAllergy(type,"I")
+ 
+	... // add new allergy
+	...if type="ALG" do
+	....do AlertAllergy(type,"S")
+	.... // ignore new additions if number exists
+	....if 'SQLCODE quit
+	....set ALLERGY(0)=intRegMrn do AlertAllergy(type,"I")
+ 
+	..if AdverseReact(segid,type,"Action")="U" do  quit
+	... // update existing alert
+	...if type="ALT" do
+	....do AlertAllergy(type,"S")
+	....if 'SQLCODE do  quit
+	..... &SQL(UPDATE PA_AlertMsg VALUES :ALERT() WHERE ALM_RowId = :intAltNum)
+	....if SQLCODE do
+	.....set ALERT(0)=intRegMrn do AlertAllergy(type,"I")
+ 
+	... // update existing allergy
+	...if type="ALG" do
+	....do AlertAllergy(type,"S")
+	....if 'SQLCODE do  quit
+	..... &SQL(UPDATE PA_Allergy VALUES :ALLERGY() WHERE ALG_RowId = :intAlgNum)
+	....if SQLCODE do
+	.....set ALLERGY(0)=intRegMrn do AlertAllergy(type,"I")
+ 
+	..if AdverseReact(segid,type,"Action")="D" do  quit
+	... // delete existing alert
+	...if type="ALT" do
+	....do AlertAllergy(type,"S")
+	....if SQLCODE quit
+	.... &SQL(DELETE FROM PA_AlertMsg WHERE ALM_RowId = :intAltNum)
+ 
+	... // delete existing allergy
+	...if type="ALG" do
+	....do AlertAllergy(type,"S")
+	....if SQLCODE quit
+	.... &SQL(DELETE FROM PA_Allergy WHERE ALG_RowId = :intAlgNum)
+ 
+	quit
+ 
+	// mode : S - select
+	// 	 I - insert
+AlertAllergy(type,mode) set type=$get(type),mode=$get(mode)
+ 
+	// process alert
+	if type="ALT" do
+	. // select alert rowid
+	.if mode="S" do
+	.. &SQL(SELECT ALM_RowId INTO :intAltNum FROM PA_AlertMsg WHERE ALM_PAPMI_ParRef = :intRegMrn AND ALM_ExternalID = :ALERT(31))
+	. // insert new alert
+	.if mode="I" do
+	.. &SQL(INSERT INTO PA_AlertMsg VALUES :ALERT())
+ 
+	// process allergy
+	if type="ALG" do
+	. // select allergy rowid
+	.if mode="S" do
+	.. &SQL(SELECT ALG_RowId INTO :intAlgNum FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn AND ALG_ExternalID = :ALLERGY(34))
+	. // insert new allergy
+	.if mode="I" do
+	.. &SQL(INSERT INTO PA_Allergy VALUES :ALLERGY())
+ 
+	quit
+
+
+

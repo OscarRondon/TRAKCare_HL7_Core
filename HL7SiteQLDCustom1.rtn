@@ -1,0 +1,164 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteQLDCustom1^MAC^^^0
+HL7SiteQLDCustom1 // ML 22/05/2003 ; HL7 interface - custom defined messages : ZHS query - QLD Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteQLDCustom1.rtn#1 $
+	quit
+ 
+	// extract query information
+Query	set event=$get(event) kill queue
+ 
+	// extract key
+	set key=$get(^TMP("HL7",$job,"MSH",2))_"-"_$get(^TMP("HL7",$job,"MSH",3))
+ 
+	// new query
+	if event="ZHS^Z04" do
+	. // new query, remove pre-existing query results
+	.kill ^TMP("HL7-QUERY",key)
+ 
+	. // extract search type : B - date of birth
+	. //                       S - soundex
+	. //                         - surname, name, dob, sex
+	.set searchtype=$translate($get(^TMP("HL7",$job,"ZHC",10))," ")
+ 
+	. // extract search criteria
+	.set (name,surname,given,gender,birthdate)="" do
+	..if searchtype="B" do  quit
+	...set birthdate=$get(^TMP("HL7",$job,"ZHC",7)) if birthdate'="" set birthdate=$$DateConv^HL7Common2(.reject,"EI",birthdate)
+	...if birthdate'?5N set birthdate=""
+	..if searchtype="S" do  quit
+	...set name=$get(^TMP("HL7",$job,"ZHC",5)) if $translate(name,"^")'="" do
+	...set surname=##class(%Collation).AlphaUp($piece(name,"^")),soundex=$$soundex^at182(surname)
+	...set gender=$$Gender()
+	..set name=$get(^TMP("HL7",$job,"ZHC",5)) if $translate(name,"^")'="" do
+	...set surname=##class(%Collation).AlphaUp($piece(name,"^")),given=##class(%Collation).AlphaUp($piece(name,"^",2))
+	..set gender=$$Gender()
+	..set birthdate=$get(^TMP("HL7",$job,"ZHC",7)) if birthdate'="" set birthdate=$$DateConv^HL7Common2(.reject,"EI",birthdate)
+	. // perform search
+	.do search(searchtype)
+	. // s cnt="" f i=1:1 s SQLCODE=$$search(searchtype) q:SQLCODE
+	.do Build
+ 
+	// continuation query - send remaining
+	if event="ZHS^Z05" do Build
+ 
+	// send response
+	if $data(queue) do Send
+ 
+	quit
+ 
+	// perform search
+search(searchtype) set searchtype=$get(searchtype),SQLCODE=100
+ 
+	// date of birth search
+	if searchtype="B",birthdate'="" do  quit SQLCODE
+	.set surname="" for  set surname=$order(^PAPERi("DOB1",birthdate,surname)) quit:surname=""  do
+	..set given="" for  set givenx=$order(^PAPERi("DOB1",birthdate,surname,given)) quit:given=""  do
+	...set intReg="" for  set intReg=$order(^PAPERi("DOB1",birthdate,surname,given,intReg)) quit:intReg=""  do
+	....set intRegMrn=intReg do PatExtract
+ 
+	// soundex search
+	if searchtype="S" do  quit SQLCODE
+	.set surname="" for  set surname=$order(^PAPERi("SGDS",soundex,surname)) quit:surname=""  do
+	..set given="" for  set given=$order(^PAPERi("SGDS",soundex,surname,given)) quit:given=""  do
+	...set birthdate="" for  set birthdate=$order(^PAPERi("SGDS",soundex,surname,given,birthdate)) quit:birthdate=""  do
+	....set intReg="" for  set intReg=$order(^PAPERi("SGDS",soundex,surname,given,birthdate,intReg)) quit:intReg=""  do
+	.....set intRegMrn=intReg do PatExtract
+ 
+	// patient detail search
+	if searchtype="" do
+	.if surname'=""!(given'="")!(birthdate'="")!(gender'="") do
+	.. // surname, given, dob search
+	..if surname'="" do  quit
+	...set givenx="" for  set givenx=$order(^PAPERi("SGD",surname,givenx)) quit:givenx=""  do
+	....if given'="",((given_" ")'=givenx) quit
+	....set birthx="" for  set birthx=$order(^PAPERi("SGD",surname,givenx,birthx)) quit:birthx=""  do
+	.....if birthdate'="",(birthdate'=birthx) quit
+	.....set intReg="" for  set intReg=$order(^PAPERi("SGD",surname,givenx,birthx,intReg)) quit:intReg=""  do
+	......set intRegMrn=intReg do PatExtract
+	.. // given, surname, dob search
+	..if given'="" do  quit
+	...set surname="" for  set surname=$order(^PAPERi("GSD",given,surname)) quit:surname=""  do
+	....set birthx="" for  set birthx=$order(^PAPERi("GSD",given,surname,birthx)) quit:birthx=""  do
+	.....if birthdate'="",(birthdate'=birthx) quit
+	.....set intReg="" for  set intReg=$order(^PAPERi("GSD",given,surname,birthx,intReg)) quit:intReg=""  do
+	......set intRegMrn=intReg do PatExtract
+ 
+	quit
+ 
+	// extract gender
+Gender() set gender=$get(^TMP("HL7",$job,"ZHC",6)) if gender'="" do
+	.set gender=$$Sex^HL7Common3(gender,"R")
+	.set gender=$select(gender'="":$get(^TMP("HL7",$job,"ZHC",6)),1:"")
+	quit gender
+ 
+	// extract patient details
+PatExtract kill PatDetail,PatDetailx
+	set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	if SQLCODE quit
+ 
+	// extract code table detail
+	for table="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(table)
+ 
+	set sex=$get(PatDetail(15)),title=$get(PatDetail(139))
+	set dob=$select($get(PatDetail(11))?5N:$$DateConv^HL7Common2(.reject,"IE",PatDetail(11),"B"),1:"")
+ 
+	// adjust name
+	set name=$$BuildName^HL7Common3($get(PatDetail(4)),$get(PatDetail(5)),$get(PatDetail(118)))
+	set $piece(name,%1,5)=$piece(title,"^")_%1_"L",DATA("PID",5)=name
+ 
+	// sex check
+	if gender'="",gender'=$piece(sex,"^") quit
+ 
+	// extract patient number details
+	kill number if $$PatNum^HL7OutExtract1(intRegMrn,"",.number)
+ 
+	// extract patient address details
+	kill permadd
+	if $$PatAddress^HL7OutExtract1(intRegMrn,.permadd)
+ 
+	if $data(permadd) set address=$get(permadd(1,"add1"))_%1_$get(permadd(1,"add2"))_%1_$get(permadd(1,"sub"))_%1_$get(permadd(1,"post"))
+	set cnt=$increment(^TMP("HL7-QUERY",key)),$piece(^TMP("HL7-QUERY",key),"\",2)=cnt
+	set ^TMP("HL7-QUERY",key,cnt)="|"_$piece($get(number("REG")),"^")_"|"_dob_"||"_$piece(sex,"^")_"|"_name_"|"_$get(address)
+	quit
+ 
+	// build segments
+Build	set want=$get(^TMP("HL7",$job,"ZHC",4)),count=""
+	set cnt="" for  set cnt=$order(^TMP("HL7-QUERY",key,cnt)) quit:cnt=""  do  quit:count=want
+	.set count=count+1
+	.set sendlist(count)=^TMP("HL7-QUERY",key,cnt) kill ^TMP("HL7-QUERY",key,cnt)
+ 
+	// return same ZHC segment
+	merge ^TMP("HL7-OUT",$job,"ZHC")=^TMP("HL7",$job,"ZHC")
+	do Build^HL7Queue("ZHC",11)
+ 
+	// setup ZHZ segment
+	set $piece(^TMP("HL7-QUERY",key),"\",2)=$piece($get(^TMP("HL7-QUERY",key)),"\",2)-count
+	set ^TMP("HL7-OUT",$job,"ZHZ",1)=$piece($get(^TMP("HL7-QUERY",key)),"\"),^TMP("HL7-OUT",$job,"ZHZ",2)=$piece($get(^TMP("HL7-QUERY",key)),"\",2)
+	set ^TMP("HL7-OUT",$job,"ZHZ",3)=count
+	do Build^HL7Queue("ZHZ",4)
+ 
+	// setup ZHD segments
+	set count="" for  set count=$order(sendlist(count)) quit:count=""  do
+	.kill ^TMP("HL7-OUT",$job,"ZHD")
+	.for i=1:1:$length(sendlist(count)) set ^TMP("HL7-OUT",$job,"ZHD",i)=$piece(sendlist(count),"|",i)
+	.do Build^HL7Queue("ZHD",11)
+	quit
+ 
+	// send query response
+Send	set response=$select(event="ZHS^Z04":"ZHR^Z04",1:"ZHR^Z05")
+	set controlid=$$ControlId^HL7AckNak
+	// reverse sending and receiving applications found in interface info
+	set mshmsg=msh_%_HL7("ACKSENDAPP")_%_HL7("ACKSENDFAC")_%_^TMP("HL7",$job,"MSH",2)_%_^TMP("HL7",$job,"MSH",3)_%_$$Date^HL7_%_%_response_%_controlid_%_%_HL7("VER")_%_%_%_%_%
+	set msamsg="MSA"_%_"AA"_%_^TMP("HL7",$job,"MSH",9)_%_%_%
+	kill trace set trace=1
+	write ESC("VT"),mshmsg,ESC("CR") set trace(trace)=mshmsg
+	write msamsg,ESC("CR"),ESC("FS"),ESC("CR"),! set trace=trace+1,trace(trace)=msamsg
+	set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  do
+	.write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	write ESC("FS"),ESC("CR"),!
+	do trace^HL7Trace("M-->E",$h,"",tracerowid) kill trace
+	quit
+
+
+

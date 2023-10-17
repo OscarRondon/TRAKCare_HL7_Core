@@ -1,0 +1,277 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7PatEv2^MAC^^^0
+HL7PatEv2 // ML 29/10/02 ; HL7 interface : patient event category processes
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7PatEv2.rtn#1 $
+	quit
+ 
+	// extract visit details from PV1
+VisDet(cnt1,cnt2) set cnt1=$get(cnt1),cnt2=$get(cnt2)  set PatClass=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",2)),"^")
+	set CurrWard=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",3)),"^"),CurrRoom=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",3)),"^",2),CurrBed=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",3)),"^",3)
+	set CurrHosp=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",3)),"^",4)
+	set PreAdmNum=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",5)),"^")
+	set PrevWard=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",6)),"^"),PrevRoom=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",6)),"^",2),PrevBed=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",6)),"^",3)
+	set PrevLoc=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",6)),"^",6),PrevHosp=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",6)),"^",4)
+	set CurrLoc=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",10)),"^"),source=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",14)),"^")
+	set visit=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",19)),"^")
+ 
+	// extract attending, referring, consulting dr's
+	kill provider for field=7,8,9 set drfound="" do
+	.set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,"PV1",field,i)) quit:i=""  do  if drfound'="" quit
+	..set OrderingDr=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",field,i)) if $piece(OrderingDr,"^")="" quit
+	..set doctor=$piece(OrderingDr,"^"),drsystem=$piece(OrderingDr,"^",9) if drsystem="TRAKCARE" set drsystem=""
+	..set drtype=$select(field=8:"R",1:"C") do
+	...set drfound=$$Provider^HL7Common5(doctor,drsystem,"","",drtype,"I")
+	...if doctor=""""!(doctor="""""") set drfound=""""
+	...if drfound'="" set provider($select(field=7:"ATT",field=8:"REF",1:"CON"))=$piece(drfound,$char(1))
+	.if '$data(provider($select(field=7:"ATT",field=8:"REF",1:"CON"))) do
+	..kill rejected
+	..set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,"PV1",field,i)) quit:i=""  do
+	...set doctor=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",field,i)) if $piece(doctor,"^",1)'="" set rejected("dr",$piece(OrderingDr,"^",1))=$piece(doctor,"^",3)
+	..if '$data(rejected) quit
+	..set (reject,i)="" for  set i=$order(rejected("dr",i)) quit:i=""  set reject=reject_i_" ("_rejected("dr",i)_") "_$select($order(rejected("dr",i))="":"",1:", ")
+	..set reject=$select(field=7:"Attending",field=8:"Referring",1:"Consulting")_" provider "_$get(reject)_" received for admission episode "_$get(visit)_", Registration number "_$get(RegMrn)_" does not exist in the "_$select(field=8:"Referring Dr",1:"Care Provider")_" code table in TrakCare"
+	..do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+ 
+	// ab 6.09.05 added rejection calls for all dates below
+	set AdmDate=$extract(^TMP("HL7",$job,cnt1,cnt2,"PV1",44),1,8) set:AdmDate'="" AdmDate=$$DateConv^HL7Common2(.reject,"EI",AdmDate,"","Admission Date")
+	if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	set AdmTime=$extract(^TMP("HL7",$job,cnt1,cnt2,"PV1",44),9,13) set:AdmTime'="" AdmTime=$$TimeConv^HL7Common2("EI",$extract(AdmTime,1,2)_":"_$extract(AdmTime,3,4))
+	set DischDate=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",45)),1,8) set:DischDate'="" DischDate=$$DateConv^HL7Common2(.reject,"EI",DischDate,"","Discharge Date")
+	if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	set DischTime=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",45)),9,13) set:DischTime'="" DischTime=$$TimeConv^HL7Common2("EI",$extract(DischTime,1,2)_":"_$extract(DischTime,3,4))
+	// extract visit details from PV2
+	set ExpAdmDate=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV2",8)),"^") set:ExpAdmDate'="" ExpAdmDate=$$DateConv^HL7Common2(.reject,"EI",ExpAdmDate,"","Expected Admission Date")
+	if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	set ExpDischDate=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"PV2",9)),1,8) set:ExpDischDate'="" ExpDischDate=$$DateConv^HL7Common2(.reject,"EI",ExpDischDate,"","Expected Discharge Date")
+	if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	set ExpDischTime=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"PV2",9)),9,13) set:ExpDischTime'="" ExpDischTime=$$TimeConv^HL7Common2("EI",$extract(ExpDischTime,1,2)_":"_$extract(ExpDischTime,3,4))
+	set TriageCat=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV2",25)),"^")
+ 
+	kill Diagnosis
+	set segid="DG1" for  set segid=$order(^TMP("HL7",$job,cnt1,cnt2,segid)) quit:segid=""  quit:segid'["DG1"  do
+	.set Diagnosis($piece(segid,"-",2),"ICD")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,segid,3)),"^")
+	.set Diagnosis($piece(segid,"-",2),"Edition")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,segid,3)),"^",3)
+	.set Diagnosis($piece(segid,"-",2),"Type")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,segid,6)),"^")
+ 
+	set (triagenurse,presentprob,complaincat,dischargeclass,TriageDate,TriageTime,RefDrClinic)=""
+	if HL7("INCODE")="" do
+	.set presentprob=$get(^TMP("HL7",$job,cnt1,cnt2,"ZV1",1)),RefDrClinic=$$Clinic^HL7Common5($get(provider("REF")),$get(^TMP("HL7",$job,cnt1,cnt2,"ZV1",2)))
+ 
+	if HL7("INCODE")="QLD" do
+	.set CurrLoc=CurrWard
+	.set dischargeclass=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",36)),"^"),complaintcat=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV2",3)),"^")
+	.set TriageDate=$extract(^TMP("HL7",$job,cnt1,cnt2,"PV1",44),1,8) set:TriageDate'="" TriageDate=$$DateConv^HL7Common2(.reject,"EI",TriageDate,"","Triage Date")
+	.if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	.set TriageTime=$extract(^TMP("HL7",$job,cnt1,cnt2,"PV1",44),9,13) set:TriageTime'="" TriageTime=$$TimeConv^HL7Common2("EI",$extract(TriageTime,1,2)_":"_$extract(TriageTime,3,4))
+	.set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,"ZEV",12,i)) quit:i=""  do  if drfound'="" quit
+	..set TriageDr=$get(^TMP("HL7",$job,cnt1,cnt2,"ZEV",12,i)) if $piece(TriageDr,"^")="" quit
+	..set doctor=$piece(TriageDr,"^"),drsystem=$piece(TriageDr,"^",9) if drsystem="TRAKCARE" set drsystem=""
+	..set drfound=$$Provider^HL7Common5(doctor,drsystem,"","","C","I")
+	..if doctor=""""!(doctor="""""") set drfound=""""
+	..if drfound'="" set triagenurse=$piece(drfound,$char(1))
+	.if triagenurse="" do
+	..kill rejected
+	..set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,"ZEV",12,i)) quit:i=""  do  if drfound'="" quit
+	...set TriageDr=$get(^TMP("HL7",$job,cnt1,cnt2,"ZEV",12,i)) if $piece(TriageDr,"^")="" quit
+	...if $piece(doctor,"^",1)'="" set rejected("dr",$piece(TriageDr,"^",1))=$piece(doctor,"^",3)
+	..if '$data(rejected) quit
+	..set i="" for  set i=$order(rejected("dr",i)) quit:i=""  set reject=reject_i_" ("_rejected("dr",i)_") "_$select($order(rejected("dr",i))="":"",1:", ")
+	..set reject="Triage nurse "_reject_" received for admission episode "_visit_", Registration number "_RegMrn do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	.set presentprob=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZEV",16)),"^")
+ 
+	if HL7("INCODE")="SWARH" do
+	.set CurrHosp=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",39)),"^"),PrevHosp=CurrHosp
+	.set caretype=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",18)),"^")
+	.set presentprob=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZV1",10)),"^")
+ 
+	// set visit satus
+	set VisitSt=$select(DischDate'="":"D",1:"A")
+ 
+	// updating user and location
+	do UpdateUser^HL7PatEv1("EX")
+ 
+	quit
+ 
+	// set PLIST for visit details
+VisSet	kill PAADM,MRADM
+	set PAADM(2)=visit,PAADM(3)=intRegMrn,PAADM(5)=CurrLoc,PAADM(7)=AdmDate,PAADM(8)=AdmTime,PAADM(9)=PatClass,PAADM(10)=source,PAADM(12)=$get(provider("ATT"))
+	set PAADM(14)=ExpAdmDate,PAADM(22)=DischDate,PAADM(23)=DischTime,PAADM(25)=VisitSt,PAADM(76)=PreAdmNum,PAADM(78)=TriageCat
+	set PAADM(140)=ExpDischDate,PAADM(141)=ExpDischTime,PAADM(174)=$get(provider("REF")),PAADM(204)=TriageDate,PAADM(205)=TriageTime,PAADM(219)=RefDrClinic
+	set PAADM(277)=$get(provider("CON")),PAADM(295)=$get(triagenurse),PAADM(332)=CurrHosp
+	if PatClass="E" set PAADM(164)=CurrWard	// ab 14.06.05
+ 
+	set MRADM(63)=$get(caretype),MRADM(58)=$get(dischargeclass),MRADM(85)=$get(presentprob)
+ 
+	for mtable="PA_Adm","MR_Adm" do CodeTable^HL7PatEv5(mtable)
+ 
+	// updating user and location
+	do UpdateUser^HL7PatEv1("CT")
+	set PAADM(218)=upduser,PAADM(216)=upddate,PAADM(217)=updtime,PAADM(344)=updhosp
+ 
+	for var="PAADM","MRADM" set val=$order(@var@(""),-1) do
+	.set @var=val for i=1:1:val if $data(@var@(i)) do
+	..if $piece(@var@(i),"^")=""""!($piece(@var@(i),"^")="""""") set @var@(i)=""""
+	..if $piece(@var@(i),"^",2)=""""!($piece(@var@(i),"^",2)) set @var@(i)=""""
+ 
+	quit
+ 
+	// insert visit details
+VisInsert set PAADM(95)=+$h,PAADM(96)=$piece($h,",",2)
+ 
+	do NullCheck("PA_Adm")
+ 
+	set SQLCODE=$$PaadmInsert
+ 
+	if SQLCODE do  quit
+	.set reject="Unable to add Episode Id "_visit_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~207"
+ 
+	set intAdmNum=$get(%ROWID)
+ 
+	// insert MR_Adm
+	set intMRAdm="" do
+	.new %ROWID,SQLCODE set MRADM(13)=intAdmNum
+	.do NullCheck("MR_Adm")
+	.if $$MRAdmInsert quit
+	.set intMRAdm=$get(%ROWID)
+	kill PAADM set PAADM(3)=intRegMrn,PAADM(152)=$get(intMRAdm)
+	set HL7Flag="Y"
+	&SQL(UPDATE PA_Adm VALUES :PAADM() WHERE PAADM_RowId = :intAdmNum)
+	kill HL7Flag
+ 
+	if intMRAdm'="" do Diagnosis
+ 
+	set x="" set x=$order(HospMrn(x)) quit:x=""  do
+	. // insert hospital mrn volume
+	.set HospMrn=$piece($get(HospMrn(x)),"^"),mrtype=$piece($get(HospMrn(x)),"^",2)
+	. // no volume if no hospital mrn
+	.if HospMrn="" quit
+	.set intHospMrn=$$intHospMrn^HL7Common2(HospMrn) if intHospMrn="" do
+	..do HospMrn^HL7PatEv1A set intHospMrn=$$intHospMrn^HL7Common2(HospMrn)
+	.set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" quit
+	.set VolType=mrtype,RowId=$get(%ROWID)
+	.set HomeLoc=$piece($get(^RTC("TYPE",+VolType,"VOL",1)),"^",3)
+	.set str=$get(^RTC("TYPE",+VolType)),pref=$piece(str,"^",3),suf=$piece(str,"^",4),len=$piece(str,"^",5) set:'len len=8
+	.if CurrLoc'="" set CurrLoc=$order(^CTLOC(0,"Code",CurrLoc,""))
+	. // insert record volume
+	.set HL7Flag="Y"
+	. &SQL(INSERT INTO RT_MasVol (RTMAV_RTMAS_ParRef,RTMAV_CurrentLoc_DR,RTMAV_HomeLoc_DR,RTMAV_MRType_Vol_DR,RTMAV_VolumeNumber,RTMAV_PAADM_DR)
+	            VALUES (:intHospMrn, :CurrLoc, :HomeLoc, :VolType, :EpisVolNum, :intAdmNum))
+	.kill HL7Flag
+	quit
+ 
+	// extract visit details
+VisSelect(RowId) set RowId=$get(RowId)
+	&SQL(SELECT * INTO :PAADM() FROM PA_Adm WHERE PAADM_RowID = :RowId)
+	quit SQLCODE
+ 
+	// insert visit details
+PaadmInsert() set HL7Flag="Y"
+	&SQL(INSERT INTO PA_Adm VALUES :PAADM())
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// insert MR_Adm details
+MRAdmInsert() set HL7Flag="Y"
+	&SQL(INSERT INTO MR_Adm VALUES :MRADM())
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// compile diagnosis details
+Diagnosis
+	if $order(Diagnosis(""))="",$get(complaintcat)'="" do  quit
+	.kill ^MR(intMRAdm,"DIA")
+	.kill MRDIA set MRDIA(17)=$get(complaintcat)
+	.set mtable="MR_Diagnos" do CodeTable^HL7PatEv5(mtable)
+	.if MRDIA(4)="" quit
+	.kill MRDIA(4,"Edition")
+	.set MRDIA=$order(MRDIA(""),-1) for i=1:1:MRDIA if $data(MRDIA(i)) do
+	..if $piece(MRDIA(i),"^")=""""!($piece(MRDIA(i),"^")="""""") set MRDIA(i)="" quit
+	..if $piece(MRDIA(i),"^",2)=""""!($piece(MRDIA(i),"^",2)="""""") set MRDIA(i)="" quit
+	..if $piece(MRDIA(i),"^")="" kill MRDIA(i)
+	.do NullCheck("MR_Diagnos")
+	.set (MRDIA(0),initvalue)=intMRAdm
+	.if $$MRDiagnosInsert quit
+ 	
+ 	// ab 2.10.08 69237
+ 	if $data(Diagnosis) kill ^MR(intMRAdm,"DIA")
+	set cntx="" for  set cntx=$order(Diagnosis(cntx)) quit:cntx=""  do
+	.kill MRDIA,MRDIAT
+	.set MRDIA(4)=$get(Diagnosis(cntx,"ICD")),MRDIA(4,"Edition")=$get(Diagnosis(cntx,"Edition")),MRDIA(17)=$get(complaintcat)
+	.set MRDIAT(3)=$get(Diagnosis(cntx,"Type"))
+	.for mtable="MR_Diagnos","MR_DiagType" do CodeTable^HL7PatEv5(mtable)
+	.if MRDIA(4)="" quit
+	.kill MRDIA(4,"Edition")
+	.set MRDIA=$order(MRDIA(""),-1) for i=1:1:MRDIA if $data(MRDIA(i)) do
+	..if $piece(MRDIA(i),"^")=""""!($piece(MRDIA(i),"^")="""""") set MRDIA(i)="" quit
+	..if $piece(MRDIA(i),"^",2)=""""!($piece(MRDIA(i),"^",2)="""""") set MRDIA(i)="" quit
+	..if $piece(MRDIA(i),"^")="" kill MRDIA(i)
+	.do NullCheck("MR_Diagnos")
+	.set (MRDIA(0),initvalue)=intMRAdm
+	.if $$MRDiagnosInsert quit
+	.if '$data(MRDIAT) quit
+	.set intDiagNum=$get(%ROWID),(MRDIAT(0),initvalue)=intDiagNum
+	. &SQL(INSERT INTO MR_DiagType VALUES :MRDIAT())
+  
+	quit
+ 
+	// insert MR_Diagnos details
+MRDiagnosInsert() set initvalue=intMRAdm
+	set HL7Flag="Y"
+	&SQL(INSERT INTO MR_Diagnos VALUES :MRDIA())
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// compare and update details
+VisUpdate(intAdmNum,NewAdmFlag) new (link,PAADM,MRADM,Diagnosis,complaintcat,intAdmNum,intRegMrn,RegMrn,forward,old,cnt1,reject,version,link,NewAdmFlag,tracerowid)
+	set link=$get(link),intAdmNum=$get(intAdmNum),PAADM=$get(PAADM),forward=$get(forward),complaintcat=$get(complaintcat),RegMrn=$get(RegMrn),cnt1=$get(cnt1),intRegMrn=$get(intRegMrn),NewAdmFlag=$get(NewAdmFlag),tracerowid=$get(tracerowid)
+ 
+	do NullCheck("PA_Adm")
+	kill PLIST merge PLIST=PAADM kill PAADM
+ 
+	// check if old data required for cross-checking when forwarding
+	if forward do
+	.kill old("PAADM") if $$VisSelect(intAdmNum)
+	.merge old("PAADM")=PAADM kill PAADM
+	
+	kill PAADM merge PAADM=PLIST kill PLIST set HL7Flag="Y"
+	&SQL(UPDATE PA_Adm VALUES :PAADM() WHERE PAADM_RowID = :intAdmNum)
+	kill HL7Flag
+ 
+	set intMRAdm=""
+	&SQL(SELECT PAADM_MainMRADM_DR INTO :intMRAdm FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+ 
+	// only update if existing admission
+	if 'NewAdmFlag do
+	.if intMRAdm'="",$data(MRADM) do
+	..do NullCheck("MR_Adm")
+	..set HL7Flag="Y"
+	.. &SQL(UPDATE MR_Adm VALUES :MRADM() WHERE MRADM_RowId = :intMRAdm)
+	..kill HL7Flag
+ 
+	.if intMRAdm="" do
+	..new %ROWID,SQLCODE set intMRAdm="",MRADM(13)=intAdmNum
+	..do NullCheck("MR_Adm")
+	..if $$MRAdmInsert quit
+	..set intMRAdm=$get(%ROWID)
+ 
+	.if intMRAdm'="" do Diagnosis
+ 
+	quit SQLCODE
+ 
+	// check null strings and convert
+NullCheck(table) set table=$get(table)
+ 
+	set var=$select(table="PA_Adm":"PAADM",table="MR_Adm":"MRADM",table="MR_Diagnos":"MRDIA",1:"")
+	if var="" quit
+ 
+	set val=$order(@var@(""),-1) for i=1:1:val if $data(@var@(i)) do
+	.if $piece(@var@(i),"^")="""" set @var@(i)="" quit
+	.if $piece(@var@(i),"^")="""""" set @var@(i)="" quit
+	.if $piece(@var@(i),"^")="" kill @var@(i) quit
+ 
+	quit
+	
+
+
+

@@ -1,0 +1,190 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Common1^MAC^^^0
+HL7Common1 // ML 21/5/02 ; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common1.rtn#1 $
+	quit
+	
+	// get external system
+ExternalSys(intOrdNum,reject) new (intOrdNum,reject,OrdNum,RegMrn) set intOrdNum=$get(intOrdNum),(RecDep,externalsys)=""
+	&SQL(SELECT OEORI_RecDep_DR INTO :RecDep FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if RecDep'="" do
+	. &SQL(SELECT CTLOC_ExternalInfoSystem INTO :externalsys FROM CT_Loc WHERE CTLOC_RowId = :RecDep)
+	if externalsys="" set reject="No external system marked against the receiving dept. used on Order Id "_$get(OrdNum)_", Patient Id "_$get(RegMrn)
+	if RecDep="" set reject="No receiving dept. on Order Id "_$get(OrdNum)_", Patient Id "_$get(RegMrn)
+	quit $piece(externalsys,$char(1))
+	// extract type of external system
+ExternalType(externalsys) new (externalsys) set externalsys=$get(externalsys),externaltype=""
+	if externalsys="" quit ""
+	set external=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("HL7ExternalSystem",externalsys)
+	if external="" quit
+	set externaltype=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7ExternalSystem",external),2)
+	quit externaltype
+	// get HL7 result type
+ResultType(intOrdNum) new (intOrdNum) set intOrdNum=$get(intOrdNum),(ItemMast,ItemCat)="",result="IM"
+	&SQL(SELECT OEORI_ItmMast_DR INTO :ItemMast FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if ItemMast="" quit "ItemMast"
+	&SQL(SELECT ARCIM_HL7ResultType INTO :result FROM ARC_ItmMast WHERE ARCIM_RowId = :ItemMast)
+	if $piece(result,$char(1))'="" quit $piece(result,$char(1))
+	&SQL(SELECT ARCIM_ItemCat_DR INTO :ItemCat FROM ARC_ItmMast WHERE ARCIM_RowId = :ItemMast)
+	if ItemCat="" quit "ItemCat"
+	&SQL(SELECT ARCIC_HL7ResultType INTO :result FROM ARC_ItemCat WHERE ARCIC_RowId = :ItemCat)
+	quit $piece(result,$char(1))
+	
+	// get result filing routine
+ResultFile(system) new (system) set system=$get(system)
+	set routine=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("HL7ExternalSystem",system)
+	quit routine
+	
+	// check if ordered test is valid/exists in system
+ExternalCode(reject,ExtCode,ExtDesc) new (ExtCode,ExtDesc,reject,link,HL7) set ExtCode=$get(ExtCode),ExtDesc=$get(ExtDesc),(OrderedItem,location,SQLCODE)=""
+	kill RULES if $$Rules^HL7Common7(link)
+	
+	// alphaup external code so we can match on entries not entered with case sensitivity (legacy systems)
+	if $get(RULES(16))="Y" set ExtCode=##class(%Collation).AlphaUp($get(ExtCode))
+	if ExtCode'="" do
+	. // alphaup for existance check
+	. set ExtCodex=##class(%Collation).AlphaUp(ExtCode)
+	. // check number of order items with same code
+	. if HL7("CHAPPFACIN")'="Y" do
+	. . set (cnt,x)="" for  set x=$order(^ARCIM(0,"ExtCode",ExtCodex,x)) quit:x=""  set cnt=cnt+1
+	. . if cnt>1,ExtDesc'="" do
+	. . . &SQL(SELECT EXT_ParRef, EXT_CTLOC_DR -> CTLOC_Desc INTO :OrderedItem, :location FROM ARC_ItemExternalCodes WHERE EXT_Code = :ExtCode AND %ALPHAUP(EXT_Desc) = %ALPHAUP(:ExtDesc) AND EXT_DefaultReceive ='Y')
+	. . . if SQLCODE do
+	. . . . &SQL(SELECT EXT_ParRef, EXT_CTLOC_DR -> CTLOC_Desc INTO :OrderedItem, :location FROM ARC_ItemExternalCodes WHERE EXT_Code = :ExtCode AND %ALPHAUP(EXT_Desc) = %ALPHAUP(:ExtDesc))
+	. . if cnt=1!(ExtDesc="") do
+	. . . &SQL(SELECT EXT_ParRef, EXT_CTLOC_DR -> CTLOC_Desc INTO :OrderedItem, :location FROM ARC_ItemExternalCodes WHERE EXT_Code = :ExtCode AND EXT_DefaultReceive ='Y')
+	. . . if SQLCODE do
+	. . . . &SQL(SELECT EXT_ParRef, EXT_CTLOC_DR -> CTLOC_Desc INTO :OrderedItem, :location FROM ARC_ItemExternalCodes WHERE EXT_Code = :ExtCode)
+	. if HL7("CHAPPFACIN")="Y" do
+	. . set sendapp=##class(%Collation).AlphaUp($get(^TMP("HL7",$job,"MSH",2))),sendfac=##class(%Collation).AlphaUp($get(^TMP("HL7",$job,"MSH",3)))
+	. . &SQL(SELECT EXT_ParRef, EXT_CTLOC_DR -> CTLOC_Desc INTO :OrderedItem, :location FROM ARC_ItemExternalCodes
+		WHERE EXT_Code = :ExtCode AND %ALPHAUP(EXT_HL7SendingApp) = :sendapp AND %ALPHAUP(EXT_HL7SendingFacility) = :sendfac AND EXT_DefaultReceive ='Y')
+	. . if 'SQLCODE quit
+	. . &SQL(SELECT EXT_ParRef, EXT_CTLOC_DR -> CTLOC_Desc INTO :OrderedItem, :location FROM ARC_ItemExternalCodes
+		WHERE EXT_Code = :ExtCode AND %ALPHAUP(EXT_HL7SendingApp) = :sendapp AND %ALPHAUP(EXT_HL7SendingFacility) = :sendfac)
+	
+	if SQLCODE!(OrderedItem="") set reject="Test code/desc "_ExtCode_$select(ExtDesc'="":" ("_ExtDesc_")",1:"")_" not setup as External Order Item code in TrakCare",OrderedItem=""
+	quit OrderedItem_"^"_location
+	
+	// extract external code for output
+ExternalCodeOut(intOrdNum,ExternalCode) new (intOrdNum,ExternalCode) set intOrdNum=$get(intOrdNum) kill ExternalCode
+	
+	&SQL(SELECT OEORI_ItmMast_Dr, OEORI_RecDep_DR, OEORI_Date INTO :intItmNum, :recloc, :orderdate FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if SQLCODE quit
+	
+	// build array of possible valid codes
+	kill ExtCode set intItmExt=""
+	set seq=0 for  set seq=$order(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq)) quit:seq=""  do  quit:intItmExt'=""
+	. set detail=$get(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq))
+	. if $piece(detail,"^",8)'=recloc quit
+	. set datefrom=$piece(detail,"^"),dateto=$piece(detail,"^",2),defaultsend=$piece(detail,"^",9)
+	. // check if ordered date falls with in date applicable range
+	. if datefrom'="",datefrom>orderdate quit
+	. if dateto'="",dateto<orderdate quit
+	. if defaultsend="Y" set intItmExt=intItmNum_"||"_seq quit
+	. // use default send item if found
+	. set ExtCode(datefrom,$select(dateto'="":dateto,1:" "),intItmNum_"||"_seq)=""
+	
+	if intItmExt="" do
+	. set datefrom=$order(ExtCode(""),-1) quit:datefrom=""
+	. set dateto=$order(ExtCode(datefrom,""),-1) quit:dateto=""
+	. set intItmExt=$order(ExtCode(datefrom,dateto,""),-1)
+	
+	// extract external code detail
+	kill SQLCODE if intItmExt'="" do
+	. &SQL(SELECT * INTO :ExternalCode() FROM ARC_ItemExternalCodes WHERE EXT_RowId = :intItmExt)
+	. if SQLCODE kill ExternalCode
+	
+	kill SQLCODE if '$data(ExternalCode) do
+	. &SQL(SELECT * INTO :ExternalCode() FROM ARC_ItemExternalCodes WHERE EXT_ParRef = :intItmNum AND EXT_CTLOC_DR = :recloc)
+	. if SQLCODE kill ExternalCode
+	
+	for i=1:1:$order(ExternalCode(""),-1) if $data(ExternalCode(i)) do
+	. // exclude code table entries and list build fields
+	. set ExternalCode(i)=$$TextConversion^HL7Common12(ExternalCode(i),"O")
+	
+	quit
+	
+	// extract external code
+GetCode(intOrdNum) new (intOrdNum,ExternalCode) set intOrdNum=$get(intOrdNum) kill ExternalCode
+	
+	&SQL(SELECT OEORI_ItmMast_Dr, OEORI_RecDep_DR INTO :intItmNum, :recloc FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if 'SQLCODE do
+	. &SQL(SELECT * INTO :ExternalCode() FROM ARC_ItemExternalCodes WHERE EXT_ParRef = :intItmNum AND EXT_CTLOC_DR = :recloc)
+	
+	// return 0 = not found
+	quit 'SQLCODE
+	
+	// check if lab number exists on an order
+CheckLab(OrdNum,FillerNum,intAdmNum,RegMrn,OrderedItem,provider,reclocat,priority,clinical,date,time,specimen,checkonly,AccessionNum)
+	new (HL7,OrderNum,OrdNum,FillerNum,intAdmNum,RegMrn,OrderedItem,provider,reclocat,priority,clinical,date,time,specimen,checkonly,NewLabOrders,NewLabSpecs,NewLabRecDate,NewLabRecTime,NewLabColDate,NewLabColTime,NewLabEpisodeNumber,AccessionNum,%session)
+	set OrdNum=$get(OrdNum),FillerNum=$get(FillerNum),AccessionNum=$get(AccessionNum),intAdmNum=$get(intAdmNum),RegMrn=$get(RegMrn),OrderedItem=$get(OrderedItem)
+	set reclocat=$get(reclocat),priority=$get(priority),clinical=$get(clinical),specimen=$get(specimen),checkonly=$get(checkonly),HL7("USER")=$get(HL7("USER"))
+	set (checkAccession,OrderNew)=""
+	// check if accession number check required
+	set seg="" for  set seg=$order(OrderNum(seg)) quit:seg=""  do  if checkAccession="Y"
+	. set field="" for  set field=$order(OrderNum(seg,field)) quit:field=""  do  if checkAccession="Y" quit
+	. . set type=OrderNum(seg,field) if type="AC" set checkAccession="Y"
+	
+	kill xprovider
+	set xprovider("C")=$get(provider("C")),xprovider("AUTH")=$get(provider("AUTH"))
+	if $get(provider("R"))'="" do
+	. &SQL(SELECT REFD_Code INTO :xprovider("R") FROM PAC_RefDoctor WHERE REFD_RowId = :provider("R"))
+	if $get(provider("R-CLIN"))'="" do
+	. &SQL(SELECT CLN_Code INTO :xprovider("R-CLIN") FROM PAC_Clinic WHERE CLN_RowId = :provider("R-CLIN"))
+	
+	set (SQLCODE,OrderMaster,intOrdNum)=""
+	&SQL(SELECT OEORI_OEORD_ParRef INTO :OrderMaster FROM OE_OrdItem WHERE OEORI_LabEpisodeNo = :OrdNum)
+	if 'SQLCODE do
+	. set intOrdNum=$$Order(OrderedItem,OrderMaster,OrdNum,FillerNum,AccessionNum,checkAccession)
+	// do not add new order if check only
+	if checkonly="Y" quit intOrdNum
+	// no accession number received
+	if intOrdNum="NOT-RECEIVED" quit "^^NOT-RECEIVED"
+	// if accession exists but no match then do not add
+	if AccessionNum'="",$data(^OEORDi(0,"Access",AccessionNum)),intOrdNum="" quit "^^IN-USE"
+	// create order if not exist
+	if SQLCODE!(intOrdNum="") do
+	. new SQLCODE
+	. set (itemmasterlist,AllergyItems)="",OrderNew="Y"
+	. kill xdate,xtime
+	. set SubCatType=$$SubCatType^HL7Common11(OrderedItem)
+	. set datetimenow=$h
+	. for datetype="COL","REC","ST" do
+	. . if $get(date(datetype))="" do
+	. . . if datetype="ST" set date(datetype)=+datetimenow,time(datetype)=$piece(datetimenow,",",2) quit
+	. . . if SubCatType="LAB" set date(datetype)=+datetimenow,time(datetype)=$piece(datetimenow,",",2)
+	. . if $get(date(datetype))'="" set xdate(datetype)=##class(websys.Conversions).DateLogicalToHtml($get(date(datetype)))
+	. . if $get(time(datetype))'="" set xtime(datetype)=##class(websys.Conversions).TimeLogicalToHtml($get(time(datetype)))
+	. if reclocat="" set reclocat="HL7"
+	. do OIINsert^COEOrdItem(intAdmNum,priority,"",reclocat,$get(xdate("ST")),$get(xtime("ST")),"","","",clinical,"",OrdNum,"","","","","","","","",OrderedItem,specimen,"","","","","","","","",$get(xprovider("C")),"","","","","","","","","","","","","","","","","","",OrdNum,"","",HL7("USER"),"","","","","","","","","","","","","","","","","",$get(xdate("COL")),$get(xtime("COL")),"","","","","","","","","","","","","",$get(xprovider("R")),"","","",$get(xdate("REC")),$get(xtime("REC")),"","","","","Y","","","","","","","","",$get(xprovider("AUTH")),"","","","","",$get(xprovider("R-CLIN")),"","",$get(date("CREATE")),$get(time("CREATE")))
+	. set intOrdNum=$piece($piece(NewOrders,"^"),"&",2)
+	. kill NewLabColDate,NewLabColTime,NewLabEpisodeNumber,NewLabOrders,NewLabRecDate,NewLabRecTime,NewLabSpecs,NewOrders
+	
+	quit intOrdNum_"^"_OrderNew
+	
+	// get order rowid
+Order(OrderedItem,OrderMaster,OrdNum,FillerNum,AccessionNum,checkAccession) new (OrderedItem,OrderMaster,OrdNum,FillerNum,AccessionNum,checkAccession)
+	set OrderedItem=$get(OrderedItem),OrderMaster=$get(OrderMaster),OrdNum=$get(OrdNum),FillerNum=$get(FillerNum),AccessionNum=$get(AccessionNum),checkAccession=$get(checkAccession)
+	set (intOrdNum,accNum)=""
+	if AccessionNum'="" do
+	. &SQL(SELECT OEORI_RowId INTO :intOrdNum FROM OE_OrdItem WHERE OEORI_ItmMast_DR = :OrderedItem AND OEORI_OEORD_ParRef = :OrderMaster
+		AND OEORI_LabEpisodeNo = :OrdNum AND OEORI_AccessionNumber = :AccessionNum)
+	if AccessionNum="" do
+	. &SQL(SELECT OEORI_RowId, OEORI_AccessionNumber INTO :intOrdNum, :accNum FROM OE_OrdItem WHERE OEORI_ItmMast_DR = :OrderedItem AND OEORI_OEORD_ParRef = :OrderMaster
+		AND OEORI_LabEpisodeNo = :OrdNum AND ((OEORI_FillerNo = :FillerNum) OR (OEORI_FillerNo IS NULL)))
+	. if SQLCODE'=0 quit
+	. if intOrdNum="" quit
+	. // only check accession exists if expected in msg
+	. if checkAccession'="Y" quit
+	. set externalsys=$$ExternalSys(intOrdNum)
+	. set externaltype=$$ExternalType(externalsys)
+	. // check accession exists on order only if PACS
+	. if accNum'="" set intOrdNum="NOT-RECEIVED"
+	if SQLCODE'=0 quit ""
+	quit intOrdNum
+.
+
+
+

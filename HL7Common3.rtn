@@ -1,0 +1,252 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Common3^MAC^^^0
+HL7Common3 // ML 24/01/2003 ; HL7 interface - common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common3.rtn#1 $
+	quit
+	
+	// check if care provider exists
+CareProv(code,desc) new (code,desc) set code=$get(code),desc=$get(desc),SQLCODE=100 do
+	. if code'="" &SQL(SELECT CTPCP_RowId INTO :exist FROM CT_CareProv WHERE CTPCP_Code = :code) quit
+	. if desc'="" &SQL(SELECT CTPCP_RowId INTO :exist FROM CT_CareProv WHERE CTPCP_Desc = %ALPHAUP(:desc)) quit
+	quit SQLCODE
+	
+	// update audit trail
+Audit(VISTDRowId,mode,userid) new (VISTDRowId,NewAudit,mode,userid) kill OldAudit
+	set VISTDRowId=$get(VISTDRowId),mode=$get(mode),userid=$get(userid)
+	set mtable="EPVisitTestSetData",tablex=##class(%Collation).AlphaUp(mtable)
+	
+	// check for previous values
+	if mode="U" do
+	. set AudDate="" for  set AudDate=$order(^AUD(0,"TableRow",tablex,VISTDRowId,AudDate)) quit:AudDate=""  do
+	. . set AudParRef="" for  set AudParRef=$order(^AUD(0,"TableRow",tablex,VISTDRowId,AudDate,AudParRef)) quit:AudParRef=""  do
+	. . . set x=0 for  set x=$order(^AUD(AudParRef,"FLD",x)) quit:x=""  if $piece(^AUD(AudParRef,"FLD",x),"^")'="" do
+	. . . . set OldAudit($piece(^AUD(AudParRef,"FLD",x),"^"))=$piece(^AUD(AudParRef,"FLD",x),"^",2)
+	
+	// compare new and old audit values
+	set (notsame,field)="" for  set field=$order(NewAudit(field)) quit:field=""  do  quit:notsame
+	. if NewAudit(field)'=$get(OldAudit(field)) set notsame=1
+	if 'notsame quit 0
+	
+	set NewParRef=$$InsertTrail^SSAUDIT(mode,$zutil(67,11,$job),+$h,mtable,VISTDRowId,$piece($h,",",2),userid)
+	set field="" for  set field=$order(NewAudit(field)) quit:field=""  do
+	. if NewAudit(field)'=$get(OldAudit(field)),$$InsertTrailFields^SSAUDIT(NewParRef,field,NewAudit(field))
+	
+	quit 0
+	
+	// get text result type
+TextType(intOrdNum) new (intOrdNum) set intOrdNum=$get(intOrdNum),texttype=""
+	&SQL(SELECT OEORI_ItmMast_DR -> ARCIM_ItemCat_DR -> ARCIC_TextResultType_DR -> TRT_RowId INTO :texttype FROM OE_OrdItem WHERE OEORI_RowID = :intOrdNum)
+	
+	quit texttype
+	
+	// get text section type
+TextSection(textid) new (textid) set textid=$piece($get(textid),$char(1))
+	set rowid=$order(^OEC("TRT",textid,"SEC",0))
+	quit textid_"||"_rowid
+	
+	// get order category
+Category(OrderedItem) new (OrderedItem) set OrderedItem=$get(OrderedItem),category=""
+	&SQL(SELECT ARCIM_ItemCat_DR -> ARCIC_OrdCat_DR -> ORCAT_RowId INTO :category FROM ARC_ItmMast WHERE ARCIM_RowId = :OrderedItem)
+	quit category
+	
+	// update action : FN - filler number
+	//				  LR - labtrak rowid
+	//				  MF - multiple fields
+	//				  OS - order status
+	//				  PN - placer number
+	//				  RD - mark as read
+	//				  UR - mark as unread
+	//				  VR - variance reason
+	//				  CA - cancel reason
+OrderUpdate(intOrdNum,action,value,fields,update) set intOrdNum=$get(intOrdNum),action=$get(action),value=$get(value),fields=$get(fields),HL7("USER")=$get(HL7("USER")),update=$get(update)
+	set OrdNum=$get(OrdNum),RegMrn=$get(RegMrn),reject=""
+	
+	if action="FN"!(action="PN") do
+	. set OrdDetail($select(action="FN":163,1:215))=value
+	if action="LR" do
+	. set OrdDetail(136)=value,OrdDetail(212)="Y"
+	if action="MF2" do
+	. for i=1:1:$length(fields,"^") quit:$piece(fields,"^",i)=""  set OrdDetail2($piece(fields,"^",i))=$piece(value,"^",i)
+	if action="MF" do
+	. for i=1:1:$length(fields,"^") quit:$piece(fields,"^",i)=""  set OrdDetail($piece(fields,"^",i))=$piece(value,"^",i)
+	if action="OS",value'="" do  quit
+	. if '$data(^OEC("OSTAT",0,"Code",value)),(##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("OrderStatus",value)="") do  quit
+	. . set reject="Order status "_value_" received against Order number "_OrdNum_", Patient Id "_RegMrn_" does not exist in TrakCare" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	. if '$data(^OEC("OSTAT",0,"Code",value)) set value=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("OrderStatus",value)
+	. set HL7Flag="Y"
+	. do ChangeStatus^COEOrdItem5(intOrdNum,value,HL7("USER"))
+	. kill HL7Flag
+	if action="RD" do
+	. for i=235:1:237 set OrdDetail(i)=""
+	. set OrdDetail(155)=+$h,OrdDetail(156)=$piece($h,",",2),OrdDetail(157)=value
+	if action="UR" do
+	. for i=155:1:157 set OrdDetail(i)=""
+	. set OrdDetail(235)=value,OrdDetail(236)=+$h,OrdDetail(237)=$piece($h,",",2)
+	if action="VR" do
+	. if value=""""!(value="""""") set OrdDetail(164)="" quit
+	. if '$data(^MRC("VR",0,"Code",value)) set reject="Variance reason "_value_" received against Order number "_OrdNum_", Patient Id "_RegMrn_" does not exist in TrakCare" quit
+	. set OrdDetail(164)=$order(^MRC("VR",0,"Code",value,""))
+	if action="CA" do
+	. if value=""""!(value="""""") set OrdDetail(266)="" quit
+	. if ##class(web.OECCancelReason).GetIdFromCodeOrDescription(value)="" set reject="Cancel reason "_value_" received against Order number "_OrdNum_", Patient Id "_RegMrn_" does not exist in TrakCare" quit
+	. set OrdDetail(266)=##class(web.OECCancelReason).GetIdFromCodeOrDescription(value)
+	if update do
+	. set HL7Flag="Y"
+	. &SQL(UPDATE OE_OrdItem VALUES :OrdDetail() WHERE OEORI_RowId = :intOrdNum)
+	. &SQL(UPDATE OE_OrdItem2 VALUES :OrdDetail2() WHERE ITM2_RowId = :intOrdNum)
+	. kill HL7Flag
+	
+	if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	
+	quit
+	
+	// build name format into HL7
+BuildName(N1,N2,N3) new (N1,N2,N3,HL7) set N1=$get(N1),N2=$get(N2),N3=$get(N3),format=$translate(HL7("NAMEFORM"),"<>"),name=""
+	if format="N1^N2^N3" do
+	. set name=N1_"^"_N2_"^"_N3
+	if format="N1^N2 N3" do
+	. set name=N1_"^"_N2_" "_N3
+	if format="N1 N2^N3" do
+	. set name=N1_" "_N2_"^"_N3
+	if format="N1^N2" do
+	. set name=N1_"^"_N2
+	if format="N1" do
+	. set name=N1
+	// strip leading and trailing spaces
+	for i=1:1:3 set x=$piece(name,"^",i) do  set $piece(name,"^",i)=x
+	. if $extract(x)=" " set x=$extract(x,2,99)
+	. if $extract(x,$length(x))=" " set x=$extract(x,1,$length(x)-1)
+	quit name
+	
+	// extract sex detail - type : R - Rowid
+	//							  C - Code
+Sex(sex,type) new (sex,type) set sex=$get(sex),type=$get(type),(sexRowId,sexCode,value,SQLCODE)=""
+	if sex'="" do
+	. &SQL(SELECT CTSEX_RowId, CTSEX_Code INTO :sexRowId, :sexCode FROM CT_Sex WHERE CTSEX_HL7Code = :sex)
+	. if SQLCODE'=0 do
+	. . &SQL(SELECT CTSEX_RowId, CTSEX_Code INTO :sexRowId, :sexCode FROM CT_Sex WHERE CTSEX_Code = :sex)
+	. set value=$select(type="R":sexRowId,1:sexCode)
+	quit value
+	
+	// compare patient detail
+PatCheck(intid,extid,partial,merge) set intid=$get(intid),extid=$get(extid),partial=$get(partial),merge=$get(merge) set (HL7Surname,HL7Given,HL7Middle,SQLCODE)=""
+	
+	// extract patient detail to facilitate building of lab episode [Log 51613]
+	if intid'="",extid="" do
+	. &SQL(SELECT %ALPHAUP(PAPMI_Name),%ALPHAUP(PAPMI_Name2),%ALPHAUP(PAPMI_Name3), %INTERNAL(PAPMI_Dob), CTSEX_Code
+		INTO :surname, :given, :middle, :dob, :sex FROM PA_PatMas, CT_Sex
+		WHERE PAPMI_RowId = :intid AND CTSEX_RowID = PAPMI_Sex_DR)
+	if SQLCODE set reject="Unable to extract stored patient details for Patient Id (internal) "_intid,reject("Detail")="^^~207" quit 1
+	
+	if intid'="",extid'="" do
+	. &SQL(SELECT %ALPHAUP(PAPMI_Name),%ALPHAUP(PAPMI_Name2),%ALPHAUP(PAPMI_Name3), %INTERNAL(PAPMI_Dob), CTSEX_Code
+		INTO :surname, :given, :middle, :dob, :sex FROM PA_PatMas, CT_Sex
+		WHERE PAPMI_No = :extid AND CTSEX_RowID = PAPMI_Sex_DR)
+	if SQLCODE set reject="Unable to extract stored patient details for Patient Id (external) "_extid,reject("Detail")="^^~207" quit 1
+	// extract current details only - match cannot happen on merged patients as details from msg to actual patient may be different [Log 81320]
+	if merge="Y" quit 0
+	// check if matching on registration/med record number only
+	if $$Rules^HL7Common7(link)
+	if $get(RULES(11))="Y" quit 0
+	set detail=$get(^TMP("HL7",$job,cnt1,"PID",5))
+	set HL7Surname=$piece(detail,"^"),HL7Given=$piece(detail,"^",2),HL7Middle=$piece(detail,"^",3)
+	set HL7dob=$get(^TMP("HL7",$job,cnt1,"PID",7)),HL7sex=$get(^TMP("HL7",$job,cnt1,"PID",8))
+	// if partial set to 'Y' only check on surname (CHI/NHS matching)
+	if partial="Y" do  quit pok
+	. set pok=0 if ##class(%Collation).AlphaUp(surname)'=##class(%Collation).AlphaUp(HL7Surname) set pok=1
+	// check name
+	if ##class(%Collation).AlphaUp($translate($$BuildName(surname,given,middle),"^"))'=##class(%Collation).AlphaUp($translate($$BuildName(HL7Surname,HL7Given,HL7Middle),"^")) do  quit 1
+	. set reject="Name sent for Patient Id "_extid_" does not match system details",reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^5~103"
+	// check dob
+	if $extract(HL7dob,1,8)?8N,dob'=$$DateConv^HL7Common2(.reject,"EI",$extract(HL7dob,1,8)) do  quit 1
+	. set reject="DOB sent for Patient Id "_extid_" does not match system details or was in an incorrect format",reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^7~103"
+	// check sex
+	if HL7sex'="",sex'=$$Sex(HL7sex,"C") set reject="Sex sent for Patient Id "_extid_" does not match system details",reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^8~103" quit 1
+	quit 0
+	
+	// check if update field null and set to ""
+NullChange(tablechanged) set tablechanged=$get(tablechanged)
+	
+	// patient detail
+	if tablechanged="PAPER",$data(old("PAPER")) do
+	. set total=$order(PatDetail(""),-1)
+	. for j=1:1:total if $data(old("PAPER",j)) do
+	. . if $get(old("PAPER",j))'="",$get(PatDetail(j))="" set PatDetail(j)=""""""
+	if tablechanged="PAPMI",$data(old("PAPMI")) do
+	. set total=$order(PatDetailx(""),-1)
+	. for j=1:1:total if $data(old("PAPMI",j)) do
+	. . if $get(old("PAPMI",j))'="",$get(PatDetailx(j))="" set PatDetailx(j)=""""""
+	
+	// admission detail
+	if tablechanged="PAADM",$data(old("PAADM")) do
+	. set total=$order(AdmDetail(""),-1)
+	. for j=1:1:total if $data(old("PAADM",j)) do
+	. . if $get(old("PAADM",j))'="",$get(AdmDetail(j))="" set AdmDetail(j)=""""""
+	
+	// other admission detail
+	if tablechanged="MRADM",$data(old("MRADM")) do
+	. set total=$order(MRAdm(""),-1)
+	. for j=1:1:total if $data(old("MRADM",j)) do
+	. . if $get(old("MRADM",j))'="",$get(MRAdm(j))="" set MRAdm(j)=""""""
+	
+	// temporary address detail
+	if tablechanged="PTADD",$data(old("PTADD")) do
+	. set total=$order(TempAdd(""),-1)
+	. for j=1:1:total if $data(old("PTADD",j)) do
+	. . // check for matching rowid
+	. . if $get(old("PTADD",1))'=$get(TempAdd(1)) quit
+	. . if $get(old("PTADD",j))'="",$get(TempAdd(j))="" set TempAdd(j)=""""""
+	
+	// patient alerts
+	if tablechanged="PAALERTMSG",$data(old("PAALERTMSG")) do
+	. set total=$order(Alert(""),-1)
+	. for j=1:1:total if $data(old("PAALERTMSG",j)) do
+	. . if $get(old("PAALERTMSG",j))'="",$get(Alert(j))="" set Alert(j)=""""""
+	
+	// patient allergy
+	if tablechanged="PAALLERGY",$data(old("PAALLERGY")) do
+	. set total=$order(Allergy(""),-1)
+	. for j=1:1:total if $data(old("PAALLERGY",j)) do
+	. . if $get(old("PAALLERGY",j))'="",$get(Allergy(j))="" set Allergy(j)=""""""
+	
+	// traffic accident/compensable
+	if tablechanged="PATRAFFICACCIDENT",$data(old("PATRAFFICACCIDENT")) do
+	. set total=$order(Accident(""),-1)
+	. for j=1:1:total if $data(old("PATRAFFICACCIDENT",j)) do
+	. . if $get(old("PATRAFFICACCIDENT",j))'="",$get(Accident(j))="" set Accident(j)=""""""
+	
+	// patient insurance
+	if tablechanged="PAADMINSURANCE",$data(old("PAADMINSURANCE")) do
+	. set total=$order(AdmInsurance(""),-1)
+	. for j=1:1:total if $data(old("PAADMINSURANCE",j)) do
+	. . if $get(old("PAADMINSURANCE",j))'="",$get(AdmInsurance(j))="" set AdmInsurance(j)=""""""
+	
+	// order detail
+	if tablechanged="OEORI",$data(old("OEORI")) do
+	. set total=$order(OrdDetail(""),-1)
+	. for j=1:1:total if $data(old("OEORI",j)) do
+	. . if $get(old("OEORI",j))'="",$data(OrdDetail(j))="" set OrdDetail(j)=""""""
+	
+	// waiting list
+	if tablechanged="PAWAITINGLIST",$data(old("PAWAITINGLIST")) do
+	. set total=$order(WaitList(""),-1)
+	. for j=1:1:total if $data(old("PAWAITINGLIST",j)) do
+	. . if $get(old("PAWAITINGLIST",j))'="",$get(WaitList(j))="" set WaitList(j)=""""""
+	
+	// waiting list admission
+	if tablechanged="PAWAITINGLISTADM",$data(old("PAWAITINGLISTADM")) do
+	. set total=$order(WaitListAdm(""),-1)
+	. for j=1:1:total if $data(old("PAWAITINGLISTADM",j)) do
+	. . if $get(old("PAWAITINGLISTADM",j))'="",$get(WaitListAdm(j))="" set WaitListAdm(j)=""""""
+	
+	// appointment schedule
+	if tablechanged="RBAPPOINTMENT",$data(old("RBAPPOINTMENT")) do
+	. set total=$order(Appointment(""),-1)
+	. for j=1:1:total if $data(old("RBAPPOINTMENT",j)) do
+	. . if $get(old("RBAPPOINTMENT",j))'="",$get(Appointment(j))="" set Appointment(j)=""""""
+	
+	quit
+
+
+

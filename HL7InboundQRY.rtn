@@ -1,0 +1,20 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundQRY^MAC^^^0
+HL7InboundQRY	// ML 11/06/2010 : query
+	// decide what QRY processing needs to occur
+Check(msgtype)	new (msgtype,link,INT,HL7,EB,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,version,PatNum,RefNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum)
+	set msgtype=$get(msgtype),(forward,forwardnum,forwardtable,ok,reject,reject("Detail"))="" kill forwardnum,old
+	// request api token
+	set token=##class(TC.api.Logon).Request("demo","demo")
+	// check for site specific code
+	set found="",routine="HL7Site"_HL7("INCODE")_"Inbound"_$translate($piece(msgtype,"^",1,2),"^"),LineRoutine="Check"_$piece(msgtype,"^",2)_"^"_routine 
+	if $length($text(@LineRoutine),";;")=2 xecute "s ok=$$"_$piece(msgtype,"^",2)_"^"_routine_"()" set found=1
+	if 'found {
+		// QRY^A19 - patient query
+		//i msgtype="QRY^A19" s ok=$$A19^HL7InboundQRYA19()
+	}
+	quit ok
+
+
+

@@ -1,0 +1,67 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundADTA13^MAC^^^0
+HL7InboundADTA13	// ML 22/03/2011 ;  HL7 interface : patient event ADT_A13
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundADTA13.rtn#1 $
+	quit
+	// A13 - cancel discharge
+A13()
+	set HL7Flag="Y"
+	set (reject,rejecthere)=""
+	// check if message forwarding required
+	set forward=$$MsgForward^HL7Inbound(msgtype)
+	set cnt1=0 for  {
+		if reject'="" quit
+		set cnt1=$order(^TMP("HL7",$job,cnt1)) if cnt1="" quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		// check if pre-existing patient
+		set numbers=$$RegNum^HL7Common2(.reject,"A11")
+		set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+		if reject'="" set rejecthere="Y" quit
+		// check if patient details received match those in system
+		if $$PatCheck^HL7Common3(intRegMrn) quit
+		// extract EVN information
+		do EVN^HL7InboundExtract0
+		kill PERSON
+		// extract PID information
+		do PID^HL7InboundExtract1 if reject'="" quit
+		set foundPV1=""
+		set cnt2=0 for  {
+			if reject'="" quit
+			set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) if cnt2="" quit
+			kill PAADM,SQL
+			
+			set reject=""
+			// ignore segment codes in cnt2
+			if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+			if foundPV1,$extract(cnt2,1,2)?1.2A quit
+			if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100,rejecthere="Y" quit
+			kill PLIST
+			// extract PV1 information
+			do PV1^HL7InboundExtract2
+			if PAADM("PAADMADMNo")="" set reject="No admission number received, unable to cancel discharge",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~205",rejecthere="Y" quit
+			// check if admission exists on patient
+			set intAdmNum=$$intAdmNum^HL7Common2(PAADM("PAADMADMNo"),intRegMrn,HL7("INT-ADM-NUM"))
+			if intAdmNum="" set reject=$select(HL7("INT-ADM-NUM")="Y":"Internal admission number ",1:"Admission number ")_PAADM("PAADMADMNo")_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~205",rejecthere="Y" quit
+			if HL7("INT-ADM-NUM")="Y" set PAADM("PAADMADMNo")=""
+			set intMRAdm=""
+			// extract MR_Adm rowid
+			&SQL(SELECT PAADM_MainMRADM_DR INTO :intMRAdm FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+			if intMRAdm="" set reject="Unable to cancel discharge for admission number "_PAADM("PAADMADMNo"),reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~205",rejecthere="Y" quit
+			// setup required hidden fields
+			set PAADM("EpisodeID")=intAdmNum,PAADM("mradm")=intMRAdm
+			set reject=""
+			// discharge admission
+			do CANCELDISCH^HL7InboundUpdate2
+			// check if message forwarding required
+			if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmNum)="PAADM"
+		}
+		kill PERSON,PAADM,SQL
+	}
+	kill PERSON,PAADM,SQL
+	if rejecthere="Y" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

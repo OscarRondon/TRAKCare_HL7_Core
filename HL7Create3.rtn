@@ -1,0 +1,507 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Create3^MAC^^^0
+HL7Create3 // ML 05/05/2003 ; HL7 interface : create transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Create3.rtn#1 $
+	quit
+	
+CheckORC ;; build DATA array - ORC
+ORC()	set intOrdNum=$get(intOrdNum) kill DATA
+	
+	// extract order detail
+	kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+	if SQLCODE quit SQLCODE
+	
+	// check for new null fields and change to ""
+	if $data(old("OEORI")) do NullChange^HL7Common3("OEORI")
+	
+	// extract code table detail
+	do CodeTable^HL7OutExtract8("OE_OrdItem")
+	
+	set location=OrdDetail(6),ordstatus=$piece($get(OrdDetail(10)),"^"),priority=$piece($get(OrdDetail(23)),"^"),quantity=OrdDetail(29),PrescriptionNum=$get(OrdDetail(65))
+	set OrdNum=OrdDetail(88),AccessionNum=OrdDetail(148),FillerNum=OrdDetail(163)
+	kill datetime for i="17^18^ST^Y","189^190^ARR^Y","192^193^UPD^Y" do
+	. set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(OrdDetail($piece(i,"^"))),$get(OrdDetail($piece(i,"^",2))),$piece(i,"^",4))
+	
+	// extract doctors
+	kill doctor set drcodes=""
+	for i=14,246 if $get(OrdDetail(i))'="" do
+	. if OrdDetail(i)=""""!(OrdDetail(i)="""""") quit
+	. set drcode=$$Provider^HL7Common5($get(OrdDetail(i)),"","","","C","O")
+	. set OrdDetail(i)=$$BuildDoctor^HL7Common5(drcode)
+	for i=14,246 set doctor($select(i=14:"ORD",1:"AUTH"))=$get(OrdDetail(i))
+	
+	// extract external system details
+	set externalsys=$$ExternalSys^HL7Common1(intOrdNum)
+	set externaltype="" if externalsys'="" do
+	. set external=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("HL7ExternalSystem",externalsys)
+	. if external="" quit
+	. set externaltype=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7ExternalSystem",external),2)
+	
+	set DATA("ORC",1)=$select($get(insert)=1:"NW",ordstatus="H":"HD",ordstatus="D":"OC",1:"SC")
+	set field="" for  set field=$order(OrderNum("ORC",field)) quit:field=""  do
+	. set type=OrderNum("ORC",field) quit:type=""
+	. if type="MO" set DATA("ORC",field)=OrdNum
+	. if type="FI" set DATA("ORC",field)=FillerNum
+	. if type="AC" set DATA("ORC",field)=AccessionNum
+	. if type="PS" set DATA("ORC",field)=PrescriptionNum
+	set DATA("ORC",5)=$select(ordstatus="D":"CA",ordstatus="H":"HD",ordstatus="V":"IP",ordstatus="E":"IP",1:ordstatus)
+	set DATA("ORC",7)=quantity_"^^^"_$get(datetime("ST"))_"^^"_priority,(DATA("ORC",9),DATA("ORC",15))=$$Date^HL7,DATA("ORC",12)=$get(doctor("ORD"))
+	set DATA("ORC",17)=$select($piece(location,"^")'="":$piece(location,"^")_"^"_$piece(location,"^",2)_"^TRAKCARE",1:""),DATA("ORC",19)=$get(doctor("AUTH"))
+	
+	kill OrdDetail,doctor,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckOBR ;; build DATA array - OBR
+OBR()	kill DATA,doctor
+	if msgtype="ORM^O01"!(msgtype="ORU^R01") do
+	. set intOrdNum=$get(intOrdNum)
+	. set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2)
+	
+	. // extract order detail
+	. kill OrdDetail set SQLCODE=$$OrdDetail^HL7OutExtract8(intOrdNum,.OrdDetail)
+	. if SQLCODE quit
+	
+	. // check for new null fields and change to ""
+	. if $data(old("OEORI")) do NullChange^HL7Common3("OEORI")
+	
+	. // extract item ordered detail
+	. kill ItemOrdered set SQLCODE=$$ItemOrdered^HL7OutExtract8(OrdDetail(4),.ItemOrdered)
+	. if SQLCODE quit
+	. // extract external code for item ordered
+	. kill ExternalCode do ExternalCodeOut^HL7Common1(intOrdNum,.ExternalCode)
+	
+	. if HL7("CHAPPFACOUT")="Y" set ReceivingApp=$get(ExternalCode(13)),ReceivingFac=$get(ExternalCode(14))
+	
+	. // extract code table detail
+	. for mtable="OE_OrdItem","ARC_ItmMast" do CodeTable^HL7OutExtract8(mtable)
+	
+	. set ordstatus=$piece($get(OrdDetail(10)),"^"),priority=$piece($get(OrdDetail(23)),"^"),quantity=OrdDetail(29),OrdNum=OrdDetail(88),AccessionNum=OrdDetail(148),FillerNum=OrdDetail(163)
+	. kill datetime for i="17^18^ST^Y","189^190^ARR^Y","192^193^UPD^Y","218^219^REC^Y" do
+	. . set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(OrdDetail($piece(i,"^"))),$get(OrdDetail($piece(i,"^",2))),$piece(i,"^",4))
+	
+	. // extract processing notes
+	. set comm=$get(OrdDetail(53)),comment("DEP-PROC")="" if $listlength(comm) do
+	. . for j=1:1:$listlength(comm) set comment("DEP-PROC")=$get(comment("DEP-PROC"))_$select($length(comment("DEP-PROC")):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,j),"O"),$char(13,10),HL7("LINEBK"))
+	
+	. set ordertype=$$SubCatType^HL7Common11(OrdDetail(4))
+	. // extract specimen for a lab order
+	. set (speccode,datetime("COL"),site,volume)="" if ordertype="LAB" do
+	. . set row=$order(^OEORD(ord1,"I",ord2,"SPEC",0)) quit:row=""  do
+	. . set intSpecNum=intOrdNum_"||"_row
+	. . kill OrdSpecimen set SQLCODE=$$OrdSpecimen^HL7OutExtract8(intSpecNum,.OrdSpecimen)
+	. . if SQLCODE quit
+	. . set speccode=OrdSpecimen(3),date=OrdSpecimen(6),time=OrdSpecimen(7),datetime("COL")=$select(date'="":$$Date^HL7(date_","_time),1:""),volume=OrdSpecimen(16)
+	. . set rowx=$order(^OEORD(ord1,"I",ord2,"SPEC",row,"SITE",0)) quit:rowx=""
+	. . set site=$piece(^OEORD(ord1,"I",ord2,"SPEC",row,"SITE",rowx),"^")
+	. . // check for daybook specimen site
+	. . if OrdDetail(232)'="" set site=$piece($piece(OrdDetail(232),","),"|",2)
+	
+	. // check for LabTrak details
+	. if ordertype="LAB",$$extlab^COEOrdItem14()'="Y" do
+	. . set TCnamesp=$zutil(5)
+	. . set LTnamesp=$listget(^websys.ConfigurationD(1),21) if LTnamesp="" quit
+	. . // check namespaces before switching
+	. . if '$zutil(90,10,LTnamesp) quit
+	. . if $zutil(5,LTnamesp)
+	. . set date=$piece($get(^TEPI(OrdNum)),"\",32),time=$piece($get(^TEPI(OrdNum)),"\",33)*60
+	. . if $zutil(5,TCnamesp)
+	. . // no details so use existing date/time received from order
+	. . if date="" quit
+	. . set datetime("REC")=$$DateTime^HL7Common2(date,time,"Y")
+	
+	. // extract external system details
+	. set externalsys=$$ExternalSys^HL7Common1(intOrdNum)
+	. set externaltype="" if externalsys'="" do
+	. . set external=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("HL7ExternalSystem",externalsys)
+	. . if external="" quit
+	. . set externaltype=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7ExternalSystem",external),2)
+	
+	. // extract doctors
+	. kill doctor set drcodes=""
+	. for i=14,246 if $get(OrdDetail(i))'="" do
+	. . if OrdDetail(i)=""""!(OrdDetail(i)="""""") quit
+	. . set drcode=$$Provider^HL7Common5($get(OrdDetail(i)),"","","","C","O")
+	. . set OrdDetail(i)=$$BuildDoctor^HL7Common5(drcode)
+	. for i=14,246 set doctor($select(i=14:"ORD",1:"AUTH"))=$get(OrdDetail(i))
+	
+	. set doctor("COPY-TO")="" for drtype="DOC","REFD" do
+	. . set ord3=0 for  set ord3=$order(^OEORD(ord1,"I",ord2,drtype,ord3))  quit:ord3=""  do
+	. . . set doc=$get(^OEORD(ord1,"I",ord2,drtype,ord3)) quit:doc=""
+	. . . set drcode=$$Provider^HL7Common5(doc,"","","",$select(drtype="DOC":"C",1:"R"),"O")
+	. . . set doctor("COPY-TO")=$$BuildDoctor^HL7Common5(drcode)
+	
+	. set field="" for  set field=$order(OrderNum("OBR",field)) quit:field=""  do
+	. . set type=OrderNum("OBR",field) quit:type=""
+	. . if type="MO" set DATA("OBR",field)=OrdNum
+	. . if type="FI" set DATA("OBR",field)=FillerNum
+	. . if type="AC" set DATA("OBR",field)=AccessionNum
+	. set DATA("OBR",4)=$get(ItemOrdered(2))_"^"_$get(ItemOrdered(3))_"^TRAKCARE"
+	. if $data(ExternalCode) set DATA("OBR",4)=$get(ExternalCode(6))_"^"_$get(ExternalCode(8))_"^"_$piece($get(ItemOrdered(74)),"^")_"^"_$get(ItemOrdered(2))_"^"_$get(ItemOrdered(3))_"^TRAKCARE"
+	. if ordertype="LAB" set DATA("OBR",7)=datetime("COL"),DATA("OBR",9)=$select(volume'="":volume_"^ML",1:""),DATA("OBR",11)="S",DATA("OBR",14)=datetime("REC"),DATA("OBR",15)=$select(speccode'="":speccode_"^^^"_site,1:"")
+	. set DATA("OBR",13)=comment("DEP-PROC"),DATA("OBR",16)=$get(doctor("ORD")),DATA("OBR",27)=quantity_"^^^"_$get(datetime("ST"))_"^^"_priority,DATA("OBR",28)=doctor("COPY-TO")
+	
+	. // extract result details
+	. if msgtype="ORU^R01" do
+	. . set (datetime("EXE"),datetime("VER"))=""
+	. . // atomic results
+	. . if table="EPVISITTESTSET" do
+	. . . set detail=$get(^TEPI($piece(intResNum,"||"),1,$piece(intResNum,"||",2),$piece(intResNum,"||",3)))
+	. . . set date("VER")=$piece(detail,"\",4),time("VER")=$piece(detail,"\",5)*60,status=$piece(detail,"\",31)
+	. . . set datetime("VER")=$$Date^HL7($get(date("VER"))_","_$get(time("VER")))
+	. . // word results saved as text document
+	. . if table="OEORDRESULT" do
+	. . . &SQL(SELECT RES_ResStat_DR -> RESST_Code, RES_DateVerified, RES_TimeVerified, RES_CPReported_DR INTO :status, :date('VER'), :time('VER'), :doctor('VER')
+		FROM OE_OrdResult WHERE Res_RowId = :intResNum)
+	. . . set datetime("VER")=$$Date^HL7($get(date("VER"))_","_$get(time("VER")))
+	. . . // check for previous editions of report and change status
+	. . . set ord1=$piece(intOrdNum,"||",1),ord2=$piece(intOrdNum,"||",2),ord3=$piece(intResNum,"||",3)
+	. . . set found="" for  set ord3=$order(^OEORD(ord1,"I",ord2,"RES",ord3),-1) quit:ord3=""  do  quit:found
+	. . . . if ^OEORD(ord1,"I",ord2,"RES",ord3)[".txt"!($piece(^OEORD(ord1,"I",ord2,"RES",ord3),"^",29)'="") set found=1,status="C"
+	. . // text report
+	. . if table="OETEXTRESULTSECTION" do
+	. . . set intTextNum=$piece(intResNum,"||")
+	. . . &SQL(SELECT TR_ResStat_DR -> RESST_Code, TR_DateVerified, TR_TimeVerified, TR_CPVerified_DR INTO :status, :date('VER'), :time('VER'), :doctor('VER')
+		FROM OE_TextResult WHERE TR_RowId = :intTextNum)
+	. . . set datetime("VER")=$$Date^HL7($get(date("VER"))_","_$get(time("VER")))
+	
+	. . // extract doctor
+	. . if $get(doctor("VER"))'="" do
+	. . . set drcode=$$Provider^HL7Common5($get(doctor("VER")),"","","","C","O")
+	. . . set doctor("VER")=""
+	. . . for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	. . . . set drcodetype=$piece(dr,$char(2),7)
+	. . . . set (nameL,nameG,nameO,nameT)="" set nameL=$piece(dr,$char(2),2),nameG=$piece(dr,$char(2),3) if $piece(dr,$char(2),9)'="" do
+	. . . . . set nameL=$piece($piece(dr,$char(2),9),"~"),nameG=$piece($piece(dr,$char(2),9),"~",2),nameO=$piece($piece(dr,$char(2),9),"~",3),nameT=$piece($piece(dr,$char(2),9),"~",4)
+	. . . . set doctor("VER")=doctor("VER")_$select($length(doctor("VER")):"~",1:"")_$piece(dr,$char(2),1)_"&"_nameL_"&"_nameG_"&"_nameO_"&&"_nameT_"&&&"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"&&&&"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	
+	. . set datetime("EXE")=$$Date^HL7($get(OrdDetail(115))_","_$get(OrdDetail(116)))
+	. . set DATA("OBR",7)=datetime("EXE"),DATA("OBR",22)=datetime("VER"),DATA("OBR",25)=status,DATA("OBR",27)="",DATA("OBR",32)=$get(doctor("VER"))
+	if msgtype="REF^I12" do
+	. // extract referred order items
+	. if $get(refertype)="REFERREDITEM" do  quit
+	. . kill DischSumRefItem if $$DischSumReferItem^HL7OutExtract14(intRefItem,.DischSumRefItem) quit
+	. . set intItmNum=$get(DischSumRefItem(4))
+	. . // extract item ordered detail
+	. . kill ItemOrdered set SQLCODE=$$ItemOrdered^HL7OutExtract8(intItmNum,.ItemOrdered)
+	. . // extract code table detail
+	. . set mtable="PA_DischargeSummaryReferral" do CodeTable^HL7OutExtract14(mtable)
+	. . set mtable="ARC_ItmMast" do CodeTable^HL7OutExtract8(mtable)
+	. . set startdate=$get(DischSumRefItem(3))
+	. . set intItmExt="" kill ExtCode
+	. . // extract default external code (no location available for location specific check)
+	. . set seq=0 for  set seq=$order(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq)) quit:seq=""  do  quit:intItmExt'=""
+	. . . set detail=$get(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq))
+	. . . set datefrom=$piece(detail,"^"),dateto=$piece(detail,"^",2),defaultsend=$piece(detail,"^",9)
+	. . . // check if ordered date falls with in date applicable range
+	. . . if datefrom'="",datefrom>startdate quit
+	. . . if dateto'="",dateto<startdate quit
+	. . . if defaultsend="Y" set intItmExt=intItmNum_"||"_seq quit
+	. . . // use default send item if found
+	. . . set ExtCode(datefrom,$select(dateto'="":dateto,1:" "),intItmNum_"||"_seq)=""
+	. . if intItmExt="" do
+	. . . set datefrom=$order(ExtCode(""),-1) quit:datefrom=""
+	. . . set dateto=$order(ExtCode(datefrom,""),-1) quit:dateto=""
+	. . . set intItmExt=$order(ExtCode(datefrom,dateto,""),-1)
+	. . // extract external code detail
+	. . kill SQLCODE if intItmExt'="" do
+	. . . &SQL(SELECT * INTO :ExternalCode() FROM ARC_ItemExternalCodes WHERE EXT_RowId = :intItmExt)
+	. . . if SQLCODE kill ExternalCode
+	. . . for i=6,8 if $data(ExternalCode(i)) do
+	. . . . // exclude code table entries and list build fields
+	. . . . set ExternalCode(i)=$$TextConversion^HL7Common12(ExternalCode(i),"O")
+	. . set quantity=$get(DischSumRefItem(5)),duration=$piece($get(DischSumRefItem(6)),"^",2),frequency=$piece($get(DischSumRefItem(7)),"^",2),priority=$piece($get(DischSumRefItem(8)),"^")
+	. . if startdate'="" set datetime("REFITEM-START")=$$Date^HL7(startdate)
+	. . set DATA("OBR",4)=$get(ItemOrdered(2))_"^"_$get(ItemOrdered(3))_"^TRAKCARE"
+	. . if $data(ExternalCode) set DATA("OBR",4)=$get(ExternalCode(6))_"^"_$get(ExternalCode(8))_"^"_$piece($get(ItemOrdered(74)),"^")_"^"_$get(ItemOrdered(2))_"^"_$get(ItemOrdered(3))_"^TRAKCARE"
+	. . set DATA("OBR",19)="REFERRED_ITEM"
+	. . set DATA("OBR",27)=quantity_"^"_frequency_"^"_duration_"^"_$get(datetime("REFITEM-START"))_"^^"_priority
+	. // extract questionnaires
+	. if $get(refertype)="QUESTIONNAIRE" do  quit
+	. . set intQnaire=$get(intQnaire),qCode=$piece($piece(intQnaire,"||"),"Q",2)
+	. . // questionnaire type
+	. . set qid=$order(^SSU("WIN",0,"Code",qCode,""))
+	. . set qDesc=$piece($get(^SSU("WIN",qid)),"^",2)
+	. . set exe="s ques=##class(questionnaire."_$piece(intQnaire,"||")_").%OpenId("_$piece(intQnaire,"||",2)_")" xecute exe
+	. . if ques do
+	. . . set datetime("QUES-CREATED")=$$Date^HL7(ques.QUESCreateDate_","_ques.QUESCreateTime)
+	. . . set qStatusCode="" if ques.QUESStatusDR'="" do
+	. . . . set qStatus=ques.QUESStatusDR.%Id() if qStatus="" quit
+	. . . . &SQL(SELECT NNS_Code INTO :qStatusCode FROM MRC_NursingNotesStatus WHERE NNS_RowId = :qStatus)
+	. . . set qUser="" if ques.QUESCreateUserDR'="" do
+	. . . . set qUser=ques.QUESCreateUserDR.%Id() if qUser="" quit
+	. . . . &SQL(SELECT SSUSR_Initials, SSUSR_ExternalUserIdentifier, SSUSR_Surname, SSUSR_GivenName, SSUSR_Name, SSUSR_DefaultDept_DR -> CTLOC_Code INTO :login, :extlogin, :surname, :given, :name, :locat FROM SS_User WHERE SSUSR_RowId = :qUser)
+	. . . . if SQLCODE quit
+	. . . . for var="login","extlogin","surname","given","name","locat" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. . . . set qUser=login_"^"_surname_"^"_given_"^^^^^TRAKCARE"
+	. . . kill ques
+	. . . set DATA("OBR",4)=qCode_"^"_qDesc,DATA("OBR",7)=$get(datetime("QUES-CREATED")),DATA("OBR",25)=qStatusCode,DATA("OBR",27)="^^^"_$get(datetime("QUES-CREATED")),DATA("OBR",32)=qUser
+	. // extract nursing notes
+	. if refertype="NURSINGNOTES" do  quit
+	. . // extract nursing notes detail
+	. . kill Nursing if $$NursingNotes^HL7OutExtract4(intNursing,.Nursing) quit
+	. . // extract code table detail
+	. . set mtable="MR_NursingNotes" do CodeTable^HL7OutExtract4(mtable)
+	. . set notetype=$get(Nursing(8)),date=$get(Nursing(3)),time=$get(Nursing(4)),notestatus=$select($get(Nursing(9))="A":"F",$get(Nursing(9))="C":"C",$get(Nursing(9))="E":"P",1:$get(Nursing(9)))
+	. . set datetime("NN")=$$DateTime^HL7Common2(date,time,"Y")
+	. . // extract doctors
+	. . kill doctor set drcodes=""
+	. . if $get(Nursing(5))'="" do
+	. . . if Nursing(5)=""""!(Nursing(5)="""""") quit
+	. . . set Nursing(5)=$$UserCareProv^HL7Common5(Nursing(5)) if Nursing(5)="" quit
+	. . . set drcode=$$Provider^HL7Common5($get(Nursing(5)),"","","","C","O")
+	. . . set Nursing(5)=$$BuildDoctor^HL7Common5(drcode)
+	. . set doctor("NURSING")=$get(Nursing(5))
+	. . set DATA("OBR",4)="CN^CLIN_NOTES^TRAKCARE",DATA("OBR",7)=datetime("NN"),DATA("OBR",25)=notestatus,DATA("OBR",32)=doctor("NURSING")
+	. // extract present illness
+	. if $get(refertype)="PRESENTILLNESS" do
+	. . // extract [resent illness detail
+	. . kill Illness if $$Illness^HL7OutExtract4(intIllness,.Illness) quit
+	. . // extract code table detail
+	. . set mtable="MR_PresentIllness" do CodeTable^HL7OutExtract4(mtable)
+	. . set date=$get(Illness(4)),time=$get(Illness(5)),illstatus=$get(Illness(10))
+	. . set datetime("ILL")=$$DateTime^HL7Common2(date,time,"Y")
+	. . // extract doctors
+	. . kill doctor set drcodes=""
+	. . if $get(Illness(7))'="" do
+	. . . if Illness(7)=""""!(Illness(7)="""""") quit
+	. . . set Illness(7)=$$UserCareProv^HL7Common5(Illness(7)) if Illness(7)="" quit
+	. . . set drcode=$$Provider^HL7Common5($get(Illness(7)),"","","","C","O")
+	. . . set Illness(7)=$$BuildDoctor^HL7Common5(drcode)
+	. . set doctor("ILLNESS")=$get(Illness(7))
+	. . set DATA("OBR",4)="PI^PRES_ILL^TRAKCARE",DATA("OBR",7)=datetime("ILL"),DATA("OBR",25)=illstatus,DATA("OBR",32)=doctor("ILLNESS")
+	kill OrdDetail,OrdSpecimen,ItemOrdered,ExternalCode,doctor,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckOBX ;; build DATA array - OBX
+OBX()	set intOrdNum=$get(intOrdNum),intResNum=$get(intResNum),textfile=$get(textfile),nonstdrep=$get(nonstdrep) kill DATA,Repeat,Lines,doctor
+	set (count,ResultText)=""
+	
+	// extract questions
+	if msgtype="ORM^O01" do
+	. set row="" for  set row=$order(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),"QA",row)) quit:row=""  do  if count=1,repeat'="Y" quit
+	. . set intQuesNum=intOrdNum_"||"_row kill comment
+	. . kill Question set SQLCODE=$$Question^HL7OutExtract8(intQuesNum,.Question)
+	. . if SQLCODE quit
+	
+	. . // extract code table detail
+	. . set mtable="OE_OrdQuestion" do CodeTable^HL7OutExtract8(mtable)
+	
+	. . set code=$piece(Question(3),"^"),desc=$piece(Question(3),"^",2),type=$piece(Question(3),"^",3)
+	. . set intQuestion=Question(3),answer=Question(4) if answer="",type'="CheckBox" quit
+	. . // convert question type to HL7 data type
+	. . set datatype=$select(type="CheckBox":"CE",type="ComboBox":"TX",type="DateTextBox":"DT",type="Number":"NM",type="MultilineText":"TX",type="TextBox":"TX",type="TimeTextBox":"TM",1:"")
+	. . // convert check box
+	. . if type="CheckBox" set answer=$select(answer="on":"T^True^TRAKCARE",1:"F^False^TRAKCARE")
+	. . // convert multiline text
+	. . if type="MultilineText" do
+	. . . set comm=$get(answer),comment="" if $length(comm) do  set answer=comment
+	. . . . for j=1:1:$length(comm,"|") set comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($piece(comm,"|",j),"O"),$char(13,10),HL7("LINEBK"))
+	. . // convert HL7 reserved characters
+	. . if datatype="TX",type'="MultilineText" do
+	. . . set answer=$$TextConversion^HL7Common12(answer,"O")
+	. . set count=count+1
+	. . if count=1 set DATA("OBX",1)=count,DATA("OBX",2)=datatype,DATA("OBX",3)=code_"^"_desc_"^TRAKCARE",DATA("OBX",5)=answer,DATA("OBX",11)="F",DATA("OBX",17)="COM"
+	. . if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)=datatype,Repeat("OBX",count,3)=code_"^"_desc_"^TRAKCARE",Repeat("OBX",count,5)=answer,Repeat("OBX",count,11)="F",Repeat("OBX",count,17)="COM"
+	
+	// extract results
+	if msgtype="ORU^R01" do  if SQLCODE quit SQLCODE
+	
+	. if $translate(intResNum,"||")'="",table="EPVISITTESTSET" do  quit
+	. . // extract atomic results
+	. . set res1=$piece(intResNum,"||"),res2=$piece(intResNum,"||",2),res3=$piece(intResNum,"||",3)
+	. . set res4="" for  set res4=$order(^TEPI(res1,1,res2,res3,"DATA",res4)) quit:res4=""  do
+	. . . set detail=$get(^TEPI(res1,1,res2,res3,"DATA",res4)),result=$piece(detail,"\"),ResultStatus=$piece(detail,"\",2),rangeL=$piece(detail,"\",4),rangeH=$piece(detail,"\",5),flags=$piece(detail,"\",8),datatype=$piece(detail,"\",12),CECode=$piece(detail,"\",13)
+	. . . set range=rangeL_$select((rangeL'=""&(rangeH'="")):"-",1:"")_rangeH
+	. . . set detail=$get(^TTAB("TC",res4)),code=res4,desc=$piece(detail,"\"),units=$translate($piece(detail,"\",2),$char(16,17,18),"^\|"),units=$$TextConversion^HL7Common12(units,"O")
+	. . . // comment
+	. . . if result="",$data(^TEPI(res1,1,res2,res3,"DATA",res4,"REM")) do
+	. . . . set line=0 for  set line=$order(^TEPI(res1,1,res2,res3,"DATA",res4,"REM",line)) quit:line=""  set result=result_$select($length(result):"~",1:"")_$get(^TEPI(res1,1,res2,res3,"DATA",res4,"REM",line))
+	. . . set count=count+1
+	. . . if count=1 set DATA("OBX",1)=count,DATA("OBX",2)=datatype,DATA("OBX",3)=code_"^"_desc_"^TRAKCARE",DATA("OBX",5)=$select(CECode'="":CECode_"^",1:"")_result,DATA("OBX",6)=units,DATA("OBX",7)=range,DATA("OBX",8)=flags,DATA("OBX",11)=ResultStatus
+	. . . if count>1,repeat="Y" do
+	. . . . set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)=datatype,Repeat("OBX",count,3)=code_"^"_desc_"^TRAKCARE",Repeat("OBX",count,5)=$select(CECode'="":CECode_"^",1:"")_result
+	. . . . set Repeat("OBX",count,6)=units,Repeat("OBX",count,7)=range,Repeat("OBX",count,8)=flags,Repeat("OBX",count,11)=ResultStatus
+	
+	. if $translate(intResNum,"||")'="",table="OEORDRESULT" do  if SQLCODE quit
+	. . if webdocument'="" do  quit
+	. . . // extract websys document
+	. . . kill HTMLText if $$HTMLDocument^HL7Common13(webdocument,.HTMLText)
+	. . . set line="" for  set line=$order(HTMLText(line)) quit:line=""  set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(HTMLText(line),"O"),$char(13,10),HL7("LINEBK"))
+	. . if textfile'="" do  quit
+	. . . // extract word result from matching text document
+	. . . set directory=""
+	. . . &SQL(SELECT PATH_Path INTO :directory FROM CF_SystemFileDefinition, CF_SystemFilePath WHERE FILE_Type = 'RW' AND FILE_FileExtension = 'TXT' AND PATH_ParRef = FILE_RowId)
+	. . . if directory="" quit
+	. . . // import result from file
+	. . . set SQLCODE="" do Import if SQLCODE quit
+	. . . // compile results into one line
+	. . . set line="" for  set line=$order(Lines(line)) quit:line=""  set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(Lines(line),"O"),$char(13,10),HL7("LINEBK"))
+	. . if nonstdrep'="" do  quit
+	. . . // extract non standard report
+	. . . &SQL(SELECT NSRIR_Desc INTO :nonstdtxt FROM OEC_NonSTDRepIssReason WHERE NSRIR_RowId = :nonstdrep)
+	. . . if SQLCODE quit
+	. . . set Lines(1)="Non Standard Report Issued: "_nonstdtxt
+	. . . // compile results into one line
+	. . . set line="" for  set line=$order(Lines(line)) quit:line=""  set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(Lines(line),"O"),$char(13,10),HL7("LINEBK"))
+	
+	. if $translate(intResNum,"||")'="",table="OETEXTRESULTSECTION" do  if SQLCODE quit
+	. . // exract reporting care provider
+	. . set intTextNum=$piece(intResNum,"||")
+	. . &SQL(SELECT TR_CareProviderReported_DR INTO :doctor('REP') FROM OE_TextResult WHERE TR_RowId = :intTextNum)
+	. . if $get(doctor("REP"))'="" do
+	. . . set drcode=$$Provider^HL7Common5($get(doctor("REP")),"","","","C","O")
+	. . . set doctor("REP")=$$BuildDoctor^HL7Common5(drcode)
+	
+	. . // find all sections for report
+	. . set row="0" for  set row=$order(^OETR($piece(intResNum,"||"),"SEC",row)) quit:row=""  set intResRow=$piece(intResNum,"||")_"||"_row do  quit:intResRow=intResNum
+	. . . kill TextSection,Lines
+	. . . // extract section details
+	. . . &SQL(SELECT * INTO :TextSection() FROM OE_TextResultSection WHERE SEC_RowId = :intResRow)
+	. . . if SQLCODE quit
+	. . . // extract section description
+	. . . set intSection=$get(TextSection(3)),SectionDesc=""
+	. . . &SQL(SELECT SEC_Desc INTO :SectionDesc FROM OEC_TextResultSection WHERE SEC_RowId = :intSection)
+	. . . // extract html report
+	. . . if $get(TextSection(7))'="" do  quit
+	. . . . // extract websys document
+	. . . . kill HTMLText if $$HTMLDocument^HL7Common13(TextSection(7),.HTMLText)
+	. . . . set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK")_HL7("LINEBK"),1:"")_$get(SectionDesc)
+	. . . . set line="" for  set line=$order(HTMLText(line)) quit:line=""  set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(HTMLText(line),"O"),$char(13,10),HL7("LINEBK"))
+	. . . // extract text report
+	. . . set Lines=$get(TextSection(4))
+	. . . set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK")_HL7("LINEBK"),1:"")_$get(SectionDesc)
+	. . . for j=1:1:$listlength(Lines) set ResultText=ResultText_$select($length(ResultText):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(Lines,j),"O"),$char(13,10),HL7("LINEBK"))
+	
+	. set DATA("OBX",1)=$increment(count),DATA("OBX",2)="FT",DATA("OBX",3)="REPORT^REPORT",DATA("OBX",5)=ResultText,DATA("OBX",16)=$get(doctor("REP"))
+	if msgtype="REF^I12" do
+	. // extract referred order items
+	. if $get(refertype)="REFERREDITEM" do  quit
+	. . kill DischSumRefItem if $$DischSumReferItem^HL7OutExtract14(intRefItem,.DischSumRefItem) quit
+	. . // extract code table detail
+	. . set mtable="PA_DischargeSummaryReferral" do CodeTable^HL7OutExtract14(mtable)
+	. . for i=9:1:20 do
+	. . . set (code,desc,datatype,text)=""
+	. . . if i="9" do
+	. . . . set code="REFITEM_DOSAGE",desc="Referred Item Dosage"
+	. . . . set datatype="ST"
+	. . . . set text=$get(DischSumRefItem(i))
+	. . . if ",10,11,12,13,14,"[(","_i_",") do
+	. . . . set code="REFITEM_YESNO_",desc="Referred Item YesNo "
+	. . . . set datatype="CE"
+	. . . . for var="code","desc" set @var=$get(@var)_$select(i=10:"1",i=11:"2",i=12:"3",i=13:"4",1:"5")
+	. . . . set text=$select($get(DischSumRefItem(i))="Y":"Y^Yes^TRAKCARE",1:"N^No^TRAKCARE")
+	. . . if ",15,16,17,18,19,"[(","_i_",") do
+	. . . . set code="REFITEM_FREETEXT_",desc="Referred Item Free Text "
+	. . . . set datatype="ST"
+	. . . . for var="code","desc" set @var=$get(@var)_$select(i=15:"1",i=16:"2",i=17:"3",i=18:"4",1:"5")
+	. . . . set text=$get(DischSumRefItem(i))
+	. . . if i=20 do
+	. . . . set code="REFITEM_INSTRUCTIONS",desc="Referred Item Instructions"
+	. . . . set datatype="TX"
+	. . . . for j=1:1:$length($get(DischSumRefItem(20)),$char(13,10)) set text=$get(text)_$select($length(text):HL7("LINEBK"),1:"")_$$TextConversion^HL7Common12($piece(DischSumRefItem(20),$char(13,10),j),"O")
+	. . . set count=count+1
+	. . . if count=1 set DATA("OBX",1)=count,DATA("OBX",2)=datatype,DATA("OBX",3)=code_"^"_desc_"^TRAKCARE",DATA("OBX",5)=text
+	. . . if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)=datatype,Repeat("OBX",count,3)=code_"^"_desc_"^TRAKCARE",Repeat("OBX",count,5)=text
+	. // extract questionnaires
+	. if refertype="QUESTIONNAIRE" do
+	. . set intQnaire=$get(intQnaire),qCode=$piece($piece(intQnaire,"||"),"Q",2),count="" kill Qnaire
+	. . // questionnaire type
+	. . set qid=$order(^SSU("WIN",0,"Code",qCode,""))
+	. . set found="",row=0 for  set row=$order(^SSU("WIN",qid,"CON",row)) quit:row=""  do
+	. . . set detail=^(row)
+	. . . // ignore questionnaire if everything is marked as 'Label'
+	. . . if $piece(detail,"^")="Label" quit
+	. . . set code=##class(web.SSUserDefWindow).CreateClassPropertyname($piece(detail,"^",7))
+	. . . set Qnaire(code,"ID")=row,Qnaire(code,"TYPE")=$piece(detail,"^"),Qnaire(code,"DESC")=$piece(detail,"^",2),Qnaire(code,"CT")=$piece($piece(detail,"^",9),"|"),Qnaire(code,"CUST")=$piece(detail,"^",20)
+	. . set exe="s ques=##class(questionnaire."_$piece(intQnaire,"||")_").%OpenId("_$piece(intQnaire,"||",2)_")" xecute exe
+	. . if ques do
+	. . . set code="" for  set code=$order(Qnaire(code)) quit:code=""  do
+	. . . . set type=$get(Qnaire(code,"TYPE"))
+	. . . . if type="OBGRPNested" quit
+	. . . . set exe="s ansx=ques."_code
+	. . . . // switch to HTMLPlainText to avoid tags
+	. . . . if type="HTMLRichText" set exe="s ansx=ques."_code_"TxtOnly"
+	. . . . xecute exe
+	. . . . quit:ansx=""
+	. . . . set answer=""
+	. . . . // convert question type to HL7 data type
+	. . . . set datatype=$select(type="CheckBox":"CE",type="Extended_Combo":"CE",type="CodeTable":"CE",type="CustomType":"CE",type="Date":"DT",type="Time":"TM",type="Extended_ListBox":"TX",type="Text Area":"TX",type="HTMLRichText":"TX",1:"ST")
+	. . . . // convert check box
+	. . . . if type="CheckBox" set answer=$select(ansx="1":"T^True^TRAKCARE",1:"F^False^TRAKCARE")
+	. . . . // convert custom type
+	. . . . if type="CustomType" set answer=##class(websys.CustomTypeItem).GetDescriptionFromCode(Qnaire(code,"CUST"),ansx)
+	. . . . // convert extended combo
+	. . . . if type="Extended_Combo" set answer=ansx_"^"_##class(web.SSUserDefWinContResp).GetDescriptionFromCode(qid_"||"_Qnaire(code,"ID"),ansx)
+	. . . . // convert codetable
+	. . . . if type="CodeTable" do
+	. . . . . set exe="s answer=##Class(web."_$translate(Qnaire(code,"CT"),"_")_").GetCodeDescriptionFromId("_ansx_")" xecute exe
+	. . . . . set answer=$listget(answer,3)_"^"_$listget(answer,1)
+	. . . . // convert date
+	. . . . if type="Date" set answer=$$DateTime^HL7Common2(ansx)
+	. . . . // convert time
+	. . . . if type="Time" set answer=$$DateTime^HL7Common2("",ansx)
+	. . . . // convert text area
+	. . . . if type="Text Area" do
+	. . . . . for j=1:1:ansx.Count() set answer=answer_$select($length(answer):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(ansx.GetAt(j),"O"),$char(13,10),HL7("LINEBK"))
+	. . . . // convert extended list
+	. . . . if type="Extended_ListBox" do
+	. . . . . for j=1:1:$length(ansx,",") set answer=answer_$select($length(answer):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($piece(ansx,",",i),"O"),$char(13,10),HL7("LINEBK"))
+	. . . . // HTML text
+	. . . . if type="HTMLRichText" do
+	. . . . . set documentId=ansx.%Id() if documentId="" quit
+	. . . . . kill HTMLText if $$HTMLDocument^HL7Common13(documentId,.HTMLText)
+	. . . . . set line="" for  set line=$order(HTMLText(line)) quit:line=""  set answer=answer_$select($length(answer):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(HTMLText(line),"O"),$char(13,10),HL7("LINEBK"))
+	. . . . // all other formats
+	. . . . if datatype="ST" set answer=$translate($$TextConversion^HL7Common12(ansx,"O"),$char(13,10),HL7("LINEBK"))
+	. . . . set count=count+1
+	. . . . if count=1 set DATA("OBX",1)=count,DATA("OBX",2)=datatype,DATA("OBX",3)=code_"^"_Qnaire(code,"DESC")_"^TRAKCARE",DATA("OBX",5)=answer
+	. . . . if count>1,repeat="Y" set Repeat("OBX",count,1)=count,Repeat("OBX",count,2)=datatype,Repeat("OBX",count,3)=code_"^"_Qnaire(code,"DESC")_"^TRAKCARE",Repeat("OBX",count,5)=answer
+	. . kill ques
+	. // extract nursing notes
+	. if $get(refertype)="NURSINGNOTES" do
+	. . // extract nursing notes detail
+	. . kill Nursing set SQLCODE=$$NursingNotes^HL7OutExtract4(intNursing,.Nursing)
+	. . if SQLCODE quit
+	. . // extract code table detail
+	. . set mtable="MR_NursingNotes" do CodeTable^HL7OutExtract4(mtable)
+	. . set NursingNotes=""
+	. . if $get(Nursing(46))'="" do
+	. . . // extract websys document
+	. . . kill HTMLText if $$HTMLDocument^HL7Common13(Nursing(46),.HTMLText)
+	. . . set line="" for  set line=$order(HTMLText(line)) quit:line=""  set NursingNotes=NursingNotes_$select($length(NursingNotes):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(HTMLText(line),"O"),$char(13,10),HL7("LINEBK"))
+	. . if $get(Nursing(6))'="",$listvalid(Nursing(6)) do
+	. . . for j=1:1:$listlength(Nursing(6)) set NursingNotes=NursingNotes_$select($length(NursingNotes):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(Nursing(6),j),"O"),$char(13,10),HL7("LINEBK"))
+	. . set count=count+1
+	. . set DATA("OBX",1)=count,DATA("OBX",2)="TX",DATA("OBX",3)=$select($piece(Nursing(8),"^")'="":$piece(Nursing(8),"^")_"^"_$piece(Nursing(8),"^",2),1:"CN^CLIN_NOTES")_"^TRAKCARE",DATA("OBX",5)=NursingNotes
+	. // extract present illness
+	. if $get(refertype)="PRESENTILLNESS" do
+	. . // extract [resent illness detail
+	. . kill Illness if $$Illness^HL7OutExtract4(intIllness,.Illness) quit
+	. . // extract code table detail
+	. . set mtable="MR_PresentIllness" do CodeTable^HL7OutExtract4(mtable)
+	. . set text="" if $get(Illness(3))'="",$listvalid(Illness(3)) do
+	. . . for j=1:1:$listlength(Illness(3)) set text=text_$select($length(text):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(Illness(3),j),"O"),$char(13,10),HL7("LINEBK"))
+	. . set count=count+1
+	. . set DATA("OBX",1)=count,DATA("OBX",2)="TX",DATA("OBX",3)=$piece(Illness(11),"^")_"^"_$piece(Illness(11),"^",2)_"^TRAKCARE",DATA("OBX",5)=text
+	kill OrdSpecimen,Question,Lines,doctor,Qnaire,TextSection,HTMLText
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+	// import text result from file
+Import	set $ztrap="ImportError^"_$zname kill Lines
+	set directory=$select($extract(directory,$length(directory))'=filesep:directory_filesep,1:directory)
+	set file=directory_textfile
+	open file:("RS"::$char(10,13)):2 else  set SQLCODE=100 quit
+	use file for i=1:1 read x:10 set Lines(i)=x
+ImportFinish	close file
+	quit
+	
+	// error log
+ImportError if $zerror'["ENDOFFILE" do BACK^%ETN quit
+	goto ImportFinish
+
+
+

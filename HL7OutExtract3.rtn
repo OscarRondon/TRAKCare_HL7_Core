@@ -1,0 +1,151 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract3^MAC^^^0
+HL7OutExtract3 // ML 27/05/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract3.rtn#1 $
+	quit
+ 
+	// check if waiting list entry exists
+WaitListExist(intAdmNum) new (intAdmNum,intWaitNum) set intAdmNum=$get(intAdmNum) set intWaitNum=""
+	&SQL(SELECT PAADM_WaitList_DR INTO :intWaitNum FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+	quit intWaitNum
+ 
+	// extract waiting list detail
+WaitList(intWaitNum,WaitList) new (intWaitNum,WaitList) set intWaitNum=$get(intWaitNum)
+	&SQL(SELECT * INTO :WaitList() FROM PA_WaitingList WHERE WL_RowId = :intWaitNum)
+	quit SQLCODE
+ 
+	// extract waiting list admission detail
+WaitListAdm(intWaitAdm,WaitListAdm) new (intWaitAdm,WaitListAdm) set intWaitAdm=$get(intWaitAdm)
+	&SQL(SELECT * INTO :WaitListAdm() FROM PA_WaitingListAdm WHERE ADM_RowId = :intWaitAdm)
+	quit SQLCODE
+ 
+	// extract waiting list patient availability detail
+WaitListAvail(intWaitAvail,WaitListAvail) new (intWaitAvail,WaitListAvail) set intWaitAvail=$get(intWaitAvail)
+	&SQL(SELECT * INTO :WaitListAvail() FROM PA_WaitingListNotAvailable WHERE NA_RowId = :intWaitAvail)
+	quit 0
+ 
+	// extract waiting list patient availability detail
+WaitListRev(intWaitRev,WaitListRev) new (intWaitRev,WaitListRev) set intWaitRev=$get(intWaitRev)
+	&SQL(SELECT * INTO :WaitListRev() FROM PA_WaitingListReview WHERE REV_RowId = :intWaitRev)
+	quit 0
+	// extracting waiting list secondary operations detail
+WaitListSecOper(intWaitSO,WaitListSecOper) new (intWaitSO,WaitListSecOper) set intWaitSO=$get(intWaitSO)
+	&SQL(SELECT * INTO :WaitListSecOper() FROM PA_WaitingListSecOper WHERE SECOP_RowId = :intWaitSO)
+	quit SQLCODE
+	// extract waiting list transaction detail
+WaitListTrans(intWaitTrans,WaitListTrans) new (intWaitTrans,WaitListTrans) set intWaitTrans=$get(intWaitTrans)
+	&SQL(SELECT * INTO :WaitListTrans() FROM PA_WaitingListTransaction WHERE TRANS_RowId = :intWaitTrans)
+	quit 0
+ 
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable),(code,desc,other)="" 
+ 
+	if mtable="PA_WaitingList" do
+	.for i=3,4,5,7,10,13,21,62,64,67,76,78,83,97,98,99,167 if $get(WaitList(i))'="" do  set WaitList(i)=$select($get(WaitList(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	..set value=WaitList(i) quit:value=""""""
+	..if i=3 do
+	... &SQL(SELECT WLT_Code, WLT_Desc INTO :code, :desc FROM PAC_WaitingListType WHERE WLT_RowId = :value)
+	..if i=4 do
+	... &SQL(SELECT WLP_Code, WLP_Desc INTO :code, :desc FROM PAC_WaitingListPriority WHERE WLP_RowId = :value)
+	..if i=5 do
+	... &SQL(SELECT WLS_Code, WLS_Desc INTO :code, :desc FROM PAC_WaitingListStatus WHERE WLS_RowId = :value)
+	..if i=7 do
+	... &SQL(SELECT CTLOC_Code, CTLOC_Desc INTO :code, :desc FROM CT_Loc WHERE CTLOC_RowId = :value)
+	..if i=10 do
+	... &SQL(SELECT OPER_Code, OPER_Desc INTO :code, :desc FROM ORC_Operation WHERE OPER_RowId = :value)
+	..if i=13 do
+	... &SQL(SELECT ANMET_Code, ANMET_Desc INTO :code, :desc FROM ORC_AnaestMethod WHERE ANMET_RowId = :value)
+	..if i=21 do
+	... &SQL(SELECT CTRFC_Code, CTRFC_Desc INTO :code, :desc FROM CT_RefClin WHERE CTRFC_RowId = :value)
+	..if i=62 do
+	... &SQL(SELECT SADD_Code, SADD_Desc INTO :code, :desc FROM PAC_SourceOfAddition WHERE SADD_RowId = :value)
+	..if i=64 do
+	... &SQL(SELECT WARD_Code, WARD_Desc INTO :code, :desc FROM PAC_Ward WHERE WARD_RowId = :value)
+	..if i=67 do
+	... &SQL(SELECT APTR_Code, APTR_Desc INTO :code, :desc FROM RBC_AppointTransport WHERE APTR_RowId = :value)
+	..if i=76 do
+	... &SQL(SELECT HOSP_Code, HOSP_Desc INTO :code, :desc FROM CT_Hospital WHERE HOSP_RowId = :value)
+	..if i=78 do
+	... &SQL(SELECT TRD_Code, TRD_Desc INTO :code, :desc FROM PAC_TransferDestination WHERE TRD_RowId = :value)
+	..if i=83 do
+	... &SQL(SELECT SPPP_Code, SPPP_Desc INTO :code, :desc FROM PAC_StatePPP WHERE SPPP_RowId = :value)
+	..if i=97 do
+	... &SQL(SELECT SPECPRO_Code, SPECPRO_Desc INTO :code, :desc FROM PAC_SpecialProject WHERE SPECPRO_RowId = :value)
+	..if i=98 do
+	... &SQL(SELECT STANDST_Code, STANDST_Desc INTO :code, :desc FROM PAC_StandbyStatus WHERE STANDST_RowId = :value)
+	..if i=99 do
+	... &SQL(SELECT ACCOMT_Code, ACCOMT_Desc INTO :code, :desc FROM PAC_AccomodationType WHERE ACCOMT_RowId = :value)
+	..if i=167 do
+	... &SQL(SELECT WLTRO_Code, WLTRO_Desc, WLTRO_NationalCode INTO :code, :desc, :other FROM PAC_WLTriageOutcome WHERE WLTRO_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(WaitList(""),-1) if $data(WaitList(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",3,4,5,7,10,13,21,22,62,64,67,76,78,79,83,97,98,99,102,167,"[(","_i_",") quit
+	..set WaitList(i)=$$TextConversion^HL7Common12(WaitList(i),"O")
+ 
+	if mtable="PA_WaitingListAdm" do
+	.for i=7,11,18,27,34,40,43 if $get(WaitListAdm(i))'="" do  set WaitListAdm(i)=$select($get(WaitListAdm)="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=WaitListAdm(i) quit:value=""""""
+	..if i=7 do
+	... &SQL(SELECT REA_Code, REA_Desc INTO :code, :desc FROM PAC_WLReasonNotAvail WHERE REA_RowId = :value)
+	..if i=11 do
+	... &SQL(SELECT WLRG_Code, WLRG_Desc INTO :code, :desc FROM PAC_WLReasonGroup WHERE WLRG_RowId = :value)
+	..if i=18 do
+	... &SQL(SELECT APTR_Code, APTR_Desc INTO :code, :desc FROM RBC_AppointTransport WHERE APTR_RowId = :value)
+	..if i=27 do
+	... &SQL(SELECT WARD_Code, WARD_Desc INTO :code, :desc FROM PAC_Ward WHERE WARD_RowId = :value)
+	..if i=34 do
+	... &SQL(SELECT ADMPOINT_Code, ADMPOINT_Desc INTO :code, :desc FROM PAC_AdmissionPoint WHERE ADMPOINT_RowId = :value)
+	..if i=40!(i=43) do
+	... &SQL(SELECT CTLOC_Code, CTLOC_Desc INTO :code, :desc FROM CT_Loc WHERE CTLOC_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(WaitListAdm(""),-1) if $data(WaitListAdm(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",7,11,12,18,22,26,27,28,34,37,40,43,"[(","_i_",") quit
+	..set WaitListAdm(i)=$$TextConversion^HL7Common12(WaitListAdm(i),"O")
+ 
+	if mtable="PA_WaitingListNotAvailable" do
+	.for i=5 if $get(WaitListAvail(i))'="" do  set WaitListAvail(i)=$select($get(WaitListAvail(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=WaitListAvail(i) quit:value=""""""
+	..if i=5 do
+	... &SQL(SELECT REA_Code, REA_Desc INTO :code, :desc FROM PAC_WLReasonNotAvail WHERE REA_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(WaitListAvail(""),-1) if $data(WaitListAvail(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",5,12,"[(","_i_",") quit
+	..set WaitListAvail(i)=$$TextConversion^HL7Common12(WaitListAvail(i),"O")
+	if mtable="PA_WaitingListSecOper" do
+	.for i=4,5 if $get(WaitListSecOper(i))'="" do  set WaitListSecOper(i)=$select($get(WaitListSecOper(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=WaitListSecOper(i) quit:value=""""""
+	..if i=4 do
+	... &SQL(SELECT OPER_Code, OPER_Desc INTO :code, :desc FROM ORC_Operation WHERE OPER_RowId = :value)
+	..if i=5 do
+	... &SQL(SELECT SPPP_Code, SPPP_Desc INTO :code, :desc FROM PAC_StatePPP WHERE SPPP_RowId = :value)	
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(WaitListSecOper(""),-1) if $data(WaitListSecOper(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",4,5,"[(","_i_",") quit
+	..set WaitListSecOper(i)=$$TextConversion^HL7Common12(WaitListSecOper(i),"O")
+	if mtable="PA_WaitingListTransaction" do
+	.for i=9,13 if $get(WaitListTrans(i))'="" do  set WaitListTrans(i)=$select($get(WaitListTrans(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=WaitListTrans(i) quit:value=""""""
+	..if i=9 do
+	... &SQL(SELECT WLRC_Code, WLRC_Desc INTO :code, :desc FROM PAC_WaitListReasonForChange WHERE WLRC_RowId = :value)
+	..if i=13 do
+	... &SQL(SELECT REA_Code, REA_Desc INTO :code, :desc FROM PAC_WLReasonNotAvail WHERE REA_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(WaitListTrans(""),-1) if $data(WaitListTrans(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",9,13,"[(","_i_",") quit
+	..set WaitListTrans(i)=$$TextConversion^HL7Common12(WaitListTrans(i),"O")
+ 
+	quit
+
+
+

@@ -1,0 +1,170 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteRNHBCreate1^MAC^^^0
+HL7SiteRNHBCreate1 // ML 18/9/01 ; HL7 interface : create transmission packets - Royal National Hospital Bath
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteRNHBCreate1.rtn#1 $
+	quit
+ 
+CheckPID ;; build data array - PID
+PID()	set intRegMrn=$get(intRegMrn),intAdmNum=$get(intAdmNum) kill DATA
+ 
+	if msgtype["A37",$length($get(intRegCheck)) do
+	.if intRegCheck'=intRegTo set intRegMrn=intRegTo
+ 
+	// extract patient details
+	kill PatDetail,PatDetailx set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	if SQLCODE quit SQLCODE
+ 
+	// check for new null fields and change to ""
+	for xtable="PAPER","PAPMI" if $data(old(xtable)) do  quit
+	.do NullChange^HL7Common3(xtable)
+ 
+	// extract patient address details
+	do BuildAddress^HL7OutExtract1
+ 
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+ 
+	// prefix registration number with 'RBB'
+	set PatDetailx(2)="RBB"_$get(PatDetailx(2))
+ 
+	// extract patient number detail
+	if msgtype'["A37" do  if SQLCODE quit SQLCODE
+	.kill number set SQLCODE=$$PatNum^HL7OutExtract1(intRegMrn,intAdmNum,.number)
+ 
+	if msgtype["A37" do  if SQLCODE quit SQLCODE
+	.kill number set SQLCODE=$$PatNum^HL7OutExtract1(intRegMrn,intAdmNum,.number)
+	. // extract numbers required for first PID
+	.if intRegMrn'=intRegTo do  quit
+	..set intMergeNum=$order(^PAMRi("PAT-FROM",intRegTo,"")) if intMergeNum'="" do
+	...set row="" for  set row=$order(^PAMR(intMergeNum,"DET",row)) quit:row=""  if $piece(^PAMR(intMergeNum,"DET",row),"^")="RTMAS" do
+	....set intHospFrom=$piece($piece(^PAMR(intMergeNum,"DET",row),"^",2),":") if intHospFrom="" quit
+	....kill number("HOSP",intHospFrom)
+	. // extract numbers required for second PID/mrn's moved
+	.set intMergeNum=$order(^PAMRi("PAT-FROM",intRegMrn,"")) if intMergeNum'="" do
+	..set row="" for  set row=$order(^PAMR(intMergeNum,"DET",row)) quit:row=""  if $piece(^PAMR(intMergeNum,"DET",row),"^")="RTMAS" do
+	...set intHospFrom=$piece($piece(^PAMR(intMergeNum,"DET",row),"^",2),":") if intHospFrom="" quit
+	...set active=$piece($piece(^PAMR(intMergeNum,"DET",row),"^",2),":",2)
+	...if '$data(^RT(intHospFrom)) quit
+	...do NumTypeDetail^HL7Common2(PatNum("HOSP"),"","",.asstype,.asscode,.idcode,.idmrtype)
+	...do MedRecord^HL7OutExtract1(intHospFrom)
+	...set num=$piece(^RT(intHospFrom),"^"),$piece(num,"^",asstype)=code,$piece(num,"^",5)=idcode,$piece(num,"^",6)=$piece($piece(num,"^",6),"&")_"&"_$select(active="Y":"A",active="D":"D",1:"I")
+	...set number("HOSP")=$get(number("HOSP"))_$select($length($get(number("HOSP"))):"~",1:"")_num
+ 
+	// extract patient alias
+	kill alias set Alias="" for altype="ALIAS","SUR" do 
+	.set row=0 for  set row=$order(^PAPER(intRegMrn,altype,row)) quit:row=""  do
+	..set intAliasNum=intRegMrn_"||"_row
+	..set al=$$PatAlias^HL7OutExtract1(intAliasNum,altype) if $translate($piece(al,"|"),",")="",($translate($piece(al,"|"),"_")="") quit
+	..set sep="," if $length($piece(al,"|"),"_")=7 set sep="_"
+	..set active=$piece(al,"|",2),al=$piece(al,"|",1),$piece(al,sep,7)="A&"_$select(active="Y":"A",1:"I"),alias(al)=""
+	set al="" for  set al=$order(alias(al)) quit:al=""  do
+	.set sep="," if $length($piece(al,"|"),"_")=7 set sep="_"
+	.set Alias=Alias_$select($length(Alias):"~",1:"")_$translate(al,sep,"^")
+ 
+	set sex=$get(PatDetail(15)),marital=$get(PatDetail(20)),ethnicity=$get(PatDetail(22)),religion=$get(PatDetail(23)),phoneW=$get(PatDetail(36)),phoneH=$get(PatDetail(38))
+	set country=$get(PatDetail(77)),email=$get(PatDetail(138)),title=$get(PatDetail(139)),phoneM=$get(PatDetail(140)),indigenous=$get(PatDetail(141)),language=$get(PatDetail(143))
+	set MotherNum="" if $get(PatDetail(128))'="" set MotherNum=$$extRegMrn^HL7Common2(PatDetail(128))
+ 
+	// check dates for null values
+	set dob=$get(PatDetail(11)) if dob=""""!(dob="""""") set estdob=""""""
+	if dob'="",dob'="""""" do
+	.set dob=$$DateConv^HL7Common2(.reject,"IE",PatDetail(11),"B"),estdob=$get(PatDetail(152))
+	set death=$get(PatDetail(74)) if death'="",death'="""""" do
+	.set death=$$Date^HL7(PatDetail(74)_","_PatDetail(82))
+ 
+	// adjust contact numbers
+	set (Phone13,Phone14)="",Phone13=phoneH_"^^^"_email_"~"_phoneM,Phone14=phoneW
+ 
+	// adjust name
+	set name=$$BuildName^HL7Common3($get(PatDetail(4)),$get(PatDetail(5)),$get(PatDetail(118)))
+	set $piece(name,%1,5)=$piece(title,"^")_%1_%1_"L"
+ 
+	// setup permanent/temp address
+	set (Address("PERM"),Address("TEMP"))=""
+	if $data(PermAddress) do
+	.for k="CTY","PRV","PST" set PermAddress(k)=$piece($$Address^HL7Common7(.reject,"O",k,$get(PermAddress(k))),"|",$select(k="CTY":2,1:1))
+	.set Address("PERM")=$get(PermAddress("LINE1"))_%1_$get(PermAddress("LINE2"))_%1_$get(PermAddress("CTY"))_%1_$get(PermAddress("PRV"))_%1_$get(PermAddress("PST"))_%1_%1_"P"_%1_$get(PermAddress("ADDR2"))_%1_%1_%1
+	if $data(TempAddress) do
+	.set cnt="" for  set cnt=$order(TempAddress(cnt)) quit:cnt=""  do
+	..for k="CTY","PRV","PST","TYP","FOR-COU" set TempAddress(cnt,k)=$piece($$Address^HL7Common7(.reject,"O",$select(k="FOR-COU":"COU",1:k),$get(TempAddress(cnt,k))),"|",$select(k="CTY":2,1:1))
+	..set Address("TEMP")=$get(Address("TEMP"))_$select($length(Address("TEMP")):"~",1:"")_$get(TempAddress(cnt,"LINE1"))_%1_$get(TempAddress(cnt,"LINE2"))_%1_$get(TempAddress(cnt,"CTY"))_%1_$get(TempAddress(cnt,"PRV"))_%1_$get(TempAddress(cnt,"PST"))_%1_%1_$get(TempAddress(cnt,"TYP"))_%1_$get(TempAddress(cnt,"FOR-CTY"))_%4_$get(TempAddress(cnt,"FOR-PST"))_%4_$get(TempAddress(cnt,"FOR-COU"))_%1_%1_%1
+ 
+	// set counter
+	set DATA("PID",1)=$increment(count("PID"))
+ 
+	// build patient numbers
+	for type="INT","REG","HOSP","CHINHS","MC","DVA","GOV","SN","HC" if $data(PatNum(type)),$data(number(type)) do
+	.if type="HOSP" do
+	.. // ignore second PID for A37 as hospital number string is already built
+	..if msgtype["A37",(intRegMrn=intRegTo) quit
+	..set (number(type),found)=""
+	..set intHosp="" for  set intHosp=$order(number(type,intHosp)) quit:intHosp=""  do
+	...set num=number(type,intHosp),active=$$ActiveHospMrn^HL7OutExtract1(intHosp)
+	...set data=$piece(num,"^",6),$piece(data,"&",2)=$select(active="Y":"A",1:"I"),$piece(num,"^",6)=data,number(type,intHosp)=num
+	...if intAdmNum'="" set number(type)=number(type)_$select($length(number(type)):"~",1:"")_number(type,intHosp) quit
+	...if intAdmNum="",intRegMrn'="" do
+	....if active'="Y",msgtype'["A47" quit
+	....if msgtype["A47"!(msgtype["A43") do
+	..... // extract status for hospital number
+	.....if $get(old("RTMASTER",2))=$piece(num,"^") set found=1
+	...if active'="Y",(msgtype["A40"!(msgtype["A43")) quit
+	...set number(type)=number(type)_$select($length(number(type)):"~",1:"")_number(type,intHosp)
+	...if trigger="Delete",$get(old("RTMASTER",1))=intHosp do
+	....do NumTypeDetail^HL7Common2(PatNum(type),"","",.asstype,.asscode,.idcode,.idmrtype)
+	....set hospmrn=$get(old("RTMASTER",2)),active=$get(old("RTMASTER",13)) if trigger="Delete" set active="D"
+	....if hospmrn="" quit
+	....set code="" kill rowid("type") set mrtype=$get(old("RTMASTER",9))
+	....if idmrtype'="Y",mrtype'="" set code=$piece($get(^RTC("TYPE",mrtype)),"^",1)
+	....if idmrtype="Y",mrtype'="" set code=$$MedRecType^HL7OutExtract1(mrtype),idcode=$piece($get(^RTC("TYPE",mrtype)),"^",1)
+	....set num=hospmrn,$piece(num,"^",asstype)=code,$piece(num,"^",5)=idcode,$piece(num,"^",6)=$piece($piece(num,"^",6),"&")_"&"_$select(active="Y":"A",active="D":"D",1:"I")
+	....set number(type)=number(type)_$select($length(number(type)):"~",1:"")_num
+	.if $translate($get(number(type)),"^~")="" quit
+	.do NumTypeDetail^HL7Common2(PatNum(type),.segtype,.field,"","","","","","",.expfield,.expformat)
+	.if expfield'="" set $piece(number(type),"^",expfield)=$select($length(expformat):$extract($get(number(type,"EXPDATE")),1,$length(expformat)),1:$get(number(type,"EXPDATE")))
+	.set DATA(segtype,field)=$get(DATA(segtype,field))_$select($length($get(DATA(segtype,field))):"~",1:"")_number(type)
+ 
+	set DATA("PID",5)=name if $length(dob) set DATA("PID",7)=$piece(dob,"^")_"^"_$select(estdob="Y":"Y",estdob="""""":"""""",1:"")
+	set DATA("PID",8)=$piece(sex,"^"),DATA("PID",9)=Alias,DATA("PID",10)=indigenous,DATA("PID",11)=Address("PERM")_$select(($length(Address("PERM"))&$length(Address("TEMP"))):"~",1:"")_Address("TEMP")
+	set DATA("PID",13)=Phone13,DATA("PID",14)=Phone14,DATA("PID",15)=language,DATA("PID",16)=marital,DATA("PID",17)=religion,DATA("PID",21)=MotherNum,DATA("PID",22)=ethnicity,DATA("PID",23)=country
+	if $length(death) do  else  kill DATA("PID",29),DATA("PID",30)
+	.set DATA("PID",29)=death,DATA("PID",30)=$select(death="""""":"""""",1:"Y")
+ 
+	if msgtype["A37",'$length($get(intRegCheck)) set intRegCheck=intRegMrn
+ 
+	kill PatDetail,PatDetailx,PermAddress,TempAddress,Address,number,phone
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckPD1 ;; build data array - PD1
+PD1()	set intRegMrn=$get(intRegMrn),(familydr,group,postcode,refcode,desc)=""
+ 
+	// extract GP details
+	&SQL(SELECT PAPER_FamilyDoctor_DR INTO :familydr FROM PA_Person WHERE PAPER_RowId = :intRegMrn)
+	if mandatory'="Y",'familydr quit 0
+	if familydr'="" do
+	. &SQL(SELECT REFD_Group, REFD_CTZIP_DR -> CTZIP_Code, REFD_Code, REFD_Desc INTO :group, :postcode, :refcode, :desc FROM PAC_RefDoctor WHERE REFD_RowId = :familydr)
+	set $piece(DATA("PD1",3),"^",3)=group,$piece(DATA("PD1",3),"^",9)=postcode,$piece(DATA("PD1",4),"^",1)=$extract(refcode,1,8),$piece(DATA("PD1",4),"^",2)=desc
+ 
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckMRG ;; build DATA array - MRG
+MRG()	set mergenum="" kill DATA
+ 
+	if $length($get(intRegFrom)) do
+	.do NumTypeDetail^HL7Common2(PatNum("REG"),"","",.asstype,.asscode,.idcode)
+	.set mergenum="RBB"_$$extRegMrn^HL7Common2(intRegFrom)
+	.set $piece(mergenum,"^",asstype)=asscode,$piece(mergenum,"^",5)=idcode
+	if $length($get(intHospFrom)) do
+	.set intHospMrn=intHospFrom
+	.do NumTypeDetail^HL7Common2(PatNum("HOSP"),"","",.asstype,.asscode,.idcode,.idmrtype)
+	.do MedRecord^HL7OutExtract1(intHospFrom)
+	.set mergenum=$piece(^RT(intHospFrom),"^"),$piece(mergenum,"^",asstype)=code,$piece(mergenum,"^",5)=idcode
+	set DATA("MRG",1)=mergenum
+ 
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

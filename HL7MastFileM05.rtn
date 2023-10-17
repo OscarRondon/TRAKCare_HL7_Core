@@ -1,0 +1,178 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7MastFileM05^MAC^^^0
+HL7MastFileM05 // ML 19/10/2005 ; HL7 interface : master file notification categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7MastFileM05.rtn#1 $
+	quit
+	
+	// M05 - locations
+M05()
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if '$data(^TMP("HL7",$job,cnt1,"MFI")) quit
+	. set mode=$get(^TMP("HL7",$job,cnt1,"MFI",3))
+	
+	. // only allow updates
+	. if mode="UPD" do
+	. . // extract table to update
+	. . set table=$piece($get(^TMP("HL7",$job,cnt1,"MFI",1)),"^")
+	
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,"MFE"))!('$data(^TMP("HL7",$job,cnt1,cnt2,"LOC"))) quit
+	. . . set updtype=$get(^TMP("HL7",$job,cnt1,cnt2,"MFE",1))
+	. . . set date=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"MFE",3)),1,8),date=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	
+	. . . // extract location detail
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"LOC",1)),desc=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"LOC",2)),"^"),type=$get(^TMP("HL7",$job,cnt1,cnt2,"LOC",3))
+	. . . kill ADDRESS set address=$get(^TMP("HL7",$job,cnt1,cnt2,"LOC",5)) for j=1:1:5 set ADDRESS(j)=$piece(address,"^",j)
+	. . . set (code("L"),code("W"))=$piece(detail,"^"),code("R")=$piece(detail,"^",2),code("B")=$piece(detail,"^",3),code("H")=$piece(detail,"^",4)
+	
+	. . . // convert type received
+	. . . set tablex=table_"_"_type
+	. . . // check if table set to update
+	. . . set reject=""
+	. . . set updtable=$$TableCheck^HL7MastFile(event,table,.reject) if reject'="" do  quit
+	. . . . set reject("Detail")="MFI^^1~206"
+	
+	. . . if updtable="CTHospital" do
+	. . . . // convert city, postcode and state
+	. . . . set value=$$Address^HL7Common7(.reject,"I","PCP",ADDRESS(3)_"|" _ADDRESS(5)_"|"_ADDRESS(4))
+	. . . . set ADDRESS(3)=$piece(value,"|"),ADDRESS(5)=$piece(value,"|",2),ADDRESS(4)=$piece(value,"|",3)
+	
+	. . . do UpdateTable(updtable,updtype,.code,desc,.ADDRESS,date)
+	
+	if mode'="UPD" do
+	. set reject="Master filed mode "_mode_" received is not catered for.  Only catering for mode 'UPD'",reject("Detail")="MFI^^3~206"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// update code table entries
+UpdateTable(updtable,updtype,code,desc,ADDRESS,date) set updtable=$get(updtable),updtype=$get(updtype),desc=$get(desc),active=$get(active),speciality=$get(speciality)
+	set date=$get(date),(ProvTypeId,SpecId)=""
+	kill PLIST,PLISTx,RowId
+	
+	set tablename=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7MasterFileTables",updtable))
+	
+	set j="" for  set j=$order(code(j)) quit:j=""  set code(j)=##class(%Collation).AlphaUp($get(code(j)))
+	set j="" for  set j=$order(ADDRESS(j)) quit:j=""  set ADDRESS(j)=$get(ADDRESS(j))
+	
+	do
+	. if updtable="CTLoc" do
+	. . set type="L"
+	. . &SQL(SELECT * INTO :PLIST() FROM CT_Loc WHERE CTLOC_Code = :code('L'))
+	
+	. if updtable="CTHospital" do
+	. . set type="H"
+	. . &SQL(SELECT * INTO :PLIST() FROM CT_Hospital WHERE HOSP_Code = :code('H'))
+	
+	. if updtable="PACWard" do
+	. . set type="W"
+	. . &SQL(SELECT * INTO :PLIST() FROM CT_Loc WHERE CTLOC_Code = :code('W'))
+	. . &SQL(SELECT * INTO :PLISTx() FROM PAC_Ward WHERE WARD_Code = :code('W'))
+	
+	. if updtable="PACRoom" do
+	. . set type="R"
+	. . &SQL(SELECT * INTO :PLIST() FROM PAC_Room WHERE ROOM_Code = :code('R'))
+	
+	. . &SQL(SELECT WARD_RowId INTO :RowId('W') FROM PAC_Ward WHERE WARD_Code = :code('W'))
+	. . &SQL(SELECT * INTO :PLISTx() FROM PAC_WardRoom WHERE ROOM_Room_DR = :PLIST(1) AND ROOM_ParRef = :RowId('W'))
+	
+	. if updtable="PACBed" do
+	. . set type="B"
+	. . &SQL(SELECT WARD_RowId INTO :RowId('W') FROM PAC_Ward WHERE WARD_Code = :code('W'))
+	. . &SQL(SELECT ROOM_RowId INTO :RowId('R') FROM PAC_Room WHERE ROOM_Code = :code('R'))
+	. . &SQL(SELECT * INTO :PLIST() FROM PAC_Bed WHERE BED_Ward_ParRef = :RowId('W') AND BED_Room_DR = :RowId('R') AND BED_Code = :code('B'))
+	
+	. // code already exists for add
+	. if 'SQLCODE,updtype="MAD" do  quit
+	. . set reject="Unable to add code "_code(type)_" to table "_tablename_", code already exists",reject("Detail")="MFE^^4~206"
+	. // code does not exist for update
+	. if SQLCODE,updtype'="MAD" do  quit
+	. . set reject="Unable to update code "_code(type)_" for table "_tablename_", code does not exist",reject("Detail")="MFE^^4~103"
+	
+	. if updtype="MAD" kill PLIST
+	. if updtable'="PACBed" set PLIST(2)=code(type),PLIST(3)=desc
+	
+	. // insert new entry
+	. if updtype="MAD" do
+	. . // add to location only
+	. . if updtable="CTLoc" do
+	. . . set PLIST(48)=date
+	. . . &SQL(INSERT INTO CT_Loc VALUES :PLIST())
+	
+	. . // add to hospital
+	. . if updtable="CTHospital" do
+	. . . set PLIST(11)=date,PLIST(17)=ADDRESS(5),PLIST(18)=ADDRESS(4),PLIST(19)=ADDRESS(1)_$char(13,10)_ADDRESS(2),PLIST(20)=ADDRESS(3)
+	. . . &SQL(INSERT INTO CT_Hospital VALUES :PLIST())
+	
+	. . // add to ward
+	. . if updtable="PACWard" do
+	. . . if code("H")'="" do
+	. . . . &SQL(SELECT HOSP_RowId INTO :RowId('H') FROM CT_Hospital WHERE HOSP_Code = :code('H'))
+	. . . set PLIST(27)=MASTFILE("M05-DEFWARDTYPE"),PLIST(46)=$get(RowId("H")),PLIST(48)=date,PLIST(94)=MASTFILE("M05-WARDINPAT")
+	. . . &SQL(INSERT INTO CT_Loc VALUES :PLIST())
+	. . . if SQLCODE quit
+	. . . set PLISTx(2)=code("W"),PLISTx(3)=desc,PLISTx(6)=%ROWID
+	. . . &SQL(INSERT INTO PAC_Ward VALUES :PLISTx())
+	
+	. . // add to room
+	. . if updtable="PACRoom" do
+	. . . &SQL(SELECT WARD_RowId INTO :RowId('W') FROM PAC_Ward WHERE WARD_Code = :code('W'))
+	. . . set PLIST(7)=MASTFILE("M05-DEFROOMTYPE"),PLIST(12)=date
+	. . . &SQL(INSERT INTO PAC_Room VALUES :PLIST())
+	. . . if SQLCODE quit
+	. . . set PLISTx(0)=RowId("W"),PLISTx(3)=%ROWID,PLISTx(9)=date
+	. . . &SQL(INSERT INTO PAC_WardRoom VALUES :PLISTx())
+	
+	. . // add to bed
+	. . if updtable="PACBed" do
+	. . . set PLIST(0)=RowId("W"),PLIST(3)=RowId("R"),PLIST(4)=code("B"),PLIST(9)=MASTFILE("M05-DEFBEDTYPE"),PLIST(18)=MASTFILE("M05-BEDAVAIL"),PLIST(34)=date
+	. . . &SQL(INSERT INTO PAC_Bed VALUES :PLIST())
+	
+	. // update/reactivate/deactivate entry
+	. if updtype'="MAD" do
+	. . // update location
+	. . if updtable="CTLoc" do
+	. . . set RowId=PLIST(1) kill PLIST(1) set PLIST(49)=$select(updtype="MUP":PLIST(49),updtype="MAC":"",1:date)
+	. . . &SQL(UPDATE CT_Loc VALUES :PLIST() WHERE CTLOC_RowId = :RowId)
+	
+	. . // update hospital
+	. . if updtable="CTHospital" do
+	. . . set RowId=PLIST(1) kill PLIST(1) set PLIST(12)=$select(updtype="MUP":PLIST(12),updtype="MAC":"",1:date)
+	. . . set PLIST(17)=ADDRESS(5),PLIST(18)=ADDRESS(4),PLIST(19)=ADDRESS(1)_$char(13,10)_ADDRESS(2),PLIST(20)=ADDRESS(3)
+	. . . &SQL(UPDATE CT_Hospital VALUES :PLIST() WHERE HOSP_RowId = :RowId)
+	
+	. . // update ward
+	. . if updtable="PACWard" do
+	. . . if code("H")'="" do
+	. . . . &SQL(SELECT HOSP_RowId INTO :RowId('H') FROM CT_Hospital WHERE HOSP_Code = :code('H'))
+	. . . set RowId=PLIST(1) kill PLIST(1) set PLIST(27)=MASTFILE("M05-DEFWARDTYPE"),PLIST(46)=$get(RowId("H")),PLIST(94)=MASTFILE("M05-WARDINPAT")
+	. . . set PLIST(49)=$select(updtype="MUP":PLIST(49),updtype="MAC":"",1:date)
+	. . . &SQL(UPDATE CT_Loc VALUES :PLIST() WHERE CTLOC_RowId = :RowId)
+	. . . set RowId=PLISTx(1) kill PLISTx(1) set PLISTx(3)=desc
+	. . . &SQL(UPDATE PAC_Ward VALUES :PLISTx() WHERE WARD_RowId = :RowId)
+	
+	. . // update room
+	. . if updtable="PACRoom" do
+	. . . &SQL(SELECT WARD_RowId INTO :RowId('W') FROM PAC_Ward WHERE WARD_Code = :code('W'))
+	. . . set RowId=PLIST(1) kill PLIST(1) set PLIST(7)=MASTFILE("M05-DEFROOMTYPE"),PLIST(13)=$select(updtype="MUP":PLIST(13),updtype="MAC":"",1:date)
+	. . . &SQL(UPDATE PAC_Room VALUES :PLIST() WHERE ROOM_RowId = :RowId)
+	. . . set RowId=PLISTx(1) kill PLIST(1) set PLISTx(0)=RowId("W"),PLISTx(10)=$select(updtype="MUP":PLISTx(10),updtype="MAC":"",1:date)
+	. . . &SQL(UPDATE PAC_WardRoom VALUES :PLISTx() WHERE ROOM_RowId = :RowId)
+	
+	. . // update bed
+	. . if updtable="PACBed" do
+	. . . set RowId=PLIST(1) kill PLIST(1) set PLIST(0)=RowId("W"),PLIST(3)=RowId("R"),PLIST(4)=code("B"),PLIST(9)=MASTFILE("M05-DEFBEDTYPE")
+	. . . set PLIST(18)=MASTFILE("M05-BEDAVAIL"),PLIST(35)=$select(updtype="MUP":PLIST(35),updtype="MAC":"",1:date)
+	. . . &SQL(UPDATE PAC_Bed VALUES :PLIST() WHERE BED_RowId = :RowId)
+	
+	. if 'SQLCODE quit
+	
+	. // set rejection message
+	. set reject="Unable to "_$select(updtype="MAD":"add",updtype="MUP":"update",updtype="MDC":"deactivate",1:"reactivate")_" code "_code(type)_" to table "_tablename
+	. set reject("Detail")="MFE^"_$get(^TMP("HL7",$job,cnt1,"MFE",2))_"^4~206"
+	
+	quit
+
+
+

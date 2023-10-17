@@ -1,0 +1,111 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Reject^MAC^^^0
+HL7Reject // ML 03/07/2006 ; HL7 interface : log rejections
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Reject.rtn#2 $
+	quit
+	
+	// set rejection messages : rejection type : R - rejection (msg rejected)
+	//										   : N - notification (msg processed but invalid data existed in msg)
+	//										   : W - warning (msg processed, data flagged)
+Reject(rejection,rejectiontype) set rejection=$get(rejection),rejectiontype=$get(rejectiontype),file=$get(file) kill REJ
+	set REJ(2)=link
+	
+	// setup rejections for inbound messages
+	set msgtype=$piece($get(^TMP("HL7",$job,"MSH",8)),"^",1,2)
+	if msgtype["ORM"!(msgtype["ORU") do
+	. if $get(cnt3)="" quit
+	. // extract order number/test for result/order messages
+	. set numbers=$$OrderNumExtract^HL7Common5(cnt1,cnt2,cnt3)
+	. set REJ(4)=$piece(numbers,"|"),REJ(8)=$translate($get(tests),"^","_"),REJ(15)=$piece(numbers,"|",2)
+	
+	if msgtype'["MFN" do
+	. if $get(cnt1)=""||('$data(^TMP("HL7",$job,cnt1,"PID"))) quit
+	. set REJ(3)=$get(RegMrn),REJ(5)=$translate($get(^TMP("HL7",$job,cnt1,"PID",5)),"^","_"),REJ(6)=$$DateConv^HL7Common2(.rejx,"EI",$get(^TMP("HL7",$job,cnt1,"PID",7))),REJ(6)=$select(REJ(6)?5N:REJ(6),1:"")
+	. set REJ(7)=$get(^TMP("HL7",$job,cnt1,"PID",8))
+	
+	set REJ(9)=+$h,REJ(10)=$piece($h,",",2) for fnum=11:1:13 set REJ(fnum)=""
+	set REJ(14)=rejection
+	if $length(file) set REJ(16)=file
+	set REJ(19)=$translate($get(^TMP("HL7",$job,"MSH",8)),"^","_"),REJ(20)=version("MSH"),REJ(27)=rejectiontype
+	if $length($get(tracerowid)) set REJ(24)=tracerowid
+	&SQL(INSERT INTO OE_HL7Messages VALUES :REJ())
+	// set stop processing flag
+	set SQLCODE=100
+	
+	// set rejection against message
+	if $length($get(tracerowid)),$length($get(%ROWID)) do reject^HL7Trace(tracerowid,%ROWID)
+	
+	// setup file based rejections
+	if $length(file) do
+	. set introw=$$Interface^HL7(link)
+	. &SQL(SELECT INT_UnixOS INTO :INT('UNIX') FROM SS_Interface WHERE INT_RowId = :introw)
+	. // unix or windows files
+	. set filesep=$select(INT("UNIX")="Y":"/",1:"\")
+	. // does date directory exist
+	. set dir=INT("MOVEDIR")_filedate_filesep_"Reject"_filesep
+	. if $zf(-1,$select(INT("UNIX")="Y":"ls ",1:"dir ")_""""_dir_"""") do
+	. . if INT("UNIX")="Y" do  quit
+	. . . set dir=INT("MOVEDIR")_filedate if $zf(-1,"mkdir "_""""_dir_"""")
+	. . . set dir=INT("MOVEDIR")_filedate_filesep_"Reject" if $zf(-1,"mkdir "_""""_dir_"""")
+	. . if $zf(-1,"md "_""""_dir_"""")
+	. set dir=dir_file_"_Failed.txt",notexist=$zf(-1,$select(INT("UNIX")="Y":"ls ",1:"dir ")_""""_dir_"""")
+	. open dir:$select(notexist:"WNS",1:"WAS") use dir
+	. write "Interface Id: "_link_"  File: "_file_"  Date Processed: "_$$DateConv^HL7Common2(.reject,"IE",+$h)_"  Time Processed: "_$$TimeConv^HL7Common2("IE",$piece($h,",",2)),!
+	. write "Message Type: "_msgtype_"  Message Id: "_$get(^TMP("HL7",$job,"MSH",9)),!
+	. if msgtype'["MFN" do
+	. . write "Patient #: "_RegMrn_"  Name: "_$translate(^TMP("HL7",$job,cnt1,"PID",5),"^","_")_"  DOB: "_$select(^TMP("HL7",$job,cnt1,"PID",7)'?8N:"",1:$zdateh($extract(^TMP("HL7",$job,cnt1,"PID",7),1,8),8))_"  Sex: "_^TMP("HL7",$job,cnt1,"PID",8),!
+	. if msgtype["ORM"!(msgtype["ORU") do
+	. . if $get(cnt3)="" quit
+	. . // extract order number/test for result/order messages
+	. . set numbers=$$OrderNumExtract^HL7Common5(cnt1,cnt2,cnt3)
+	. . write "Lab Request #: "_$piece(numbers,"|")_"  Filler #: "_$piece(numbers,"|",2)_"  Test: "_$translate($get(tests),"^","_"),!
+	. write $select(rejectiontype="R":"Rejection",rejectiontype="N":"Notification",1:"Warning")_" Reason: "_rejection,!
+	. write "--------------------",!
+	. close dir
+	quit
+	// process error msg object returned from api's
+apiReject(APIerror,APIname,APIreturn,forceReject,forceWarn) set APIname=$get(APIname),APIreturn=$get(APIreturn),forceReject=$get(forceReject),forceNotif=$get(forceWarn)
+	set (msgItemExists,reject)=""
+.
+	kill APIerror
+.
+	if $data(msg) {
+		set j="" for  {
+			// extract error detail
+			set j=$order(msg.Item(j)) if j="" quit
+			set msgItemExists=1
+			set detail=msg.Item(j),msgItemCode=$list(detail,2),reason=$list(detail,3),var=$list(detail,5)
+			set rejtype=$select(msgItemCode="LOCKED":"R",forceReject="Y":"R",1:"N")
+			// if no specific field then reject
+			if var="" set rejtype="R",reason="API:"_APIname_". "_$select(reason'="":reason,1:msgItemCode)
+			// check for error on field for the same update
+			if var'="",$data(ErrorLog(var)) set rejtype="R",reason="API:"_APIname_". "_reason_". Multiple rejections on this field, message rejected"
+			// force notification instead of rejection
+			if forceWarn="Y" set rejtype="W"
+			// convert escape characters
+			set reason=$translate($$TextConversion^HL7Common12(reason,"O"),$char(13,10),HL7("LINEBK"))
+			if msgItemCode'="LOCKED",var'="" {
+				// find property description and build/file rejection
+				set property=##class(%Dictionary.PropertyDefinition).%OpenId(APIname_"||"_var)
+				set reject="API: "_APIname_". Field: "_$select(property="":var,1:property.Description)_". "_$select(property="":"",1:" Value: "_$property(params,var)_".")_" Reason: "_reason
+			}
+			else  {
+				set reject=reason
+			}
+			if reject'="" do Reject^HL7Reject(reject,rejtype)
+			if (rejtype="N")||(rejtype="W") set reject=""
+			// store errors to check if msg fails again
+			if var'="" set ErrorLog(var)=reason
+			// add invalid property to list for removal
+			if var'="" set APIerror(var)=""
+		}
+	}
+	// reject messages with no msg object returned but with API error
+	if 'msgItemExists,APIreturn'="" {
+		set reject="API: "_APIname_". "_APIreturn do Reject^HL7Reject(reject,"R")
+	}
+	quit
+
+
+

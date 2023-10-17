@@ -1,0 +1,127 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SiteLUHTPatEv^MAC^^^0
+HL7SiteLUHTPatEv // ML 14/08/2002 ; HL7 interface : patient event categories - Lincoln University Hospital Trust
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteLUHTPatEv.rtn#1 $
+	quit
+	
+CheckA34 ;; A34 - merge patient information - patient id ONLY
+MergePat(reject,event) new (event,link,HL7,tracerowid,version,PatNum) set event=$get(event),(reject,reject("Detail"))=""
+	
+	if event="A34" do
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	. . // registration number merge
+	. . set found="" do  quit:reject'=""
+	
+	. . . // get old numbers from MRG
+	. . . do MRGNum if reject'="" quit
+	
+	. . . set RegMrnFrom=$piece(mrgRegMrn,"^")
+	. . . set intRegFrom=$$intRegMrn^HL7Common2(RegMrnFrom) if intRegFrom="" set reject="Registration number "_RegMrnFrom_" does not exist",reject("Detail")="MRG^^1^204",RegMrn=RegMrnFrom quit
+	. . . set found=1
+	. . . // extract old patient details.
+	. . . // k PLIST,PAPER i $$PatSelect^HL7PatEv(intRegFrom) s reject="Unable to extract patient details for 'merge from' number "_RegMrnFrom,reject("Detail")="MRG^^1^207",RegMrn=RegMrnFrom q
+	
+	. . . // get new numbers from PID
+	. . . do PIDNum if reject'="" quit
+	
+	. . . // 'new' pid number same as current registration number
+	. . . set i=$order(MergeNum("")),num=MergeNum(i)
+	. . . if $piece($get(pidRegMrn),"^")'=num do  if reject'="" quit
+	. . . . // register new number
+	. . . . do NewReg
+	
+	. . . set RegMrn=$piece(pidRegMrn,"^"),intRegMrn=$piece(pidRegMrn,"^",2)
+	
+	. . . // add new hospital number to new registration number
+	. . . set i=$order(newHospMrn("")) if i'=""  do
+	. . . . if $piece(newHospMrn(i),"^")="" quit
+	. . . . set HospMrn=$piece(newHospMrn(i),"^"),mrtype=$piece(newHospMrn(i),"^",4) if $$intHospMrn^HL7Common2(HospMrn)="" do HospMrn^HL7PatEv
+	. . . . set pidintHospMrn=$$intHospMrn^HL7Common2(HospMrn) quit:pidintHospMrn=""
+	. . . . set i=$order(pidHospMrn(""),-1)+1,pidHospMrn(i)=HospMrn_"^"_pidintHospMrn
+	
+	. . . kill PLIST merge PLIST=PAPER
+	. . . if $$merge^MVBPAMR(intRegFrom,intRegMrn,HL7("USER"))
+	
+	. . . // release 'old' number which is now an 'other' number for re-use
+	. . . set i=$order(newHospMrn("")) if i'=""  do
+	. . . . if $$updRegMrn^HL7Common2(intRegFrom,"")
+	
+	. . . // remove non-duplicate old 'other' numbers
+	. . . set intHospMrn="" for  set intHospMrn=$order(^RT(0,"PAT",intRegMrn,intHospMrn)) quit:intHospMrn=""  do
+	. . . . set remove=""
+	. . . . set HospMrn=$piece(^RT(intHospMrn),"^") quit:HospMrn=""
+	. . . . if $data(mrgHospMrn(HospMrn)),'$data(dupHospMrn(HospMrn)) set remove=1
+	. . . . if '$data(dupHospMrn(HospMrn)) do  if 'found set remove=1
+	. . . . . set found=""
+	. . . . . set i="" for  set i=$order(pidHospMrn(i)) quit:i=""  if $piece(pidHospMrn(i),"^",1)=HospMrn set found=1
+	. . . . if remove=1,$$delHosp(intHospMrn)
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit
+	
+	// remove hospital numbers not in 'pid'
+delHosp(rowid) new (rowid) set rowid=$get(rowid)
+	set PLIST(2)="",HL7Flag="Y"
+	&SQL(DELETE FROM RT_Master WHERE RTMAS_RowId = :rowid)
+	kill HL7Flag
+	quit SQLCODE
+	
+	// get old numbers from MRG record
+MRGNum	kill MergeNum set extReg=^TMP("HL7",$job,cnt1,"MRG",1) for i=1:1:$length(extReg,"~") do
+	. // check if national number
+	. if NatField,NatCode'="",$piece($piece(extReg,"~",i),"^",NatField)=NatCode quit
+	. set MergeNum($piece($piece(extReg,"~",i),"^"))=""
+	set (mrgintRegMrn,mrgintHospMrn)="" kill mrgHospMrn,mrgRegMrn
+	set num="" for  set num=$order(MergeNum(num)) quit:num=""  do
+	. set mrgintRegMrn=$$intRegMrn^HL7Common2(num),mrgintHospMrn=$$intHospMrn^HL7Common2(num)
+	. if mrgintRegMrn'="" set mrgRegMrn=num_"^"_mrgintRegMrn
+	. if mrgintHospMrn'="" set mrgHospMrn(num)=mrgintHospMrn
+	if '$data(mrgRegMrn) set reject="No registration number supplied for merge",reject("Detail")="MRG^^1^101",RegMrn=""
+	quit
+	
+	// get new numbers from PID record
+PIDNum	kill MergeNum,newHospMrn set extReg=^TMP("HL7",$job,cnt1,"PID",3) for i=1:1:$length(extReg,"~") do
+	. // check if national number
+	. if NatField,NatCode'="",$piece($piece(extReg,"~",i),"^",NatField)=NatCode quit
+	. if $piece($piece(extReg,"~",i),"^")=$piece(mrgRegMrn,"^") set newHospMrn(i)=$piece(extReg,"~",i) quit
+	. set MergeNum(i)=$piece($piece(extReg,"~",i),"^")
+	// strip out old number duplicates
+	set i="" for  set i=$order(MergeNum(i)) quit:i=""  if MergeNum(i)'="",$data(mrgHospMrn(MergeNum(i))) set dupHospMrn(MergeNum(i))=mrgHospMrn(MergeNum(i)) kill MergeNum(i)
+	set (pidintRegMrn,pidintHospMrn)="" kill pidHospMrn,pidRegMrn
+	set i="" for  set i=$order(MergeNum(i)) quit:i=""  do
+	. set num=MergeNum(i) if num="" kill MergeNum(i)
+	. set pidintRegMrn=$$intRegMrn^HL7Common2(num),pidintHospMrn=$$intHospMrn^HL7Common2(num)
+	. if pidintRegMrn'="" set pidRegMrn=num_"^"_pidintRegMrn
+	. if pidintHospMrn'="" set pidHospMrn(i)=num_"^"_pidintHospMrn
+	quit
+	
+	// find current registration and 'A47' it
+NewReg	if '$data(pidRegMrn) do  quit:reject'=""
+	. set i="" for  set i=$order(pidHospMrn(i)) quit:i=""  do  quit:pidRegMrn'=""
+	. . set pidintHospMrn=$piece(pidHospMrn(i),"^",2),pidintRegMrn=$piece(^RT(pidintHospMrn),"^",2) quit:pidintRegMrn=""
+	. . set pidRegMrn=$$extRegMrn^HL7Common2(pidintRegMrn)
+	. . if pidRegMrn'="" set pidRegMrn=pidRegMrn_"^"_pidintRegMrn
+	. if pidRegMrn="" set reject="Registration number for hospital numbers passed in PID cannot be found",reject("Detail")="PID^^"_$piece(PatNum("HOSP"),"^",2)_"^"_207,RegMrn="" quit
+	
+	// change registration numbers
+	set pidintRegMrn=$piece(pidRegMrn,"^",2) kill pidRegMrn
+	set i=$order(pidHospMrn("")),newMrn=$piece(pidHospMrn(i),"^") kill pidHospMrn(i)
+	set newintRegMrn=$$intRegMrn^HL7Common2(newMrn)
+	// add patient
+	if newintRegMrn="" do
+	. set RegMrn=newMrn,nationalnum="" do PatDet1^HL7PatEv,PatSet^HL7PatEv kill HospMrn do PatInsert^HL7PatEv
+	set newintRegMrn=$$intRegMrn^HL7Common2(newMrn)
+	// perform merge
+	kill PLIST,PAPER if $$PatSelect^HL7PatEv(pidintRegMrn) set reject="Unable to extract patient details for 'merge from' number "_oldMrn,reject("Detail")="PID^^"_$piece(PatNum("REG"),"^",2)_"^207",RegMrn=oldMrn quit ##; noalert
+	merge PLIST=PAPER set HL7=1
+	if $$merge^MVBPAMR(pidintRegMrn,newintRegMrn,HL7("USER"))
+	// release 'old' number for re-use
+	if $$updRegMrn^HL7Common2(pidintRegMrn,"")
+	// set new registration number details
+	set pidRegMrn=newMrn_"^"_newintRegMrn
+	quit
+
+
+

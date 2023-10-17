@@ -1,0 +1,114 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract1A^MAC^^^0
+HL7OutExtract1A // ML 22/12/2004 ; HL7 interface - common outbound code table extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract1A.rtn#1 $
+	quit
+	
+	// extract code table detail
+CodeTable(mtable) set mtable=$get(mtable),(code,desc,other)="" new count
+	
+	if mtable="PA_Person" do
+	. for i=15,20,22,23,31,33,37,55,57,77,90,95,101,112,139,141,142,143,144,155,157,171,180,198,216,221,241 if $get(PatDetail(i))'="" do  set PatDetail(i)=$select($get(PatDetail(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=PatDetail(i) quit:value=""""""
+	. . if i=15 do
+	. . . &SQL(SELECT CTSEX_Code, CTSEX_Desc, CTSEX_HL7Code INTO :code, :desc, :other FROM CT_Sex WHERE CTSEX_RowId = :value)
+	. . . if other'="" set code=other,other=""
+	. . if i=20 do
+	. . . &SQL(SELECT CTMAR_Code, CTMAR_Desc INTO :code, :desc FROM CT_Marital WHERE CTMAR_RowId = :value)
+	. . if i=22 do
+	. . . &SQL(SELECT CTNAT_Code, CTNAT_Desc INTO :code, :desc FROM CT_Nation WHERE CTNAT_RowId = :value)
+	. . if i=23 do
+	. . . &SQL(SELECT CTRLG_Code, CTRLG_Desc INTO :code, :desc FROM CT_Religion WHERE CTRLG_RowId = :value)
+	. . if i=31 do
+	. . . &SQL(SELECT INST_Code, INST_Desc INTO :code, :desc FROM ARC_InsuranceType WHERE INST_RowId = :value)
+	. . if i=33 do
+	. . . &SQL(SELECT CTCIT_Code, CTCIT_Desc INTO :code, :desc FROM CT_City WHERE CTCIT_RowId = :value)
+	. . if i=37 do
+	. . . &SQL(SELECT SS_Code, SS_Desc INTO :code, :desc FROM CT_SocialStatus WHERE SS_RowId = :value)
+	. . if i=55!(i=77)!(i=155) do
+	. . . &SQL(SELECT CTCOU_Code, CTCOU_Desc INTO :code, :desc FROM CT_Country WHERE CTCOU_RowId = :value)
+	. . if i=57 do
+	. . . &SQL(SELECT CTOCC_Code, CTOCC_Desc INTO :code, :desc FROM CT_Occupation WHERE CTOCC_RowId = :value)
+	. . if i=90 do
+	. . . &SQL(SELECT EPE_Code, EPE_Desc INTO :code, :desc FROM PAC_EmployeeType WHERE EPE_RowId = :value)
+	. . if i=95 do
+	. . . &SQL(SELECT CTLOC_Code, CTLOC_Desc INTO :code, :desc FROM CT_Loc WHERE CTLOC_RowId = :value)
+	. . if i=101 do
+	. . . &SQL(SELECT CTCO_Code, CTCO_Desc INTO :code, :desc FROM CT_Company WHERE CTCO_RowId = :value)
+	. . if i=112 do
+	. . . &SQL(SELECT CTRG_Code, CTRG_Desc INTO :code, :desc FROM CT_Region WHERE CTRG_RowId = :value)
+	. . if i=139 do
+	. . . &SQL(SELECT TTL_Code INTO :code FROM CT_Title WHERE TTL_RowId = :value)
+	. . if i=141 do
+	. . . &SQL(SELECT INDST_Code, INDST_Desc INTO :code, :desc FROM PAC_IndigStatus WHERE INDST_RowId = :value)
+	. . if i=142 do
+	. . . set detail=##class(web.ARCAuxilInsurType).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=143 do
+	. . . &SQL(SELECT PREFL_Code, PREFL_Desc INTO :code, :desc FROM PAC_PreferredLanguage WHERE PREFL_RowId = :value)
+	. . if i=144 do
+	. . . &SQL(SELECT PTYPE_Code, PTYPE_Desc INTO :code, :desc FROM PAC_PatientType WHERE PTYPE_RowId = :value)
+	. . if i=157 do
+	. . . set detail=##class(web.PACOSVisitorStatus).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=171 do
+	. . . &SQL(SELECT EMPLST_Code, EMPLST_Desc INTO :code, :desc FROM PAC_EmploymentStatus WHERE EMPLST_RowId = :value)
+	. . if i=180 do
+	. . . &SQL(SELECT ASSIS_Code, ASSIS_Desc INTO :code, :desc FROM PAC_AusSouthSeaIslander WHERE ASSIS_RowId = :value)
+	. . if i=198 do
+	. . . set code=value,desc=##class(websys.StandardTypeItem).GetDescription("PreferredContact",value)
+	. . if i=216 do
+	. . . &SQL(SELECT SNS_Code, SNS_Desc INTO :code, :desc FROM PAC_SpecialNeedsStatus WHERE SNS_RowId = :value)
+	. . if i=221 do
+	. . . &SQL(SELECT IDDT_Code, IDDT_Desc INTO :code, :desc FROM PAC_IDDocType WHERE IDDT_RowId = :value)
+	. . if i=241 do
+	. . . set code=value,desc=##class(websys.StandardTypeItem).GetDescription("Reason For Attention",value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(PatDetail(""),-1) if $data(PatDetail(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",15,20,22,23,28,31,33,37,55,57,73,77,90,95,101,112,139,141,142,143,144,148,155,157,171,180,198,216,221,241,"[(","_i_",") quit
+	. . set PatDetail(i)=$$TextConversion^HL7Common12(PatDetail(i),"O")
+	
+	if mtable="PA_PatMas" do
+	. for i=105,114,132,138,144 if $get(PatDetailx(i))'="" do  set PatDetailx(i)=$select($get(PatDetailx(i))="""""":"""""",1:code_$select(desc'="":"^"_desc,1:"")),(code,desc,other)=""
+	. . set value=PatDetailx(i) quit:value=""""""
+	. . if i=105 do
+	. . . &SQL(SELECT MEDSUF_Code INTO :code FROM PAC_MedicareSuffix WHERE MEDSUF_RowId = :value)
+	. . if i=114 do
+	. . . &SQL(SELECT CARD_Code INTO :code FROM PAC_CardType WHERE CARD_RowId = :value)
+	. . if i=132 do
+	. . . &SQL(SELECT AUXIT_Code, AUXIT_Desc INTO :code, :desc FROM ARC_AuxilInsurType WHERE AUXIT_RowId = :value)
+	. . if i=138 do
+	. . . set code=value,desc=##class(websys.StandardTypeItem).GetDescription("YesNoAnonymous",value)
+	. . if i=144 do
+	. . . &SQL(SELECT PENSTYPE_Code, PENSTYPE_Desc INTO :code, :desc FROM PAC_PensionType WHERE PENSTYPE_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(PatDetailx(""),-1) if $data(PatDetailx(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",105,114,132,138,144,"[(","_i_",") quit
+	. . set PatDetailx(i)=$$TextConversion^HL7Common12(PatDetailx(i),"O")
+	
+	if mtable="PA_Nok" do
+	. for i=8,30,53 if $get(NextOfKin(i))'="" do  set NextOfKin(i)=$select($get(NextOfKin(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=NextOfKin(i)
+	. . if i=8 do
+	. . . &SQL(SELECT CTRLT_Code, CTRLT_Desc INTO :code, :desc FROM CT_Relation WHERE CTRLT_RowId = :value)
+	. . if i=30 do
+	. . . &SQL(SELECT CONTTP_Code, CONTTP_Desc INTO :code, :desc FROM PAC_ContactType WHERE CONTTP_RowId = :value)
+	. . if i=53 do
+	. . . &SQL(SELECT CTSEX_Code, CTSEX_Desc, CTSEX_HL7Code INTO :code, :desc, :other FROM CT_Sex WHERE CTSEX_RowId = :value)
+	. . . if other'="" set code=other,other=""
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(NextOfKin(""),-1) if $data(NextOfKin(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",8,30,53,"[(","_i_",") quit
+	. . set NextOfKin(i)=$$TextConversion^HL7Common12(NextOfKin(i),"O")
+	
+	quit
+
+
+

@@ -1,0 +1,112 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7InboundADTA31^MAC^^^0
+HL7InboundADTA31	// ML 21/06/2010 ;  HL7 interface : patient event ADT_A31
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundADTA31.rtn#1 $
+	quit
+	
+	// A31 - update person information
+A31()
+	set HL7Flag="Y"
+	set (reject,rejecthere)=""
+	
+	// check if message forwarding required
+	set forward=$$MsgForward^HL7Inbound(msgtype)
+	set cnt1=0 for  {
+		if reject'="" quit
+		set cnt1=$order(^TMP("HL7",$job,cnt1)) if cnt1="" quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		
+		// check if pre-existing patient
+		set numbers=$$RegNum^HL7Common2(.reject,"A31")
+		set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+		if reject'="" set rejecthere="Y" quit
+		
+		// extract EVN information
+		do EVN^HL7InboundExtract0
+		kill PERSON,HOSPMRN,TEMPADD,TADD,NOK,ALG,ALGi,EMPLOY,ALIAS
+		
+		// extract ZID information - extract first to make PAPMIVIPFlag available for use in PID extraction for PDS
+		do ZID^HL7InboundExtractZ
+		
+		// extract PID information
+		do PID^HL7InboundExtract1 if reject'="" quit
+		set PERSON("RegistrationNumber")=RegMrn
+		set PERSON("DoctorChanged")=1
+		
+		// extract PD1 information
+		do PD1^HL7InboundExtract1
+		
+		// extract NK1 information
+		do NK1^HL7InboundExtract1
+		
+		// extract AL1 information
+		do AL1^HL7InboundExtract1
+		set foundIN1="",cnt2=0 for  {
+			if foundIN1 quit
+			set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) if cnt2="" quit
+			if $data(^TMP("HL7",$job,cnt1,cnt2,"IN1")) {
+				set foundIN1=1
+				// extract IN1 information
+				do IN1^HL7InboundExtract2
+			}
+		}
+		
+		set reject=""
+		
+		// update URN if currently not set
+		if ($$extRegMrn^HL7Common2(intRegMrn)="")&&(RegMrn="") {
+			set type="REG"
+			if $data(PatNum(type)) {
+				do NumTypeDetail^HL7Common2(PatNum(type),.seg,.field,"","","","",.usetype,.usecode,.expfield,"",.cardtype)
+				set numbers=$get(^TMP("HL7",$job,cnt1,seg,field))
+				quit:'$length($translate(numbers,"^~"))
+				for i=1:1:$length(numbers,"~") {
+					if $piece($piece($piece(numbers,"~",i),"^",usetype),"&")=usecode {
+						set RegMrn=$piece($piece($piece(numbers,"~",i),"^"),"&") quit
+					}
+				}
+			}
+			if $$updRegMrn^HL7Common2(intRegMrn,$get(RegMrn))
+		}
+		
+		// update person information
+		do PERSON^HL7InboundUpdate1
+		if reject'="" quit
+		
+		// update temporary addresses
+		do TEMPADDRESS^HL7InboundUpdate1
+		if reject'="" quit
+		
+		// update med record information
+		do HOSPMRN^HL7InboundUpdate1
+		if reject'="" quit
+		
+		// update employee information
+		do EMPLOYEE^HL7InboundUpdate1
+		if reject'="" quit
+		
+		// update alias information
+		do ALIAS^HL7InboundUpdate1
+		if reject'="" quit
+		
+		// update next of kin information
+		do NOK^HL7InboundUpdate1
+		if reject'="" quit
+		
+		// update allergy information
+		do ALLERGY^HL7InboundUpdate1
+		
+		// check if message forwarding required
+		if forward,reject="" set forwardnum(cnt1,intRegMrn)="PAPERSON"
+		kill params,PERSON,HOSPMRN,TEMPADD,TADD,NOK,ALG,ALGi,EMPLOY,ALIAS
+	}
+	
+	kill params,PERSON,HOSPMRN,TEMPADD,TADD,NOK,ALG,ALGi,EMPLOY,ALIAS
+	if rejecthere="Y" do Reject^HL7Reject(reject,"R")
+	
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

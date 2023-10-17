@@ -1,0 +1,130 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteQLDOrdPharm^MAC^^^0
+HL7SiteQLDOrdPharm // ML 17/06/2004 ; HL7 interface : pharmacy/treatment dispense medication event - Queensland Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteQLDOrdPharm.rtn#1 $
+	quit
+ 
+Check	;; O01 - add/update order
+Order(event) set event=$get(event),(upduser,updhosp)=""
+ 
+	if event="O01" do
+	. // extract user update details
+	.set upddetail=$$UserId^HL7Common7()
+	.set upduser=$piece(upddetail,"^"),updhosp=$piece(upddetail,"^",2)
+ 
+	.set cnt1="" for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	..if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	.. // extract internal/external registration numbers
+	..set numbers=$$RegNum^HL7Common2(.reject,"O01")
+	..set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+	..if reject'="" quit
+ 
+	.. // check admission details
+	..set (FoundPV1,AdmNum,intAdmNum)=""
+	..set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	...if 'FoundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) quit
+	...if 'FoundPV1 do  set FoundPV1=cnt2
+	....set AdmNum=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",19)),"^"),intAdmNum=""
+	...if AdmNum'="" set intAdmNum=$$intAdmNum^HL7Common2(AdmNum,intRegMrn) if intAdmNum="" do  quit
+	....set reject="Admission number "_AdmNum_" received does not exist in MedTrak",reject("Detail")="PV1^"_$get(^TMP("PV1",$job,cnt1,cnt2,"PV1",1))_"^19^~"_207
+ 
+	...if $order(^TMP("HL7",$job,cnt1,cnt2,""))'="" do  quit
+	....set cnt3="" for  set cnt3=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3)) quit:cnt3=""  if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR")) do  quit:reject'=""
+ 
+	..... // check patient details
+	.....if $$PatCheck^HL7Common3(intRegMrn,RegMrn) quit
+ 
+	..... // get order and filler number
+	.....set numbers=$$OrderNumExtract^HL7Common5(cnt1,cnt2,cnt3)
+	.....set FillerNum=$piece(numbers,"|",2)
+ 
+	..... // get medication type
+	.....set medtype=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("Medication Type",$piece(^TMP("HL7",$job,cnt1,cnt2,"ORC",25),"^"))
+	.....if medtype="" set reject="Invalid medication type "_$piece(^TMP("HL7",$job,cnt1,cnt2,"ORC",25),"^")_" received on Medication number "_FillerNum_", Patient Id "_RegMrn,reject("Detail")="ORC^^25^~"_207 quit
+ 
+	..... // find admission from medication number
+	.....if intAdmNum="" set intAdmNum=$$MedAdmNum(FillerNum,intRegMrn)
+ 
+	..... // search/create admission for new medication number
+	.....if intAdmNum="" do  if reject'="" quit
+	......set atype=$get(^TMP("HL7",$job,cnt1,FoundPV1,"PV1",2))
+	...... // extract required date/time's to check
+	......kill date,time
+	......for i=44,45 set datetime=$get(^TMP("HL7",$job,cnt1,FoundPV1,"PV1",i)),date($select(i=44:"ADM",1:"DIS"))=$extract(datetime,1,8),time($select(i=44:"ADM",1:"DIS"))=$extract(datetime,9,12)
+	......set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"ORC",7)),date("PHA")=$extract(datetime,1,8),time("PHA")=$extract(datetime,9,12)
+	......for datetype="ADM","DIS","PHA" do
+	.......if $data(date(datetype)) set date(datetype)=$select(date(datetype)?8N:$$DateConv^HL7Common2(.reject,"EI",date(datetype)),1:"")
+	.......if $data(time(datetype)) set time(datetype)=$select(time(datetype)?4N:$$TimeConv^HL7Common2("EI",$extract(time(datetype),1,2)_":"_$extract(time(datetype),3,4)),1:"")
+	......set routine="HL7Site"_HL7("INCODE")_"Res",LineRoutine="CheckAdm^"_routine
+	......if $length($text(@LineRoutine),";;")=2 xecute "d CreateAdm^"_routine_"(.reject,"""_atype_""")" quit
+	......set reject="Unable to add/find admission for Patient Id "_RegMrn_", Medication number "_FillerNum,reject("Detail")="^^^~"_207
+ 
+	.....set AdmNum=$$extAdmNum^HL7Common2(intAdmNum)
+ 
+	..... // check if valid admission
+	.....if $$VisSelect^HL7PatEv2(intAdmNum) set reject="Admission "_AdmNum_" found for Patient Id "_RegMrn_", is not valid or cannot be used",reject("Detail")="^^^~"_207 quit
+ 
+	..... // extract mradm rowid
+	.....set intMRAdmNum=$$MRAdmSelect(intAdmNum)
+	.....if intMRAdmNum="" do  quit:reject
+	...... // insert MR_Adm
+	......set MRADM(13)=intAdmNum,reject=""
+	......if $$MRAdmInsert^HL7PatEv2 do  quit
+	.......set reject="Unable to add MR Admission detail for Admission "_AdmNum_" found on Patient Id "_RegMrn,reject("Detail")="^^^~"_207 quit
+	......set intMRAdmNum=$get(%ROWID)
+ 
+	.....set cnt4="" for  set cnt4=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4)) quit:cnt4=""  if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"RXD")) do  quit
+ 
+	...... // extract medication rowid
+	......set intMedNum=$$intMedNum(FillerNum,intRegMrn)
+	......if intMedNum'="",$piece(^TMP("HL7",$job,cnt1,cnt2,"ORC",1),"^")="OC" do  quit
+	.......if $$MedDelete(intMedNum)
+	......kill MRMED set MRMED(3)=FillerNum,MRMED(5)=medtype,MRMED(8)=+$h,MRMED(9)=$piece($h,",",2),MRMED(10)=upduser,MRMED(11)=updhosp
+	......for i=1:1 quit:'$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"RXD",9,i))  set MRMED(4)=$get(MRMED(4))_$listbuild(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"RXD",9,i))
+	......if intMedNum="" do  quit
+	.......set MRMED(0)=intMRAdmNum if $$MedInsert()
+	......if intMedNum'="" do  quit
+	.......if $$MedUpdate(intMedNum)
+ 
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+ 
+	// check for MR Admission
+MRAdmSelect(intAdmNum) new (intAdmNum) set intAdmNum=$get(intAdmNum),intNum=""
+	&SQL(SELECT PAADM_MainMRADM_DR INTO :intNum FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+	quit intNum
+ 
+	// return admission for medication number
+MedAdmNum(num,intRegMrn) new (num,intRegMrn) set num=$get(num),intRegMrn=$get(intRegMrn),intNum=""
+	&SQL(SELECT PAADM_RowId INTO :intNum FROM PA_Adm, MR_Adm, MR_Medication
+	      WHERE MED_HL7Number = :num AND MRADM_RowId = MED_ParRef AND
+	      	    PAADM_RowId = MRADM_ADM_DR AND PAADM_PAPMI_DR = :intRegMrn)
+	if SQLCODE set intNum=""
+	quit intNum
+ 
+	// extract medication rowid
+intMedNum(num,intRegMrn) new (num,intRegMrn) set num=$get(num),intRegMrn=$get(intRegMrn),intNum=""
+	&SQL(SELECT MED_RowId INTO :intNum FROM PA_Adm, MR_Adm, MR_Medication
+	      WHERE MED_HL7Number = :num AND MRADM_RowId = MED_ParRef AND
+	      	    PAADM_RowId = MRADM_ADM_DR AND PAADM_PAPMI_DR = :intRegMrn)
+	if SQLCODE set intNum=""
+	quit intNum
+ 
+	// update medication details
+MedUpdate(RowId) new (RowId,MRMED) set RowId=$get(RowId)
+	&SQL(UPDATE MR_Medication VALUES :MRMED() WHERE MED_RowID = :RowId)
+	quit SQLCODE
+ 
+	// insert medication details
+MedInsert() new (MRMED) set initvalue=MRMED(0)
+	&SQL(INSERT INTO MR_Medication VALUES :MRMED())
+	quit SQLCODE
+ 
+	// delete medication details
+MedDelete(RowId) new (RowId) set RowId=$get(RowId)
+	&SQL(DELETE FROM MR_Medication WHERE MED_RowId = :RowId)
+	quit SQLCODE
+
+
+

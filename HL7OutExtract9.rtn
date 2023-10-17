@@ -1,0 +1,72 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract9^MAC^^^0
+HL7OutExtract9 // ML 20/08/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract9.rtn#1 $
+	quit
+ 
+	// extract allergy detail
+Allergy(intAlgNum,Allergy) new (intAlgNum,Allergy,old,curr) set intAlgNum=$get(intAlgNum)
+	&SQL(SELECT * INTO :Allergy() FROM PA_Allergy WHERE ALG_RowId = :intAlgNum)
+	// ignore allergies which are not active or inactive
+	if $get(Allergy(11))'="A",($get(Allergy(11))'="I") quit 100
+	quit SQLCODE
+ 
+	// extract alert detail
+Alert(intAltNum,Alert) new (intAltNum,Alert,old,curr) set intAltNum=$get(intAltNum)
+	&SQL(SELECT * INTO :Alert() FROM PA_AlertMsg WHERE ALM_RowId = :intAltNum)
+	quit SQLCODE
+ 
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable) set (code,desc,other)=""
+ 
+	if mtable="PA_Allergy" do
+	.for i=5,8,11,24,28,31,32,33,36 if $get(Allergy(i))'="" do  set Allergy(i)=$select($get(Allergy(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=Allergy(i) quit:value=""""""
+	..if i=5 do
+	... &SQL(SELECT PHCGE_Code, PHCGE_Name INTO :code, :desc FROM PHC_Generic WHERE PHCGE_RowId = :value)
+	..if i=8 do
+	... &SQL(SELECT ALG_Code, ALG_Desc INTO :code, :desc FROM PAC_Allergy WHERE ALG_RowId = :value)
+	..if i=11 do
+	...set code=value,desc=##class(websys.StandardTypeItem).GetDescriptionFromCode("AllergyStatus",value)
+	..if i=24 do
+	... &SQL(SELECT ALRGSEV_Code, ALRGSEV_Desc INTO :code, :desc FROM PAC_AllergySeverity WHERE ALRGSEV_RowId = :value)
+	..if i=28 do
+	... &SQL(SELECT ALRGCAT_code, ALRGCAT_Desc INTO :code, :desc FROM PAC_AllergyCategory WHERE ALRGCAT_RowId = :value)
+	..if i=31 do
+	... &SQL(SELECT PHCD_Code, PHCD_Name INTO :code, :desc FROM PHC_DrgMast WHERE PHCD_RowId = :value)
+	..if i=32 do
+	... &SQL(SELECT ALRFC_Code, ALRFC_Desc INTO :code, :desc FROM PAC_AllergyReasonForChang WHERE ALRFC_RowId = :value)
+	..if i=33 do
+	... &SQL(SELECT MRCAT_Code, MRCAT_Desc INTO :code, :desc FROM MRC_AllType WHERE MRCAT_RowId = :value)
+	..if i=36 do
+	... &SQL(SELECT INGR_Code, INGR_Desc INTO :code, :desc FROM PHC_Ingredient WHERE INGR_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(Allergy(""),-1) if $data(Allergy(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",5,8,11,24,28,30,31,32,33,36,"[(","_i_",") quit
+	..set Allergy(i)=$$TextConversion^HL7Common12(Allergy(i),"O")
+ 
+	if mtable="PA_AlertMsg" do
+	.for i=21,24,30,32 if $get(Alert(i))'="" do  set Alert(i)=$select($get(Alert(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=Alert(i) quit:value=""""""
+	..if i=21 do
+	... &SQL(SELECT ALERT_Code, ALERT_Desc INTO :code, :desc FROM PAC_PatientAlert WHERE ALERT_RowId = :value)
+	..if i=24 do
+	... &SQL(SELECT ALEXP_Code, ALEXP_Desc INTO :code, :desc FROM PAC_AlertExpiryReason WHERE ALEXP_RowId = :value)
+	..if i=30 do
+	...set code=value,desc=##class(websys.StandardTypeItem).GetDescriptionFromCode("AlertStatus",value)
+	..if i=32 do
+	... &SQL(SELECT ALERTCAT_Code, ALERTCAT_Desc INTO :code, :desc FROM PAC_AlertCategory WHERE ALERTCAT_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(Alert(""),-1) if $data(Alert(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",4,21,24,30,32,"[(","_i_",") quit
+	..set Alert(i)=$$TextConversion^HL7Common12(Alert(i),"O")
+ 
+	quit
+
+
+

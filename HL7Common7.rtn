@@ -1,0 +1,116 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Common7^MAC^^^0
+HL7Common7	// ML 07/07/2004 ; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common7.rtn#1 $
+	quit
+	
+	// user and hospital update details
+UserId() new (HL7) set (upduser,updhosp,user,locat,location)=""
+	// extract from EVN
+	if $data(^TMP("HL7",$job,"EVN")) do
+	. set user=$piece(^TMP("HL7",$job,"EVN",5),"^"),locat=$piece(^TMP("HL7",$job,"EVN",7),"^",2)
+	. if user="" quit
+	. &SQL(SELECT SSUSR_RowId INTO :upduser FROM SS_User WHERE SSUSR_Initials = %ALPHAUP(:user))
+	. if locat="" quit
+	. &SQL(SELECT CTLOC_RowId INTO :location FROM CT_Loc WHERE CTLOC_Code = %ALPHAUP(:locat))
+	
+	// default to interface user
+	if '$data(^TMP("HL7",$job,"EVN"))!(upduser="") set upduser=HL7("USER")
+	
+	// default to user location
+	if location="" do
+	. &SQL(SELECT SSUSR_DefaultDept_DR -> CTLOC_RowId INTO :location FROM SS_User WHERE SSUSR_RowId = :upduser)
+	
+	if location'="" do
+	. &SQL(SELECT CTLOC_Hospital_DR INTO :updhosp FROM CT_Loc WHERE CTLOC_RowId = :location)
+	
+	quit upduser_"^"_updhosp
+	
+	// processing rules for message
+Rules(link) new (link,RULES) set link=$get(link)
+	if link="" quit ""
+	
+	set rowid=link_"||1"
+	&SQL(SELECT * INTO :RULES() FROM SS_HL7ProcessingRules WHERE HL7PR_RowId = :rowid)
+	
+	quit SQLCODE
+	
+	// extract address details - type : PCP - Post/Zip, City, Province/State Codes
+	// 				   COU - Country
+	// 				   TYP - Address Type
+	// 			  - method : O - Outbound
+	// 			  	     I - Inbound
+Address(reject,method,type,value) new (reject,method,type,value,RegMrn) set type=$get(type),method=$get(method),value=$get(value),RegMrn=$get(RegMrn)
+	kill RowId,SQL
+	set (RowId,code,desc,reject)=""
+	
+	if method="I" do
+	. if type="PCP" do  set RowId=$get(RowId("CTY"))_"|"_$get(RowId("PST"))_"|"_$get(RowId("PRV"))
+	. . set suburb=$piece(value,"|"),post=$piece(value,"|",2),province=$piece(value,"|",3)
+	. . if post'="" do
+	. . . &SQL(SELECT CTZIP_RowID INTO :RowId('PST') FROM CT_Zip
+		WHERE (CTZIP_Code = :post)
+		AND ((:suburb IS NULL) OR (CTZIP_CITY_DR -> CTCIT_Desc = :suburb))
+		AND ((:province IS NULL) OR (CTZIP_Province_DR -> PROV_Code = :province)))
+	. . . set SQL("PST")=SQLCODE
+	. . if province'="" do
+	. . . &SQL(SELECT PROV_RowId INTO :RowId('PRV') FROM CT_Province WHERE PROV_Code = :province)
+	. . . set SQL("PRV")=SQLCODE
+	. . if $get(RowId("PST"))="" do
+	. . . &SQL(SELECT CTCIT_RowId INTO :RowId('CTY') FROM CT_City WHERE (CTCIT_Code = :suburb) AND ((:RowId('PRV') IS NULL) OR (CTCIT_Province_DR = :RowId('PRV'))))
+	. . . set SQL("CTY")=SQLCODE
+	. . if $get(RowId("PST"))'="" do
+	. . . &SQL(SELECT CTZIP_CITY_DR INTO :RowId('CTY') FROM CT_Zip WHERE CTZIP_RowId = :RowId('PST'))
+	. . . set SQL("CTY")=SQLCODE
+	
+	. if type="COU" do
+	. . &SQL(SELECT CTCOU_RowId INTO :RowId FROM CT_Country WHERE CTCOU_Code = :value)
+	. . set SQL(type)=SQLCODE
+	. if type="TYP" do
+	. . &SQL(SELECT CTADR_RowId INTO :RowId FROM CT_AddrType WHERE CTADR_Code = :value)
+	. . set SQL(type)=SQLCODE
+	. for type="CTY","PST","PRV","COU","TYP" if $get(SQL(type))=100 do
+	. . set reject(type)=$select(type="PST":"Postcode/Zip "_post,type="CTY":"City "_suburb,type="PRV":"Province/State "_province,type="COU":"Country "_value,1:"Address Type "_value)_" received for Patient Id "_RegMrn_" does not exist in TrakCare"
+	
+	if method="O" do
+	. // check for nulled value
+	. if value="""""" set (code,desc)="""""" quit
+	. if type="PST" do
+	. . &SQL(SELECT CTZIP_Code INTO :code FROM CT_Zip WHERE CTZIP_RowId = :value)
+	. if type="CTY" do
+	. . &SQL(SELECT CTCIT_Code, CTCIT_Desc INTO :code, :desc FROM CT_City WHERE CTCIT_RowId = :value)
+	. if type="PRV" do
+	. . &SQL(SELECT PROV_Code, PROV_Desc INTO :code, :desc FROM CT_Province WHERE PROV_RowId = :value)
+	. if type="COU" do
+	. . &SQL(SELECT CTCOU_Code, CTCOU_Desc INTO :code, :desc FROM CT_Country WHERE CTCOU_RowId = :value)
+	. if type="TYP" do
+	. . &SQL(SELECT CTADR_Code INTO :code FROM CT_AddrType WHERE CTADR_RowId = :value)
+	. // convert escape characters
+	. for var="code","desc" set @var=$$TextConversion^HL7Common12($get(@var),"O")
+	
+	quit $select(method="I":RowId,1:code_"|"_desc)
+	
+	// add copy-to doctor to order
+CopyToDr(intOrdNum,CopyToCare,CopyToRef) new (intOrdNum,CopyToCare,CopyToRef) set intOrdNum=$get(intOrdNum)
+	
+	// add care provider copy-to
+	if $data(CopyToCare) do
+	. kill COPYTO set COPYTO(0)=intOrdNum
+	. set dr="" for  set dr=$order(CopyToCare(dr)) quit:dr=""  do
+	. . set COPYTO(3)=dr
+	. . &SQL(INSERT INTO OE_OrdDoctor VALUES :COPYTO())
+	. . kill COPYTO(3)
+	
+	// add referring doctor copy-to
+	if $data(CopyToRef) do
+	. kill COPYTO set COPYTO(0)=intOrdNum
+	. set dr="" for  set dr=$order(CopyToRef(dr)) quit:dr=""  do
+	. . set COPYTO(3)=dr
+	. . &SQL(INSERT INTO OE_OrdRefDoctor VALUES :COPYTO())
+	. . kill COPYTO(3)
+	
+	quit SQLCODE
+
+
+

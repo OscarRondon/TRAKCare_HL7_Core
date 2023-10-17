@@ -1,0 +1,89 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundADTA37^MAC^^^0
+HL7InboundADTA37	// ML 18/08/2011 ;  HL7 interface : patient event ADT_A37
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundADTA37.rtn#1 $
+	quit
+	// A37 - unlink patient information
+A37()
+	set HL7Flag="Y"
+	set (reject,rejecthere,UMsuccess)=""
+	// check if message forwarding required
+	set forward=$$MsgForward^HL7Inbound(msgtype)
+	kill countPID
+	set cnt1=0 set cnt1=$order(^TMP("HL7",$job,cnt1)) while reject="" {
+		if UMsuccess quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		// check if pre-existing patient
+		set numbers=$$RegNum^HL7Common2(.reject,"A37")
+		set RegMrnActive=$piece(numbers,"|"),intRegMrnActive=$piece(numbers,"|",2)
+		if reject'="" set rejecthere="Y" quit
+		// check if patient has merge record
+		if $order(^PAMRi("PAT-TO",intRegMrnActive,""))="" set reject="No merge record exists for Registration number "_RegMrnActive,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~206",RegMrn=RegMrnActive,rejecthere="Y" quit
+		set countPID(cnt1)=""
+		set cnt1=$order(^TMP("HL7",$job,cnt1)) if cnt1="" quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required 2nd PID segment not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		// check if pre-existing patient
+		set numbers=$$RegNum^HL7Common2(.reject,"A37")
+		set RegMrnInactive=$piece(numbers,"|"),intRegMrnInactive=$piece(numbers,"|",2)
+		if reject'="" set rejecthere="Y" quit
+		// check if patient has merge record
+		if $order(^PAMRi("PAT-FROM",intRegMrnInactive,""))="" set reject="No merge record exists for Registration number "_RegMrnInactive,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~206",RegMrn=RegMrnInactive,rejecthere="Y" quit
+		// check for merge record between the two registration numbers
+		set merge=$order(^PAMRi("PAT-FROM",intRegMrnInactive,""),-1)
+		if '$data(^PAMR(merge)) set reject="No merge record exists for Registration number "_RegMrnInactive,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~206",RegMrn=RegMrnInactive,rejecthere="Y" quit
+		kill intReg set detail=$get(^PAMR(merge)),intReg("INACTIVE")=$piece(detail,"^"),intReg("ACTIVE")=$piece(detail,"^",2)
+		if intReg("ACTIVE")'=intRegMrnActive set reject="No merge record exists for Registration numbers "_RegMrnActive_"/"_RegMrnInactive,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~206",RegMrn=RegMrnActive,rejecthere="Y" quit
+		set countPID(cnt1)=""
+		kill MERGE
+		set MERGE("ToPatientID")=intRegMrnActive,MERGE("PatientID")=intRegMrnInactive
+		set MERGE("ID")=intRegMrnActive
+		// unmerge
+		do UNMERGE^HL7InboundUpdate1
+		if reject'="" quit
+		// check if message forwarding required
+		if forward,reject="" set forwardnum(1,intRegMrnActive_"||"_intRegMrnInactive)=""
+		kill MERGE
+		set count1=cnt1
+		// update patient records
+		set cnt1="" for  {
+			if reject'="" quit
+			set cnt1=$order(countPID(cnt1)) if cnt1="" quit
+			// check if pre-existing patient
+			set numbers=$$RegNum^HL7Common2(.reject,"A37")
+			set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+			if reject'="" set rejecthere="Y" quit
+			// extract EVN information
+			do EVN^HL7InboundExtract0
+			kill PERSON,HOSPMRN,TEMPADD,TADD,ALIAS
+			// extract PID information
+			do PID^HL7InboundExtract1 if reject'="" quit
+			set PERSON("RegistrationNumber")=RegMrn
+			// extract PD1 information
+			do PD1^HL7InboundExtract1
+			set reject=""
+			// update person information
+			do PERSON^HL7InboundUpdate1
+			if reject'="" quit
+			// update temporary addresses
+			do TEMPADDRESS^HL7InboundUpdate1
+			if reject'="" quit
+			// update med record information
+			do HOSPMRN^HL7InboundUpdate1
+			if reject'="" quit
+			// update alias information
+			do ALIAS^HL7InboundUpdate1
+			if reject'="" quit
+			kill PERSON,HOSPMRN,TEMPADD,TADD,ALIAS
+		}
+		set cnt1=count1
+		if reject="" set UMsuccess=1
+	}
+	kill MERGE,PERSON,HOSPMRN,TEMPADD,TADD,ALIAS
+	if rejecthere="Y" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

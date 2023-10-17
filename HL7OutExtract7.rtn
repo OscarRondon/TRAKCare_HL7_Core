@@ -1,0 +1,90 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract7^MAC^^^0
+HL7OutExtract7 // ML 09/07/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract7.rtn#1 $
+	quit
+	// check if baby delivery entry exists
+BabyDeliveryExist(intRegMrn) new (intRegMrn,intBirthNum,old,curr) set intRegMrn=$get(intRegMrn),intBirthNum=""
+	&SQL(SELECT BABY_RowId INTO :intBirthNum FROM PA_PregDelBaby WHERE BABY_Person_DR= :intRegMrn)
+	quit intBirthNum
+	// extract baby delivery detail
+BabyDelivery(intBirthNum,BirthDetail) new (intBirthNum,BirthDetail,old,curr) set intBirthNum=$get(intBirthNum)
+	&SQL(SELECT * INTO :BirthDetail() FROM PA_PregDelBaby WHERE BABY_RowId = :intBirthNum)
+	quit SQLCODE
+	// extract preganacy delivery detail
+PregDelivery(intDelNum,PregDelivery) new (intDelNum,PregDelivery,old,curr) set intDelNum=$get(intDelNum)
+	&SQL(SELECT * INTO :PregDelivery() FROM PA_PregDelivery WHERE DEL_RowId = :intDelNum)
+	quit SQLCODE
+	// extract pregnancy detail
+PregDetail(intPregNum,PregDetail) new (intPregNum,PregDetail,old,curr) set intPregNum=$get(intPregNum)
+	&SQL(SELECT * INTO :PregDetail() FROM PA_Pregnancy WHERE PREG_RowId = :intPregNum)
+	quit SQLCODE
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable) set (code,desc,other)=""
+	if mtable="PA_PregDelBaby" do
+	. for i=9,10,14,15,16,22,52,117,236 if $get(BirthDetail(i))'="" do  set BirthDetail(i)=$select($get(BirthDetail(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=BirthDetail(i) quit:value=""""""
+	. . if i=9!(i=10) do
+	. . . set detail=##class(web.PACApgarScore).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=14 do
+	. . . set detail=##class(web.PACPresentation).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=15 do
+	. . . set detail=##class(web.PACOutcomeOfPregnancy).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=16 do
+	. . . set detail=##class(web.PACOpDelivIndication).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=22 do
+	. . . set detail=##class(web.PACDeliveryPlace).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=52 do
+	. . . set detail=##class(web.PACRespiration).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=117 do
+	. . . set code=value,desc=$select(value="Y":"Yes",1:"No")
+	. . if i=236 do
+	. . . set code=value,desc=##class(websys.StandardTypeItem).GetDescription("YesNoUncertain",value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(BirthDetail(""),-1) if $data(BirthDetail(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",9,10,14,15,16,22,52,56,80,117,236,"[(","_i_",") quit
+	. . set BirthDetail(i)=$$TextConversion^HL7Common12(BirthDetail(i),"O")
+	if mtable="PA_Pregnancy" do
+	. for i=32 if $get(PregDetail(i))'="" do  set PregDetail(i)=$select($get(PregDetail(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=PregDetail(i) quit:value=""""""
+	. . if i=32 do
+	. . . set detail=##class(web.PACBabyPlurality).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(PregDetail(""),-1) if $data(PregDetail(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",32,"[(","_i_",") quit
+	. . set PregDetail(i)=$$TextConversion^HL7Common12(PregDetail(i),"O")
+	if mtable="PA_PregDelivery" do
+	. for i=45 if $get(PregDelivery(i))'="" do  set PregDelivery(i)=$select($get(PregDelivery(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=PregDelivery(i) quit:value=""""""
+	. . if i=45 do
+	. . . set detail=##class(web.PACBabyPlurality).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(PregDelivery(""),-1) if $data(PregDelivery(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",45,"[(","_i_",") quit
+	. . set PregDelivery(i)=$$TextConversion^HL7Common12(PregDelivery(i),"O")
+	if mtable="PA_PrDelBabyDelMthd" do
+	. set i="" for  set i=$order(DelivMethod(i)) quit:i=""  if $get(DelivMethod(i))'="" do  set DelivMethod(i)=$select($get(DelivMethod(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=DelivMethod(i) quit:value=""""""
+	. . . set detail=##class(web.PACDeliveryMethod).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	quit
+
+
+

@@ -1,0 +1,147 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract11^MAC^^^0
+HL7OutExtract11 // ML 17/11/2004 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract11.rtn#1 $
+	quit
+ 	// 58964
+ 	// appointment filler ID (UBRN - universal booking reference number)
+ApptFillerID(intApptNum) new (intApptNum) set intApptNum=$get(intApptNum),intFillerID=""
+	&SQL(SELECT APPT_UBRN INTO :intFillerID FROM RB_Appointment WHERE APPT_RowId = :intApptNum)
+	quit intFillerID
+	// extract appointment admission/pat rowid
+ApptAdmPat(intApptNum,intAdmNum,intRegMrn) new (intApptNum,intAdmNum,intRegMrn) set intApptNum=$get(intApptNum),(intAdmNum,intRegMrn)=""
+	&SQL(SELECT APPT_Adm_DR, APPT_PAPMI_DR INTO :intAdmNum, :intRegMrn FROM RB_Appointment WHERE APPT_RowId = :intApptNum)
+	quit SQLCODE
+	// extract order rowid
+ApptOrder(intApptNum) new (intApptNum,intOrdNum) set intApptNum=$get(intApptNum),intOrdNum=""
+	&SQL(SELECT OEORI_RowID INTO :intOrdNum FROM OE_OrdItem WHERE OEORI_APPT_DR = :intApptNum)
+	quit intOrdNum
+	// check if appointment exists
+ApptExist(intAdmNum) new (intAdmNum,intApptNum) set intAdmNum=$get(intAdmNum),intApptNum=""
+	&SQL(SELECT APPT_RowId INTO :intApptNum FROM RB_Appointment WHERE APPT_Adm_DR = :intAdmNum)
+	quit intApptNum
+	// extract appointment detail
+Appointment(intApptNum,Appointment) new (intApptNum,Appointment) set intApptNum=$get(intApptNum)
+	&SQL(SELECT * INTO :Appointment() FROM RB_Appointment WHERE APPT_RowId = :intApptNum)
+	quit SQLCODE
+	// check if appointment schedule exists
+ApptSchExist(intApptNum) new (intApptNum,intApptSch) set intApptNum=$get(intApptNum),intApptSch=""
+	&SQL(SELECT APPT_AS_ParRef INTO :intApptSch FROM RB_Appointment WHERE APPT_RowId = :intApptNum)	
+	quit intApptSch
+	// extract appointment schedule detail
+ApptSchedule(intApptSch,ApptSch) new (intApptSch,ApptSch) set intApptSch=$get(intApptSch)
+	&SQL(SELECT * INTO :ApptSch() FROM RB_ApptSchedule WHERE AS_RowId = :intApptSch)
+	quit SQLCODE
+	// extract appointment not available detail
+NotAvailable(intNotAvail,NotAvail) new (intNotAvail,NotAvail) set intNotAvail=$get(intNotAvail)
+	&SQL(SELECT * INTO :NotAvail() FROM RB_NotAvail WHERE NA_RowId = :intNotAvail)
+	quit SQLCODE
+	// extract resource detail
+Resource(intResource,Resource) new (intResource,Resource) set intResource=$get(intResource)
+	&SQL(SELECT * INTO :Resource() FROM RB_Resource WHERE RES_RowId = :intResource)
+	quit SQLCODE
+	// extract effective date session
+EffDateSess(intEffDate,EffDateSess) new (intEffDate,EffDateSess) set intEffDate=$get(intEffDate)
+	&SQL(SELECT * INTO :EffDateSess() FROM RB_ResEffDateSession WHERE SESS_RowId = :intEffDate)
+	quit SQLCODE
+	// get partial schedule information
+PartialSched(USRN,UBRN) new (USRN,UBRN) set USRN=$get(USRN),UBRN=$get(UBRN),detail=""
+	// extract service details
+	set serviceId=$piece(USRN,"-",4),detail=$get(^RBC("SER",serviceId)),intItmNum=$piece(detail,"^")
+	set comment=""
+	&SQL(SELECT ARCIM_OEMessage INTO :comment FROM ARC_ItmMast WHERE ARCIM_RowId = :intItmNum)
+ 	// extract price - get configuration settings, which price to display: I - Italian , T - default tariff
+	set conf=$piece($get(^CF("PATCF",1,7)),"^",6) set:conf="" conf="I"
+	set deftar=$piece($get(^CF("PATCF",1,6)),"^",7)
+	set price=0,(External,ExtCode,ExtDesc)=""
+	if intItmNum do
+	.set (PayorId,PlanId)="",currdate=$piece(USRN,"-",2)
+	.set res="" for  set res=$order(^RBAS("UBRN",UBRN,res)) quit:res=""  do
+ 	..set sch="" for  set sch=$order(^RBAS("UBRN",UBRN,res,sch)) quit:sch=""  do
+	...set cs="" for  set cs=$order(^RBAS("UBRN",UBRN,res,sch,cs)) quit:cs=""  do
+ 	....set a=$get(^RBAS(res,sch,"APPT",cs))
+ 	....set intApptNum="" if $piece(a,"^",3)="P",$piece(a,"^",75)=USRN set intApptNum=res_"||"_sch_"||"_cs
+ 	....if intApptNum'="" do
+ 	.....set intAdmNum=$piece(a,"^",4)
+ 	.....set payor=##class(web.RBAppointment).GetApptPayor(intAdmNum,intApptNum)
+ 	.....set PayorId=##class(web.ARCInsuranceType).GetIdFromCodeOrDescription(payor)
+ 	.....set plan=##class(web.RBAppointment).GetApptPlan(intAdmNum,intApptNum)
+ 	.....set PlanId=##class(web.ARCAuxilInsurType).GetIdFromCodeOrDescription(plan)
+	.set billsub=$piece($get(^ARCIM(+intItmNum,1,1)),"^",9)
+	.if conf="I" set price=+$$arcimpr1^IB01(intItmNum,PayorId,currdate,billsub,PlanId)
+	.if conf'="I" set price=+$$arcimtar^IB01(intItmNum,deftar,currdate)
+	. &SQL(SELECT EXT_Code, EXT_Desc INTO :ExtCode, :ExtDesc FROM ARC_ItemExternalCodes WHERE (EXT_ParRef = :intItmNum)
+			AND ((EXT_InsType_DR=:Payor) OR (:PayorId IS NULL))
+			AND ((EXT_AuxInsType_DR=:Plan) OR (:PlanId IS NULL)))
+ 	.set External=ExtCode_"^"_ExtDesc
+	// extract resource details
+	set intResource=+USRN,detail=$get(^RB("RES",intResource))
+	set locat=$piece(detail,"^"),drid=$piece(detail,"^",2)
+	&SQL(SELECT CTLOC_Code, CTLOC_Desc, CTLOC_Telephone, CTLOC_Hospital_DR -> HOSP_Address, CTLOC_Hospital_DR -> HOSP_NationalCode, CTLOC_Hospital_DR -> HOSP_City -> CTCIT_Desc, CTLOC_Hospital_DR -> HOSP_City -> CTCIT_NationalCode, CTLOC_Hospital_DR -> HOSP_City -> CTCIT_Province_DR -> PROV_Desc, CTLOC_Hospital_DR -> HOSP_City -> CTCIT_Province_DR -> PROV_NationalCode, CTLOC_Hospital_DR -> HOSP_State -> CTSTT_Desc, CTLOC_Hospital_DR -> HOSP_ZipDR -> CTZIP_Code INTO :LocCode, :LocDesc, :Phone, :Address, :HospNC, :City, :CityNC, :Province, :ProvNC, :State, :ZIP FROM CT_Loc WHERE CTLOC_RowId = :locat)
+	set location=$listbuild(LocCode,LocDesc,Phone,Address,City,Province,State,ZIP)
+	// schedule date/time
+	set detail=$get(^RBAS(+USRN,$piece(USRN,"||",2))),date=$piece(detail,"^"),time=$piece(detail,"^",4)
+	quit $listbuild(intItmNum,comment,price,drid,location,date,time,External)
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable),(code,desc,other)="" 
+	if mtable="RB_Resource" do
+	.for i=3 if $get(Resource(i))'="" do  set Resource(i)=$select($get(Resource(i))="""""":"""""",1:code_"^"_desc_$select(i=3:"^"_other,1:"")),(code,desc,other)=""
+	..set value=Resource(i) quit:value=""""""
+	..if i=3 do
+	... &SQL(SELECT CTLOC_Code, CTLOC_Desc, CTLOC_Type INTO :code, :desc, :other FROM CT_Loc WHERE CTLOC_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(Resource(""),-1) if $data(Resource(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",3,"[(","_i_",") quit
+	..set Resource(i)=$$TextConversion^HL7Common12(Resource(i),"O")
+	if mtable="RB_Appointment" do
+	.for i=3,5,18,31,32,39 if $get(Appointment(i))'="" do  set Appointment(i)=$select($get(Appointment(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=Appointment(i) quit:value=""""""
+	..if i=3 do
+	... &SQL(SELECT AT_Code, AT_Desc INTO :code, :desc FROM RBC_ApptType WHERE AT_RowId = :value)
+	..if i=5 do
+	...set code=value,desc=##class(websys.StandardTypeItem).GetDescriptionFromCode("RBApptStatus",value)
+	..if i=18 do
+	... &SQL(SELECT SER_ARCIM_DR -> ARCIM_Code, SER_ARCIM_DR -> ARCIM_Desc INTO :code, :desc FROM ARC_ItmMast, RBC_Services WHERE SER_RowId = :value)
+	..if i=31 do
+	... &SQL(SELECT RFC_Code, RFC_Desc INTO :code, :desc FROM RBC_ReasonForCancel WHERE RFC_RowId = :value)
+	..if i=32 do
+	... &SQL(SELECT RNS_Code, RNS_Desc INTO :code, :desc FROM RBC_ReasonForNotShow WHERE RNS_RowId = :value)
+	..if i=39 do
+	... &SQL(SELECT APTR_Code, APTR_Desc INTO :code, :desc FROM RBC_AppointTransport WHERE APTR_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(Appointment(""),-1) if $data(Appointment(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",3,5,6,18,31,32,39,117,"[(","_i_",") quit
+	..set Appointment(i)=$$TextConversion^HL7Common12(Appointment(i),"O")
+	if mtable="RB_NotAvail" do
+	.for i=10 if $get(NotAvail(i))'="" do  set NotAvail(i)=$select($get(NotAvail(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=NotAvail(i) quit:value=""""""
+	..if i=10 do
+	... &SQL(SELECT RNAV_Code, RNAV_Desc INTO :code, :desc FROM RBC_ReasonNotAvail WHERE RNAV_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(NotAvail(""),-1) if $data(NotAvail(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",10,"[(","_i_",") quit
+	..set NotAvail(i)=$$TextConversion^HL7Common12(NotAvail(i),"O")
+	if mtable="RB_ResEffDateSession" do
+	.for i=11,21,33 if $get(EffDateSess(i))'="" do  set EffDateSess(i)=$select($get(EffDateSess(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	..set value=EffDateSess(i) quit:value=""""""
+	..if i=11 do
+	... &SQL(SELECT SESS_Code, SESS_Desc INTO :code, :desc FROM RBC_SessionType WHERE SESS_RowId = :value)
+	..if i=21!(i=33) do
+	... &SQL(SELECT CTLOC_Code, CTLOC_Desc, CTLOC_Address INTO :code, :desc, :other FROM CT_Loc WHERE CTLOC_RowId = :value)
+	.. // convert escape characters - exclude other as list build field
+	..for var="code","desc" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(EffDateSess(""),-1) if $data(EffDateSess(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",11,21,33,"[(","_i_",") quit
+	..set EffDateSess(i)=$$TextConversion^HL7Common12(EffDateSess(i),"O")
+	quit
+
+
+

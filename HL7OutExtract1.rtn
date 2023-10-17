@@ -1,0 +1,144 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract1^MAC^^^0
+HL7OutExtract1 // ML 08/05/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract1.rtn#1 $
+	quit
+	
+	// extract patient details
+PatDetail(intRegMrn,PatDetail,PatDetailx) new (intRegMrn,PatDetail,PatDetailx,old,curr) set intRegMrn=$get(intRegMrn)
+	&SQL(SELECT * INTO :PatDetail() FROM PA_Person WHERE PAPER_RowId = :intRegMrn)
+	if SQLCODE quit SQLCODE
+	&SQL(SELECT * INTO :PatDetailx() FROM PA_PatMas WHERE PAPMI_RowId = :intRegMrn)
+	quit SQLCODE
+	
+	// extract patient numbers
+PatNum(intRegMrn,intAdmNum,number) new (intRegMrn,intAdmNum,intHospFrom,PatDetail,PatDetailx,PatNum,number)
+	set intRegMrn=$get(intRegMrn),intAdmNum=$get(intAdmNum)
+	
+	kill num for type="INT","REG","CHINHS","MC","DVA","GOV","SN","HC","PDS","PP" if $data(PatNum(type)) do
+	. if type="MC",PatDetailx(98)="""""" set num(type)="""""",number(type,"EXPDATE")="""""" quit
+	. set num(type)=$select(type="INT":intRegMrn,type="REG":PatDetailx(2),type="MC":PatDetailx(98)_PatDetailx(106),type="DVA":PatDetailx(113),type="CHINHS":PatDetail(3),type="GOV":PatDetail(119),type="SN":PatDetailx(111),type="HC":PatDetailx(109),type="PDS":PatDetail(203),1:PatDetail(196))
+	. if type="INT"!(type="REG")!(type="CHINHS")!(type="PDS")!(type="PP") quit
+	. if type="DVA"!(type="GOV") set num(type,"CARD")=$select(type="DVA":$piece($get(PatDetailx(114)),"^"),1:$piece($get(PatDetailx(144)),"^"))
+	. set expdate=$select(type="MC":PatDetailx(115),type="DVA":PatDetail(184),type="GOV":PatDetail(185),type="SN":PatDetailx(112),1:PatDetailx(146))
+	. set number(type,"EXPDATE")=$select(expdate="":expdate,expdate="""""":expdate,1:$$DateConv^HL7Common2(.reject,"IE",expdate,"B"))
+	
+	// build wanted numbers
+	for type="INT","REG","HOSP","CHINHS","MC","DVA","GOV","SN","HC","PDS","PP" if $data(PatNum(type)) do
+	. do NumTypeDetail^HL7Common2(PatNum(type),"","",.asstype,.asscode,.idcode,.idmrtype,"","",.expfield,"",.cardtype)
+	. set number(type)=$get(num(type))
+	. if type'="HOSP",number(type)="",$get(num(type,"CARD"))="",$get(number(type,"EXPDATE"))="" kill number(type) quit
+	. if type="DVA"!(type="GOV") do  quit
+	. . if cardtype="Y" set idcode=$get(num(type,"CARD"))
+	. . set $piece(number(type),"^",asstype)=asscode,$piece(number(type),"^",5)=idcode
+	. if type="HOSP" do  quit
+	. . if intRegMrn'="" set cnt="" do
+	. . . set intHospMrn="" for  set intHospMrn=$order(^RT(0,"PAT",intRegMrn,intHospMrn)) quit:intHospMrn=""  do
+	. . . . if $piece(^RT(intHospMrn),"^")=""!($piece(^RT(intHospMrn),"^",6)="") quit
+	. . . . do MedRecord(intHospMrn) set num=$piece(^RT(intHospMrn),"^")
+	. . . . set HospMrn(intHospMrn)=num,$piece(HospMrn(intHospMrn),"^",asstype)=code,$piece(HospMrn(intHospMrn),"^",5)=idcode
+	. . set intHospMrn="" for  set intHospMrn=$order(HospMrn(intHospMrn)) quit:intHospMrn=""  set number(type,intHospMrn)=HospMrn(intHospMrn)
+	
+	. set $piece(number(type),"^",asstype)=asscode,$piece(number(type),"^",5)=idcode
+	
+	kill num
+	quit 0
+	
+	// extract med record type or hospital
+MedRecord(intHosp) set intHosp=$get(intHosp),code="" kill rowid("type")
+	if idmrtype'="Y" do
+	. set rowid("type")=$piece(^RT(intHosp),"^",6) if rowid("type")="" quit
+	. set code=$piece($get(^RTC("TYPE",rowid("type"))),"^",1)
+	if idmrtype="Y" do
+	. set rowid("type")=$piece(^RT(intHosp),"^",6) if rowid("type")="" quit
+	. set code=$$MedRecType(rowid("type"))
+	. set idcode=$piece($get(^RTC("TYPE",rowid("type"))),"^",1)
+	quit
+	
+	// extract med record type
+MedRecType(mrtype) new (mrtype) set mrtype=$get(mrtype),code=""
+	&SQL(SELECT TYP_CTLOC_DR -> CTLOC_Hospital_DR -> HOSP_Code INTO :code FROM RTC_MRecordType WHERE TYP_RowId = :mrtype)
+	quit code
+	
+	// extract active status for hospital/med record number
+ActiveHospMrn(intHospMrn) new (intHospMrn) set intHospMrn=$get(intHospMrn),active=""
+	&SQL(SELECT RTMAS_Active INTO :active FROM RT_Master WHERE RTMAS_RowId = :intHospMrn)
+	quit active
+	
+	// extract temporary address
+PatAddress(TempAddRow,TempAdd) new (TempAddRow,TempAdd,old,curr) set TempAddRow=$get(TempAddRow)
+	&SQL(SELECT * INTO :TempAdd() FROM PA_TempAddress WHERE ADDR_RowId = :TempAddRow)
+	quit SQLCODE
+	
+	// build address strings
+BuildAddress kill PermAddress,TempAddress,TempAdd,phone new count
+	// extract permanent address
+	set PermAddress("LINE1")="" for i=1:1:$listlength($get(PatDetail(28))) set PermAddress("LINE1")=$get(PermAddress("LINE1"))_$select(i>1:", ",1:"")_$list($get(PatDetail(28)),i)
+	set PermAddress("LINE2")=$get(PatDetail(26)),PermAddress("CTY")=$get(PatDetail(33)),PermAddress("PRV")=$get(PatDetail(113)),PermAddress("PST")=$get(PatDetail(35)),PermAddress("ADDR2")=$get(PatDetail(195))
+	for line="LINE1","LINE2" if $data(PermAddress(line)) do
+	. // strip leading spaces
+	. for i=1:1 quit:$extract(PermAddress(line))'=" "  set PermAddress(line)=$extract(PermAddress(line),2,$length(PermAddress(line)))
+	. set PermAddress(line)=$$TextConversion^HL7Common12(PermAddress(line),"O")
+	// if NK1 segment use intNokNum as rowid
+	set intTempNum=$select($get(segment)="NK1":$get(intNokNum),1:intRegMrn)
+	// extract temp address
+	set count=0
+	set row="" for  set row=$order(^PAPER(intTempNum,"TADDR",row)) quit:row=""  do
+	. set TempAddRow=intTempNum_"||"_row
+	. kill TempAdd if $$PatAddress(TempAddRow,.TempAdd) quit
+	. // ignore end dated address which is not enddated for the future or todays date
+	. if $get(TempAdd(12))'="",$get(TempAdd(12))<+$h quit
+	. // check for new null fields and change to ""
+	. if $data(old("PTADD")) do NullChange^HL7Common3("PTADD")
+	. if $increment(count)
+	. set TempAddress(count,"LINE1")="" do
+	. . if $listvalid($get(TempAdd(3)))'=1 set TempAddress(count,"LINE1")=$get(TempAdd(3)) quit
+	. . for i=1:1:$listlength(TempAdd(3)) set TempAddress(count,"LINE1")=$get(TempAddress(count,"LINE1"))_$select(i>1:", ",1:"")_$list(TempAdd(3),i)
+	. set TempAddress(count,"LINE2")="" do
+	. . if $listvalid($get(TempAdd(16)))'=1 set TempAddress(count,"LINE2")=$get(TempAdd(16)) quit
+	. . for i=1:1:$listlength(TempAdd(16)) set TempAddress(count,"LINE2")=$get(TempAddress(count,"LINE2"))_$select(i>1:", ",1:"")_$list(TempAdd(16),i)
+	. set TempAddress(count,"CTY")=$get(TempAdd(6)),TempAddress(count,"PRV")=$get(TempAdd(7)),TempAddress(count,"PST")=$get(TempAdd(9)),TempAddress(count,"TYP")=$get(TempAdd(15))
+	. set TempAddress(count,"DATE-FROM")=$get(TempAdd(11)),TempAddress(count,"DATE-TO")=$get(TempAdd(12))
+	. set TempAddress(count,"FOR-CTY")=$get(TempAdd(13)),TempAddress(count,"FOR-PST")=$get(TempAdd(14)),TempAddress(count,"FOR-COU")=$get(TempAdd(19))
+	. if TempAdd(4)'="" set phone(TempAdd(15),count)=TempAdd(4)
+	set count="" for  set count=$order(TempAddress(count)) quit:count=""  do
+	. for line="LINE1","LINE2","FOR-CTY","FOR-PST" do
+	. . // strip leading spaces
+	. . for i=1:1 quit:$extract(TempAddress(count,line))'=" "  set TempAddress(count,line)=$extract(TempAddress(count,line),2,$length(TempAddress(count,line)))
+	. . // convert escape sequences
+	. . set TempAddress(count,line)=$$TextConversion^HL7Common12(TempAddress(count,line),"O")
+	kill TempAdd,intTempNum
+	quit
+	
+	// extract alias
+PatAlias(intAliasNum,altype) new (intAliasNum,altype) set intAliasNum=$get(intAliasNum),altype=$get(altype),(Alias,AlActive)=""
+	if altype="ALIAS" do
+	. &SQL(SELECT ALIAS_HL7FullAliasText, ALIAS_Active INTO :Alias, :AlActive FROM PA_PersonAlias WHERE ALIAS_RowId = :intAliasNum)
+	if altype="SUR" do
+	. &SQL(SELECT SUR_HL7FullAliasText, SUR_Active INTO :Alias, :AlActive FROM PA_PersonSurnameAlias WHERE SUR_RowId = :intAliasNum)
+	quit Alias_"|"_AlActive
+	
+	// extract next of kin detail
+NextOfKin(nokrowid,NextOfKin) new (nokrowid,NextOfKin,old,curr) set nokrowid=$get(nokrowid)
+	&SQL(SELECT * INTO :NextOfKin() FROM PA_Nok WHERE NOK_RowId = :nokrowid)
+	quit SQLCODE
+	
+	// extract patient history condition
+PatHistCond(intPHistNum,PHistDetail) new (intPHistNum,PHistDetail) set intPHistNum=$get(intPHistNum)
+	&SQL(SELECT * INTO :PHistDetail() FROM PA_PastHistCondition WHERE PHIST_RowId = :intPHistNum)
+	quit SQLCODE
+	// check if changes to address for outbound PDS messages
+PDSAddressCheck() new (xPDSDATA,PatDetail) set change=""
+	for i=18,26,28,33,35,113 do  if change=1 quit
+	. set (pdsdatax,oldx)=""
+	. // check list build fields separately
+	. if i=28 do  quit
+	. . if $listlength($get(xPDSDATA("PAPERSON",i))) for jj=1:1:$listlength($get(xPDSDATA("PAPERSON",i))) set pdsdatax=pdsdatax_$select($length(pdsdatax):"^",1:"")_$list(xPDSDATA("PAPERSON",i),jj)
+	. . if $listlength($get(PatDetail(i))) for jj=1:1:$listlength($get(PatDetail(i))) set oldx=oldx_$select($length(oldx):"^",1:"")_$list(PatDetail(i),jj)
+	. . if $zconvert(pdsdatax,"U")'=$zconvert(oldx,"U") set change=1
+	. if $zconvert($get(xPDSDATA("PAPERSON",i)),"U")'=$zconvert($get(PatDetail(i)),"U") set change=1
+	quit change
+
+
+

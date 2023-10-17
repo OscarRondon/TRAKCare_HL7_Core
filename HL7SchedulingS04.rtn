@@ -1,0 +1,115 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SchedulingS04^MAC^^^0
+HL7SchedulingS04 // ML 19/10/2005 ; HL7 interface : scheduling
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SchedulingS04.rtn#1 $
+	quit
+	// S04 - request appointment cancellation
+S04()
+	set (UBRN,CancelReason,USRN,ApptDate,reject)=""
+	kill ^TMP("HL7-OUT",$job)
+	if EB("BOOKMETH")="" set EB("BOOKMETH")="B"
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if '$data(^TMP("HL7",$job,cnt1,"ARQ")) quit
+	. if EB("IDFROM")'="" set USRN=$get(^TMP("HL7",$job,cnt1,$piece(EB("IDFROM"),"-"),$piece(EB("IDFROM"),"-",2)))
+	. if EB("IDFROM")="" set USRN=$get(^TMP("HL7",$job,cnt1,"ARQ",5))
+	. set newUSRN=$$TextConversion^HL7Common12(USRN,"I")
+	. // check USRN format
+	. set newUSRN=$$USRNFormat^HL7Common13(newUSRN,"EI",.reject)
+	. if reject'="" quit
+	. set UBRN=$get(^TMP("HL7",$job,cnt1,"ARQ",1))
+	. set ApptDate=$piece($get(^TMP("HL7",$job,cnt1,"ARQ",11)),"^",1)
+	. set CancelReason=$piece($get(^TMP("HL7",$job,cnt1,"ARQ",6)),"^",1)
+	if USRN="" set reject="Appointment ID required to cancel appointment"
+	if UBRN="",EB("BOOKMETH")="HE" set reject="Booking ID required to cancel appointment"
+	// early setting of msg control id - required to track 2 phase bookings
+	set ControlId=$$ControlId^HL7AckNak
+	if EB("BOOKMETH")="B",reject="" do CancelBook
+	if EB("BOOKMETH")="HE",reject="" do HoldCancel
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	// build SRR response
+	set ^TMP("HL7-OUT",$job,"MSA",1)=$select(reject="":"AA",1:"AR")
+	set ^TMP("HL7-OUT",$job,"MSA",2)=$get(^TMP("HL7",$job,"MSH",9))
+	if reject'="" set ^TMP("HL7-OUT",$job,"MSA",3)=$get(reject)
+	do Build^HL7Queue("MSA",12)
+	if reject'="" do
+	. set ^TMP("HL7-OUT",$job,"ERR",1)=$get(reject)
+	. do Build^HL7Queue("ERR",1)
+	if EB("BOOKMETH")="HE" do
+	. set ^TMP("HL7-OUT",$job,"SCH",1)=UBRN,^TMP("HL7-OUT",$job,"SCH",2)=USRN
+	. do Build^HL7Queue("SCH",$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","SCH"),2))
+	if reject="",EB("BOOKMETH")="B" do
+	. set ^TMP("HL7-OUT",$job,"SCH",1)=UBRN,^TMP("HL7-OUT",$job,"SCH",2)=USRN,^TMP("HL7-OUT",$job,"SCH",5)=newUSRN,$piece(^TMP("HL7-OUT",$job,"SCH",11),"^",4)=ApptDate
+	. do Build^HL7Queue("SCH",$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","SCH"),2))
+	// send response as cancel ACK
+	if $data(queue) do  kill queue
+	. // reverse sending and receiving applications found in interface info
+	. set mshmsg="MSH|^~\&|"_$get(HL7("ACKSENDAPP"))_"|"_$get(HL7("ACKSENDFAC"))_"|"_$get(^TMP("HL7",$job,"MSH",2))_"|"_$get(^TMP("HL7",$job,"MSH",3))_"|"_$$Date^HL7_"||"_"SRR^S04"_"|"_ControlId_"|"_$get(HL7("PT"))_"|"_$get(HL7("VER"))_"|||AL|NE|||EN|"
+	. kill trace set trace=1
+	. write ESC("VT"),mshmsg,ESC("CR") set trace(trace)=mshmsg
+	. set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  do
+	. . write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	. write ESC("FS"),ESC("CR"),!
+	. do trace^HL7Trace("M-->E",$h,"",tracerowid) kill trace
+	kill ^TMP("HL7-OUT",$job)
+	quit ""
+	// cancel booking
+CancelBook
+	// supress any outbound 'SIU' messages
+	set HL7Flag="Y"
+	set ok=##class(web.RBAppointment).CancelAppt($get(HL7("USER")),newUSRN,UBRN,CancelReason)
+	if 'ok set reject="Unable to cancel appointment"
+	kill HL7Flag
+	quit
+	// 1st phase of two step cancellation - hold cancel
+HoldCancel
+	// supress any outbound 'SIU' messages
+	set HL7Flag="Y"
+	set ok=##class(web.RBAppointment).HoldCancel($get(HL7("USER")),newUSRN,UBRN,CancelReason)
+	if ok set ^TMP("EBOOK-APPT",ControlId)=$listbuild("S04",newUSRN,UBRN,CancelReason)
+	if 'ok set reject="Unable to cancel appointment"
+	kill HL7Flag
+	quit
+	// 2nd phase of two step cancellation - confirm cancel
+ConfirmCancel(ControlId,User)
+	// supress any outbound 'SIU' messages
+	set HL7Flag="Y"
+	set detail=^TMP("EBOOK-APPT",ControlId)
+	set newUSRN=$listget(detail,2),UBRN=$listget(detail,3),CancelReason=$listget(detail,4)
+	// date of cancellation is the date the message was received '+$h'
+	set ok=##class(web.RBAppointment).ConfirmCancel(User,newUSRN,UBRN,CancelReason,"",+$h)
+	&SQL(SELECT APPT_RowId INTO :apptRowId FROM RB_Appointment WHERE APPT_USRN = :newUSRN AND APPT_UBRN = :UBRN)
+	if SQLCODE quit
+	// if cancelling appointment, reassign GUID to next available USRN for slot
+	do ReassignGUID^HL7OutboundSCH(apptRowId)
+	kill ^TMP("EBOOK-APPT",ControlId),HL7Flag
+	quit
+	// 2nd phase of two step cancellation - negative ack received, set back to status of booked
+BookHoldCancel(ControlId,User)
+	// supress any outbound 'SIU' messages
+	set HL7Flag="Y"
+	set detail=^TMP("EBOOK-APPT",ControlId)
+	set newUSRN=$listget(detail,2),UBRN=$listget(detail,3)
+	&SQL(SELECT APPT_RowId INTO :apptRowId FROM RB_Appointment WHERE APPT_USRN = :newUSRN AND APPT_UBRN = :UBRN)
+	if SQLCODE quit
+	set (LogonCTLOCID,UserHospID)=""
+	set obj=##class(User.RBAppointment).%OpenId(apptRowId)
+	if obj {
+		do obj.APPTReasonForCancelDRSetObjectId("")
+		set obj.APPTStatus="P"
+		if User set LogonCTLOCID=$piece(^SSU("SSUSR",User),"^",4)
+		set UserHospID=##class(web.CTLoc).GetLogonHosp($get(LogonCTLOCID))
+		if UserHospID do obj.APPTLastUpdateHospitalDRSetObjectId(UserHospID)
+		set obj.APPTLastUpdateDate=+$h
+		do obj.APPTLastStatusChangeUserDRSetObjectId(User)
+		if UserHospID do obj.APPTLastStatusChangeHospitalDRSetObjectId(UserHospID)
+		set obj.APPTLastStatusChangeDate=+$h
+		set obj.APPTLastStatusChangeTime=+$piece($h,",",2)
+		do obj.%Save()
+		do obj.%Close()
+	}
+	kill ^TMP("EBOOK-APPT",ControlId),HL7Flag
+	quit
+
+
+

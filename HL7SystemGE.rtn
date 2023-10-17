@@ -1,0 +1,107 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SystemGE^MAC^^^0
+HL7SystemGE // ML 06/01/2005 ; HL7 interface : result processing for GE
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SystemGE.rtn#1 $
+	quit
+	
+	// results in data array
+File(intOrdNum,TextType,TestSegment,ResultType,TestStatus,DelAtomicRes,reject)
+	set intOrdNum=$get(intOrdNum),TextType=$get(TextType),TestSegment=$get(TestSegment),ResultType=$get(ResultType),TestStatus=$get(TestStatus),DelAtomicRes=$get(DelAtomicRes)
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2),updated="Y"
+	set (NewRes,reject)=""
+	kill TEST
+	
+	// convert test code
+	set $piece(TestSegment,"^",1)=##class(%Collation).AlphaUp($piece(TestSegment,"^",1))
+	
+	// check if non-Labtrak system
+	set intextMrn=RegMrn if $$LabSystem^HL7Common2()="Y" set intextMrn=intRegMrn
+	
+	if ResultType="IM" do Image
+	
+	// file test comments against order item
+	if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR-NTE")) do
+	. do OrderComments^HL7Common11(intOrdNum,cnt1,cnt2,cnt3)
+	
+	// mark order as read/clear date, time, user read detail
+	if updated="Y" do OrderUpdate^HL7Common3(intOrdNum,$select(HL7("MARKREAD")="Y":"RD",1:"UR"),$select('NewRes:HL7("USER"),1:""))
+	
+	// update status of order to 'executed'
+	do ChangeStatus^COEOrdItem(intOrdNum,"E",HL7("USER"))
+	
+	// 'ok' to continue
+	set SQLCODE=0
+	quit
+	
+	// process 'image' results
+Image
+	kill Result
+	// find sections to post into
+	set TextSection=$$TextSection^HL7Common3(TextType)
+	set Result(TextSection,$increment(Result(TextSection)))=""
+	
+	// set flag
+	set flag=""
+	
+	// build the text array
+	set cnt4="" for  set cnt4=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4)) quit:cnt4=""  do
+	. if '$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX")) quit
+	. for i=1:1 quit:'$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i))  do
+	. . set data=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,cnt4,"OBX",5,i))
+	. . for esc="\.in+0\","\.in-0\" do
+	. . . if data'[esc quit
+	. . . for  do  if data'[esc quit
+	. . . . set data=$piece(data,esc)_$piece(data,esc,2,999)
+	. . set Result(TextSection,$increment(Result(TextSection)))=data
+	
+	// convert formatting codes
+	set x="" for  set x=$order(Result(TextSection,x)) quit:x=""  do
+	. set Result(TextSection,x)=$$TextFormatCode^HL7Common12($zname,Result(TextSection,x))
+	
+	// result status : F = Final result (status 'V'erified)
+	//                 C = Corrected result (status 'C'orrected)
+	//                 * = All other results (status 'E'ntered)
+	set status=##class(%Collation).AlphaUp(TestStatus),status=$select(status="C":"C",status="F":"V",1:"E")
+	
+	// check if result exists
+	set TextId=$order(^OEORD(ord1,"I",ord2,"TR",0)),exists=1 if TextId'="" set TextId=$get(^OEORD(ord1,"I",ord2,"TR",TextId))
+	kill PLIST if $$SelImageResult^HL7ResultImage(TextId) do
+	. set exists="" for j=2:1:15 set PLIST(j)=""
+	
+	// extract result date/time authorised
+	set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",22)),date("AUTH")=$extract(datetime,1,8),time("AUTH")=$extract(datetime,9,12)
+	set date("AUTH")=$select(date("AUTH")?8N:$$DateConv^HL7Common2(.reject,"EI",date("AUTH")),1:"")
+	set time("AUTH")=$select(time("AUTH")?4N:$$TimeConv^HL7Common2("EI",$extract(time("AUTH"),1,2)_":"_$extract(time("AUTH"),3,4)),1:"")
+	
+	// file results
+	for j=2:1:12 set PLIST(j)=""
+	set PLIST(2)=ord1,PLIST(3)=$order(^OEC("RESST",0,"Code",status,"")),PLIST(5)=TextType,PLIST(6)=+$h,PLIST(7)=$piece($h,",",2)
+	set PLIST(9)=date("AUTH"),PLIST(10)=time("AUTH"),PLIST(12)=$piece(TestSegment,"^"),PLIST(23)=##class(%Collation).AlphaUp(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",25))
+	if status="V"!(status="C") set PLIST(11)=HL7("USER"),PLIST(4)=$piece($get(^SSU("SSUSR",HL7("USER"))),"^",14)
+	// mark as read/clear date, time and user read fields
+	if HL7("MARKREAD")'="Y" set (PLIST(13),PLIST(14),PLIST(15))="",PLIST(25)=HL7("USER"),PLIST(26)=+$h,PLIST(27)=$piece($h,",",2)
+	if HL7("MARKREAD")="Y" set PLIST(13)=+$h,PLIST(14)=$piece($h,",",2),PLIST(15)=HL7("USER"),(PLIST(25),PLIST(26),PLIST(27))=""
+	// verifying care provider
+	set VerifyingDr=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",32))
+	set drfound="" for i=1:1:$length(VerifyingDr,"~") do  quit:$piece(drfound,$char(1))'=""
+	. set doctor=$piece(VerifyingDr,"^") if doctor="" quit
+	. set drsystem=$piece(VerifyingDr,"^",9) if drsystem="TRAKCARE" set drsystem=""
+	. set drfound=$$Provider^HL7Common5(doctor,drsystem,"","","C","I")
+	set PLIST(34)=$piece(drfound,$char(1))
+	// file text result
+	do FileImage^HL7ResultImage kill PLIST,Result
+	
+	// result date/time executed
+	set (dateExe,timeExe)=""
+	set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",7)) if datetime'="" do
+	. set dateExe=$extract(datetime,1,8),timeExe=$extract(datetime,9,12)
+	. if dateExe?8N set dateExe=$$DateConv^HL7Common2(.reject,"EI",dateExe) if dateExe="" quit
+	. if timeExe?4N set timeExe=$$TimeConv^HL7Common2("EI",$extract(timeExe,1,2)_":"_$extract(timeExe,3,4))
+	. if datetime="""""" set (dateExe,timeExe)=""
+	. do OrderUpdate^HL7Common3(intOrdNum,"MF",dateExe_"^"_timeExe,"115^116")
+	set NewRes=exists
+	quit
+
+
+

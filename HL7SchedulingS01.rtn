@@ -1,0 +1,206 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SchedulingS01^MAC^^^0
+HL7SchedulingS01 // ML 19/10/2005 ; HL7 interface : scheduling
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SchedulingS01.rtn#1 $
+	quit
+	
+	// S01 - request appointment booking new
+S01()	set (reject,UBRN,USRN,PatNumber,intRegMrn,date("APPT"),time("APPT"),doctor("REF"),InsertSlot,RefPriority,WaitPriority,date("REF-LETTER"))=""
+	kill ^TMP("HL7-OUT",$job)
+	
+	if EB("BOOKMETH")="" set EB("BOOKMETH")="B"
+	
+	set cnt1=0,cnt1x="" for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. set cnt1x=cnt1
+	. if '$data(^TMP("HL7",$job,cnt1,"ARQ")) set reject="No ARQ segment contained within message" quit
+	. set (service,ServiceId,resource,ResourceId,location,comments)=""
+	
+	. // extract required patient number - 'B'ooking uses any number to find REG number
+	. if EB("BOOKMETH")="B" do  if reject'="" quit
+	. . set numbers=$$RegNum^HL7Common2(.reject,"S01")
+	. . set intRegMrn=$piece(numbers,"|",2)
+	
+	. // extract required patient number - 'H'old & 'E'ref searches for any number
+	. if EB("BOOKMETH")="HE" do  if reject'="" quit
+	. . if EB("PATNUMBER")="" set reject="No patient number type defined against E-Booking" quit
+	. . set PatNumber=$$ExtractNumber^HL7Common2("P",EB("PATNUMBER"))
+	. . if $get(PatNumber)="" set reject="Unable to locate patient number type "_EB("PATNUMBER")_" in message" quit
+	
+	. set UBRN=$get(^TMP("HL7",$job,cnt1,"ARQ",1))
+	. if EB("IDFROM")'="" set USRN=$get(^TMP("HL7",$job,cnt1,$piece(EB("IDFROM"),"-"),$piece(EB("IDFROM"),"-",2)))
+	. if EB("IDFROM")="" set USRN=$get(^TMP("HL7",$job,cnt1,"ARQ",5))
+	. set newUSRN=$$TextConversion^HL7Common12(USRN,"I")
+	. // check USRN format
+	. set newUSRN=$$USRNFormat^HL7Common13(newUSRN,"EI",.reject)
+	. if reject'="" quit
+.
+	. // check session is available for bookings
+	. set ApptSessionId=$piece(newUSRN,"-")
+	. set SessionNotAvail=""
+	. &SQL(SELECT AS_NotAvailableSlot INTO :SessionNotAvail FROM RB_ApptSchedule WHERE AS_RowId = :ApptSessionId)
+	. if SQLCODE'=0 do  quit
+	. . set reject="Unable to determine if session is available for appointments"
+	. if SessionNotAvail="Y" do  quit
+	. . set reject="Session is no longer available for appointments"
+.
+	. set datetime=$extract($piece($get(^TMP("HL7",$job,cnt1,"ARQ",11)),"^",1),1,8),date("APPT")=$$DateConv^HL7Common2(.reject,"EI",datetime)
+	. set datetime=$extract($piece($get(^TMP("HL7",$job,cnt1,"ARQ",11)),"^",1),9,12),time("APPT")=$$TimeConv^HL7Common2("EI",$extract(datetime,1,2)_":"_$extract(datetime,3,4))
+	. set InsertSlot=$select(newUSRN="":1,1:0)
+	
+	. set (RefPriority,WaitPriority)=$piece($get(^TMP("HL7",$job,cnt1,"ARQ",12)),"^")
+	. if RefPriority'="" set RefPriority=##class(web.PACReferralPriority).GetIdFromCodeOrDescription(RefPriority)
+	. if WaitPriority'="" set WaitPriority=##class(web.PACWaitingListPriority).GetIdFromCodeOrDescription(WaitPriority)
+	
+	. set (doctor("REF"),doctor("REF-CLINIC"),doctor("REF-CLINIC-ADD"))=""
+	. set doctor=$piece($get(^TMP("HL7",$job,cnt1,"ARQ",15)),"^")
+	. set doctor("REF")=$piece($$Provider^HL7Common5(doctor,"","","","R","I"),$char(1))
+	. if doctor("REF")'="" set doctor("REF-CLINIC")=$piece($get(^TMP("HL7",$job,cnt1,"ARQ",18)),"^")
+	. if doctor("REF-CLINIC")'="" do
+	. . set intClinic=$$Clinic^HL7Common5(doctor("REF"),doctor("REF-CLINIC"))
+	. . if $$RefClinic^HL7OutExtract10(intClinic,.RefClinic) quit
+	. . do CodeTable^HL7OutExtract10("PAC_RefDoctorClinic")
+	. . set doctor("REF-CLINIC-ADD")=$translate($get(RefClinic(4)),$char(13,10),",")_"^"_$get(RefClinic(5))_"^"_$piece($get(RefClinic(6)),"^",2)_"^"_$piece($get(RefClinic(6)),"^",3)_"^"_$piece($get(RefClinic(7)),"^")
+	
+	. set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . // extract location and resource
+	. . if $data(^TMP("HL7",$job,cnt1,cnt2,"AIL")) do
+	. . . set location=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"AIL",5)),"^")
+	. . . if location'="" set location=##class(web.CTLoc).GetIdFromCodeOrDescription(location)
+	. . . if location'="" do
+	. . . . set resource=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"AIL",4)),"^")
+	. . . . if resource'="" &SQL(SELECT RES_RowId INTO :ResourceId FROM SQLUser.RB_Resource WHERE (RES_Code = :resource) AND ((RES_CTLOC_DR->CTLOC_RowID = :location) OR (:location IS NULL)))
+	. . // extract service
+	. . if $data(^TMP("HL7",$job,cnt1,cnt2,"AIS")) do
+	. . . set service=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"AIS",3)),"^")
+	. . . if service'="" &SQL(SELECT SER_RowId INTO :ServiceId FROM SQLUser.RBC_Services WHERE (SER_ARCIM_DR->ARCIM_Code = :service) AND ((SER_CTLOC_DR->CTLOC_RowID = :location) OR (:location IS NULL)))
+	
+	. // extract comments
+	. set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,"ARQ-NTE",3,cnt2)) quit:cnt2=""  do
+	. . set comments=comments_$get(^TMP("HL7",$job,cnt1,"ARQ-NTE",3,cnt2))_$char(13,10)
+	
+	. // extract date of referral letter
+	. if $data(^TMP("HL7",$job,cnt1,"ZRF")) do
+	. . set datetime=$get(^TMP("HL7",$job,cnt1,"ZRF",2)),date("REF-LETTER")=$$DateConv^HL7Common2(.reject,"EI",datetime)
+	
+	. if newUSRN="" do
+	. . if EB("BOOKMETH")="HE" set reject="No appointment slot provided for booking" quit
+	. . if EB("BOOKMETH")="B" do
+	. . . if ResourceId'="",date("APPT")'="",time("APPT")'="" quit
+	. . . set reject="Not enough information to insert appointment. Resource, date and time are required."
+	
+	// early setting of msg control id - required to track 2 phase bookings
+	set ControlId=$$ControlId^HL7AckNak
+	
+	if reject="" do
+	. if EB("BOOKMETH")="HE" do EBooking
+	. if EB("BOOKMETH")="B" do Booking
+	. if reject'="" set cnt1=cnt1x
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	
+	set ^TMP("HL7-OUT",$job,"MSA",1)=$select(reject="":"AA",1:"AR")
+	set ^TMP("HL7-OUT",$job,"MSA",2)=$get(^TMP("HL7",$job,"MSH",9))
+	if reject'="" set ^TMP("HL7-OUT",$job,"MSA",3)=$get(reject)
+	do Build^HL7Queue("MSA",12)
+	
+	if reject'="" do
+	. set ^TMP("HL7-OUT",$job,"ERR",1)=$get(reject)
+	. do Build^HL7Queue("ERR",1)
+	
+	if EB("BOOKMETH")="HE" do
+	. set ^TMP("HL7-OUT",$job,"SCH",1)=UBRN,^TMP("HL7-OUT",$job,"SCH",2)=USRN
+	. do Build^HL7Queue("SCH",$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","SCH"),2))
+	
+	if reject="",EB("BOOKMETH")="B" do
+	. set ^TMP("HL7-OUT",$job,"SCH",1)=UBRN,^TMP("HL7-OUT",$job,"SCH",2)=USRN,^TMP("HL7-OUT",$job,"SCH",5)=$$TextConversion^HL7Common12(ApptID,"O")
+	. set $piece(^TMP("HL7-OUT",$job,"SCH",11),"^",4)=$$DateConv^HL7Common2(.reject,"IE",date("APPT"),"B")_$translate($$TimeConv^HL7Common2("IE",time("APPT")),":","")
+	. do Build^HL7Queue("SCH",$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","SCH"),2))
+	
+	// send response as appt ACK
+	if $data(queue) do  kill queue
+	. // reverse sending and receiving applications found in interface info
+	. set mshmsg="MSH|^~\&|"_$get(HL7("ACKSENDAPP"))_"|"_$get(HL7("ACKSENDFAC"))_"|"_$get(^TMP("HL7",$job,"MSH",2))_"|"_$get(^TMP("HL7",$job,"MSH",3))_"|"_$$Date^HL7_"||"_"SRR^S01"_"|"_ControlId_"|"_$get(HL7("PT"))_"|"_$get(HL7("VER"))_"|||AL|NE|||EN|"
+	. kill trace set trace=1
+	. write ESC("VT"),mshmsg,ESC("CR") set trace(trace)=mshmsg
+	. set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  do
+	. . write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	. write ESC("FS"),ESC("CR"),!
+	. do trace^HL7Trace("M-->E",$h,"",tracerowid) kill trace
+	
+	kill date,time,doctor
+	kill ^TMP("HL7-OUT",$job)
+	quit ""
+	
+	// regular booking
+Booking
+	// supress any outbound 'SIU' messages
+	set HL7Flag="Y"
+	if 'InsertSlot do
+	. if ServiceId="" set reject="Missing or invalid service. Service required to book appointment." quit
+	. set %request=##class(%CSP.Request).%New()
+	. do ##class(web.RBAppointment).InsertRBMulti("",intRegMrn,ServiceId,newUSRN,"","","","",comments,"","","","","","","",location,date("APPT"))
+	. if $data(%request) set ApptID=$get(%request.Data("ApptID",1))
+	
+	// need to set appt id for SCH
+	if InsertSlot do
+	. set ApptID=$$overbook^CRBAppointment1(intRegMrn,ServiceId,ResourceId,date("APPT"),time("APPT"),"",location,"",comments,"","","","","","","","")
+.
+	if reject="",ApptID="" set reject="Unable to create appointment - "_$get(e)
+.
+	kill HL7Flag
+	
+	// generate 'slot not available' message
+	if reject="",ApptID'="" do
+	. do check^HL7OutboundSCH("EBOOK-RBNOTAVAIL",ApptID)
+	
+	quit
+	
+	// 1st phase of two step booking - hold appointment
+EBooking
+	// supress any outbound 'SIU' messages
+	set HL7Flag="Y"
+	
+	// hold appt slot and create E-Referral
+	set okref=0
+	set err=""
+	set ApptID=##class(web.RBAppointment).HoldAppt($get(HL7("USER")),newUSRN,UBRN,.err)
+	if ApptID="" set reject="Unable to hold appointment slot for UBRN "_UBRN_" "_err
+	if ApptID'="" do
+	. set okref=##class(web.RBReferral).CreateERef($get(HL7("USER")),ApptID,newUSRN,PatNumber,RefPriority,"",UBRN,doctor("REF"),"",EB("WLTYPE"),WaitPriority,EB("WLREASON"),"","","",EB("PATNUMBER"),doctor("REF-CLINIC"),date("REF-LETTER"),doctor("REF-CLINIC-ADD"))
+	. if 'okref set reject="Unable to create E-Referral for UBRN: "_UBRN
+	if okref,ApptID'="" set ^TMP("EBOOK-APPT",ControlId)=$listbuild("S01",newUSRN,ApptID,UBRN,PatNumber,EB("PATNUMBER"))
+	
+	kill HL7Flag
+	quit
+	
+	// 2nd phase of two step booking - confirm appointment
+ConfirmAppt(ControlId,User) set reject=""
+	// supress any outbound 'SIU' messages
+	set HL7Flag="Y"
+	
+	// run as background process as Waitinglist must do external query and 'create' a patient if not already on TrakCare, create waiting list and book appointment
+	set detail=^TMP("EBOOK-APPT",ControlId)
+	set newUSRN=$listget(detail,2),ApptID=$listget(detail,3),UBRN=$listget(detail,4)
+	set okappt=0
+	
+	// 66546 - WaitList requires eRefID to after save can flip Ref Status to 'on wait list'
+	set %request=##class(%CSP.Request).%New()
+	set %session=##class(%CSP.Session).%New($job)
+	if UBRN'="" do %request.Set("eRefID",$order(^RBRFi("UBRN",UBRN,"")))
+	set WaitListId=##class(web.PAWaitingList).CreateWLFromERef($get(User),UBRN,newUSRN,ApptID,1)
+	if 'WaitListId quit
+	set okappt=##class(web.RBAppointment).ConfirmAppt($get(User),newUSRN,UBRN,WaitListId)
+	if 'okappt set reject="Unable to book appointment"
+	
+	kill ^TMP("EBOOK-APPT",ControlId),HL7Flag
+	
+	// generate 'slot not available' message
+	if reject="",ApptID'="" do
+	. do check^HL7OutboundSCH("EBOOK-RBNOTAVAIL",ApptID)
+	
+	quit
+
+
+

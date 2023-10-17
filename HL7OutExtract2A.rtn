@@ -1,0 +1,109 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract2A^MAC^^^0
+HL7OutExtract2A // ML 13/05/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract2A.rtn#1 $
+	quit
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable),(code,desc,other)=""
+	if mtable="PA_Adm" do
+	. set (hospserv,location,campuscode,hospcode)=""
+	. if $get(AdmDetail(5))'="" do
+	. . &SQL(SELECT CTLOC_Code, CTLOC_Dep_Dr -> DEP_Code INTO :location, :hospserv FROM RBC_DepartmentGroup, CT_Loc WHERE CTLOC_RowId = :AdmDetail(5))
+	. for i=5,6,10,70,78,181,200,208,273,281,286,299,332,356 if $get(AdmDetail(i))'="" do  set AdmDetail(i)=$select($get(AdmDetail(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=AdmDetail(i) quit:value=""""""
+	. . if i=5 do
+	. . . &SQL(SELECT CTLOC_Code, CTLOC_Desc INTO :code, :desc FROM CT_Loc WHERE CTLOC_RowId = :value)
+	. . if i=6 do
+	. . . &SQL(SELECT ADMCAT_Code, ADMCAT_Desc INTO :code, :desc FROM PAC_AdmCategory WHERE ADMCAT_RowId = :value)
+	. . if i=10 do
+	. . . &SQL(SELECT ADSOU_Code, ADSOU_Desc INTO :code, :desc FROM PAC_AdmSource WHERE ADSOU_RowId = :value)
+	. . if i=70 do
+	. . . set detail=##class(web.CTRefClin).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=78 do
+	. . . &SQL(SELECT CTACU_Code, CTACU_Desc INTO :code, :desc FROM CT_Acuity WHERE CTACU_RowId = :value)
+	. . if i=181 do
+	. . . &SQL(SELECT REA_Code, REA_Desc INTO :code, :desc FROM PAC_AdmReason WHERE REA_RowId =:value)
+	. . if i=200 do
+	. . . &SQL(SELECT APPTBS_Code, APPTBS_Desc INTO :code, :desc FROM PAC_ApptBookingSystem WHERE APPTBS_RowId = :value)
+	. . if i=208 do
+	. . . &SQL(SELECT PLINJ_Code, PLINJ_Desc INTO :code, :desc FROM PAC_PlaceOfInjury WHERE PLINJ_RowId = :value)
+	. . if i=273 do
+	. . . &SQL(SELECT IPAT_Code, IPAT_Desc INTO :code, :desc FROM PAC_InPatAdmissionType WHERE IPAT_RowId = :value)
+	. . if i=281 do
+	. . . &SQL(SELECT FUNDAR_Code, FUNDAR_Desc INTO :code, :desc FROM PAC_FundingArrangement WHERE FUNDAR_RowId = :value)
+	. . if i=286 do
+	. . . &SQL(SELECT TRANSF_Code, TRANSF_Desc INTO :code, :desc FROM PAC_Transferring WHERE TRANSF_RowId = :value)
+	. . if i=299 do
+	. . . &SQL(SELECT APPTBS_Code, APPTBS_Desc INTO :code, :desc FROM PAC_ApptBookingSystem WHERE APPTBS_RowId = :value)
+	. . if i=332 do
+	. . . &SQL(SELECT HOSP_Code, HOSP_Desc INTO :code, :desc FROM CT_Hospital WHERE HOSP_RowId = :value)
+	. . if i=356 do
+	. . . set detail=##class(web.PACUsualAccomodation).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(AdmDetail(""),-1) if $data(AdmDetail(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",5,6,10,70,78,167,181,200,208,219,273,281,286,299,332,356,"[(","_i_",") quit
+	. . set AdmDetail(i)=$$TextConversion^HL7Common12(AdmDetail(i),"O")
+	. do WardRoomBed^HL7OutExtract2($get(AdmDetail(164)),$get(AdmDetail(163)),$get(AdmDetail(167)))
+	. set AdmDetail(164)=wardcode,AdmDetail(163)=roomcode,AdmDetail(167)=bedcode
+	if mtable="PA_AdmInsurance" do
+	. for i=3,12,45 if $get(AdmInsurance(i))'="" do  set AdmInsurance(i)=$select($get(AdmInsurance(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=AdmInsurance(i) quit:value=""""""
+	. . if i=3 do
+	. . . &SQL(SELECT INST_Code, INST_Desc INTO :code, :desc FROM ARC_InsuranceType WHERE INST_RowId = :value)
+	. . if i=12 do
+	. . . &SQL(SELECT AUXIT_Code, AUXIT_Desc INTO :code, :desc FROM ARC_AuxilInsurType WHERE AUXIT_RowId = :value)
+	. . if i=45 do
+	. . . &SQL(SELECT PCT_Code, PCT_Desc INTO :code, :desc FROM ARC_PayorContactType WHERE PCT_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(AdmInsurance(""),-1) if $data(AdmInsurance(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",3,12,45,"[(","_i_",") quit
+	. . set AdmInsurance(i)=$$TextConversion^HL7Common12(AdmInsurance(i),"O")
+	if mtable="ARC_InsurAssociation" do
+	. if '$data(InsAssociation) quit
+	. for i=9 if $get(InsAssociation(i))'="" do  set InsAssociation(i)=$select($get(InsAssociation(i))="""""":"""""",1:code_"^"_desc_"^"_other),(code,desc,other)=""
+	. . set value=InsAssociation(i) quit:value=""""""
+	. . if i=9 do
+	. . . &SQL(SELECT CTZIP_Code, CTZIP_Desc, CTZIP_Province_DR -> PROV_Code INTO :code, :desc, :other FROM CT_Zip WHERE CTZIP_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(InsAssociation(""),-1) if $data(InsAssociation(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",9,"[(","_i_",") quit
+	. . set InsAssociation(i)=$$TextConversion^HL7Common12(InsAssociation(i),"O")
+	if mtable="PA_AdmTransaction" do
+	. if '$data(AdmTransaction) quit
+	. do WardRoomBed^HL7OutExtract2($get(AdmTransaction(10)),$get(AdmTransaction(9)),$get(AdmTransaction(11)))
+	. set AdmTransaction(10)=wardcode,AdmTransaction(9)=roomcode,AdmTransaction(11)=bedcode
+	. for i=8,13,14,23 if $get(AdmTransaction(i))'="" do  set AdmTransaction(i)=$select($get(AdmTransaction(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=AdmTransaction(i) quit:value=""""""
+	. . if i=8 do
+	. . . &SQL(SELECT CTLOC_Code, CTLOC_Desc INTO :code, :desc FROM CT_Loc WHERE CTLOC_RowId = :value)
+	. . if i=13 do
+	. . . &SQL(SELECT BTR_Code, BTR_Desc INTO :code, :desc FROM PAC_BedTransferReason WHERE BTR_RowId = :value)
+	. . if i=14 do
+	. . . &SQL(SELECT REQST_Code INTO :code FROM PAC_TransfRequestStatus WHERE REQST_RowId = :value)
+	. . if i=23 do
+	. . . &SQL(SELECT TRANSTYP_Code, TRANSTYP_Desc INTO :code, :desc FROM PAC_TransType WHERE TRANSTYP_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(AdmTransaction(""),-1) if $data(AdmTransaction(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",8,9,10,11,13,14,23,"[(","_i_",") quit
+	. . set AdmTransaction(i)=$$TextConversion^HL7Common12(AdmTransaction(i),"O")
+	if mtable="PA_AdmSepRef" do
+	. set i=3 if $get(SepReferral(i))'="" do  set SepReferral(i)=$select($get(SepReferral(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	. . set value=SepReferral(i) quit:value=""""""
+	. . &SQL(SELECT SEPREF_Code, SEPREF_Desc INTO :code, :desc FROM PAC_SeparationReferral WHERE SEPREF_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	quit
+
+
+

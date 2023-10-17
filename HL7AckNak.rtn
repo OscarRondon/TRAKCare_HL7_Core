@@ -1,0 +1,121 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7AckNak^MAC^^^0
+HL7AckNak // ML 01/08/2003 ; HL7 Interface - send response
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7AckNak.rtn#1 $
+	quit
+	
+	// send acknowledgement/rejection
+AckNak(acktype,errtext,segfield,errcode,error) new (link,INT,HL7,ESC,msh,%,%1,%2,%3,%4,port,Action,ActionMax,MaxNum,acktype,errtext,segfield,errcode,error,tracerowid,nakcount)
+	set acktype=$get(acktype),errtext=$get(errtext),segfield=$get(segfield),errcode=$get(errcode),error=$get(error),tracerowid=$get(tracerowid),link=$get(link)
+	kill queue,^TMP("HL7-OUT",$job),trace set trace=""
+	// trap disconnect READ/WRITE errors and restart
+	set $ztrap="Error^"_$zname
+	// do not acknowledge replayed messages
+	if $data(^TMP("HL7-REPLAY",$job)) do  quit
+	. kill trace,tracerowid
+	. do trace^HL7Trace("*****",$h,"No acknowledgment required - REPLAYED message","","","INF")
+	
+	if INT("INDIR")'="" quit
+	
+	if HL7("ACKREQ")="Y",",AA,AR,AE,"'[(","_acktype_",") set acktype="AA"
+	
+	// trace cache error
+	if $length(error) set trace=trace+1,trace(trace)=error
+	
+	// if file do not send response
+	if $get(INT("DEVTYPE"))="F" do  quit
+	. kill trace,tracerowid
+	. do trace^HL7Trace("*****",$h,"ACK "_acktype_" "_errtext_" to "_$get(^TMP("HL7",$job,"MSH",9)),"","","INF")
+	
+	// extract segments to respond
+	do Segment
+	
+	set seg="" for  set seg=$order(SEG(seg)) quit:seg=""  do
+	. set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7AcknowledgeSegment",$piece(SEG(seg),"^"))
+	. set maxlength=$list(detail,2),segment=$piece(SEG(seg),"^"),mandatory=$piece(SEG(seg),"^",2),errinclude=$piece(SEG(seg),"^",3),errfield=$piece(SEG(seg),"^",4)
+	. do Build
+	// prepare ack for use in ensemble adapter
+	if $get(HL7("ENS_ADAPTER"))="Y" do  quit
+	. set seq="" for  set seq=$order(queue(seq)) quit:seq=""  do
+	. . set ^TMP("HL7-ENS",$job,$get(^TMP("HL7",$job,"MSH",9)),"RESP",seq)=queue(seq)
+	. . set trace=trace+1,trace(trace)=queue(seq)
+	. if $data(trace) do
+	. . do trace^HL7Trace("M-->E",$h,"",tracerowid)
+	. kill queue,trace,tracerowid,^TMP("HL7-OUT",$job)
+	set first=1,seq=""
+	for  set seq=$order(queue(seq)) quit:seq=""  do
+	. // send start sequence - vertical tab
+	. if first write ESC("VT") set first=0
+	. write queue(seq),ESC("CR") set trace=trace+1,trace(trace)=queue(seq)
+	. // send end sequence
+	. if $order(queue(seq))="" write ESC("FS"),ESC("CR"),!
+	
+	if $data(trace) do
+	. do trace^HL7Trace("M-->E",$h,"",tracerowid)
+	
+	// check for 'nak' action
+	set (action,actiontype)=""
+	if acktype="AA" set nakcount=""
+	if acktype'="AA",MaxNum("naksend")'="" do
+	. set nakcount=$get(nakcount)+1 if nakcount'=MaxNum("naksend") quit
+	. set actiontype=$select(nakcount=MaxNum("naksend"):ActionMax("naksend"),1:"")
+	. set actionmessage=$select(nakcount=MaxNum("naksend"):MaxNum("naksend")_" consecutive rejections have occurred.",1:"")
+	. if actiontype'="" do  quit
+	. . set action=$$Action^HL7(actiontype,actionmessage)
+	. . set action=$select(actiontype="SH":"d Shutdown^HL7(1)",actiontype="SE":"d Shutdown^HL7(1,1,$g(actionmessage))",actiontype="RT":"d Restart^HL7",1:action)
+	if action'="" set nakcount="" xecute action
+	
+	kill queue,trace,tracerowid,^TMP("HL7-OUT",$job)
+	quit
+	
+	// extract required segments
+Segment set cnt="" kill SEG
+	set x="" for  set x=$order(^SSHL7(link,"MSG-ACK",x)) quit:x=""  set cnt=cnt+1,SEG(cnt)=^(x)
+	quit
+	
+	// build segment
+Build	kill DATA
+	
+	// build DATA array - MSH
+	if segment="MSH" do
+	. set DATA("MSH",1)=$extract(msh,2,5),DATA("MSH",2)=HL7("ACKSENDAPP"),DATA("MSH",3)=HL7("ACKSENDFAC"),DATA("MSH",4)=$get(^TMP("HL7",$job,"MSH",2)),DATA("MSH",5)=$get(^TMP("HL7",$job,"MSH",3))
+	. set DATA("MSH",6)=$$Date^HL7,DATA("MSH",8)="ACK",DATA("MSH",9)=$$ControlId,DATA("MSH",10)=HL7("PT"),DATA("MSH",11)=HL7("VER")
+	. set DATA("MSH",14)="AL",DATA("MSH",15)="NE"
+	
+	// build DATA array - MSA
+	if segment="MSA" do
+	. set DATA("MSA",1)=acktype,DATA("MSA",2)=$get(^TMP("HL7",$job,"MSH",9))
+	. if errinclude="Y" set DATA("MSA",errfield)=$select(errfield=6:segfield_"^"_errcode,1:$$TextConversion^HL7Common12(errtext,"O"))
+	
+	// build DATA array - ERR
+	if segment="ERR" do  if '$data(DATA("ERR")) quit
+	. if mandatory'="Y",errcode="" quit
+	. if mandatory="Y",errcode="" set DATA("ERR",1)="" quit
+	. if errfield'="" set DATA("ERR",errfield)=segfield_"^"_errcode
+	
+	// build response queue
+	if $data(DATA) merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	do Build^HL7Queue(segment,maxlength)
+	
+	quit
+	
+	// return control id
+ControlId()
+	// remove 'control id' count from 'LINK'
+	if '$data(^SSHL7(link,"CID")) do
+	. set ^SSHL7(link,"CID")=$get(^SSHL7("LINK",link,"CID")) kill ^SSHL7("LINK",link,"CID")
+	
+	quit $$Interface^HL7(link)_"z"_$increment(^SSHL7(link,"CID"))
+	// log errors and restart process
+Error
+	// stop process if protect error occurs
+	if $zerror["PROTECT" halt
+	if $zerror'["READ",$zerror'["WRITE" do trace^HL7Trace("*****",$h,$zerror,"","","ERR")
+	else  do trace^HL7Trace("*****",$h,$select(INT("DIRECT")="I":"Client disconnected",1:"Disconnected from server")_", unable to acknowledge received message","","","INF")
+	// will allow closure of device required from 'write/read' errors
+	do trace^HL7Trace("*****",$h,"Stopping and restarting connection","","","INF") set $ztrap="Error^HL7"
+	goto Restart^HL7
+
+
+

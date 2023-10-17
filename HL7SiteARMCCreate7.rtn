@@ -1,0 +1,120 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteARMCCreate7^MAC^^^0
+HL7SiteARMCCreate7 // ML 09/05/2006 ; HL7 interface : create transmission packets
+	quit
+ 
+CheckPRD ;; build DATA array - PRD
+PRD()	set intDSNum=$get(intDSNum),(role,location,PrefContact,count)="" kill DATA,CareProv,RefDoctor
+ 
+	if msgtype="REF^I12" do
+	. // extract discharge summary detail
+	.kill DischSum if $$DischSum^HL7OutExtract14(intDSNum,.DischSum)
+ 
+	. // family doctor
+	. &SQL(SELECT PAPER_FamilyDoctor_DR INTO :intRefDr FROM PA_Person WHERE PAPER_RowId = :intRegMrn)
+	.if intRefDr'="" do
+	..kill RefDoctor if $$RefDoctor^HL7OutExtract10(intRefDr,.RefDoctor) quit
+	..set role="PP^^TRAKCARE",location=""
+	..do ProvLoc("DOC-R")
+ 
+	. // admission consulting provider
+	. &SQL(SELECT PAADM_AdmDocCodeDR INTO :intConsultDr FROM PA_Adm WHERE PAAdm_RowId = :intAdmNum)
+	.if intConsultDr'="" do
+	..kill CareProv if $$CareProvider^HL7OutExtract10(intConsultDr,.CareProv) quit
+	..set role="CP^^TRAKCARE",location=""
+	..do ProvLoc("DOC-C")
+ 
+	. // discharging care provider
+	.if $get(DischSum(19))'="" do
+	..kill CareProv if $$CareProvider^HL7OutExtract10($get(DischSum(19)),.CareProv) quit
+	..set role="RP^^TRAKCARE",location=""
+	..do ProvLoc("DOC-C")
+ 
+	. // extract 'discharged/referred to' providers
+	.set row="0" for  set row=$order(^PA("DISSUM",intDSNum,"REF",row)) quit:row=""  do
+	..set drid=$piece(^PA("DISSUM",intDSNum,"REF",row),"^") quit:drid=""
+	..kill RefDoctor if $$RefDoctor^HL7OutExtract10(drid,.RefDoctor) quit
+	..set role="RT^^TRAKCARE",location=""
+	..do ProvLoc("DOC-R")
+ 
+	. // extract discharge care providers
+	.set row="0" for  set row=$order(^PA("DISSUM",intDSNum,"DOC",row)) quit:row=""  do
+	..set drid=$piece(^PA("DISSUM",intDSNum,"DOC",row),"^") quit:drid=""
+	..kill CareProv if $$CareProvider^HL7OutExtract10(drid,.CareProv) quit
+	..set role="RT^^TRAKCARE",location=""
+	..do ProvLoc("DOC-C")
+ 
+	. // extract discharge location
+	.set row="0" for  set row=$order(^PA("DISSUM",intDSNum,"LOC",row)) quit:row=""  do
+	..set intLoc=$piece(^PA("DISSUM",intDSNum,"LOC",row),"^") quit:intLoc=""
+	..kill Location if $$Location^HL7OutExtract15(intLoc,.Location) quit
+	..set location=$get(Location(3)),phoneW=$get(Location(67))_$char(1)_$get(Location(68)),pager=$get(Location(82)),email=$get(Location(83)),fax=$get(Location(84))
+	..set role="RT^^TRAKCARE"
+	..do ProvLoc
+ 
+	. // extract discharge non-government organisation
+	.set row="0" for  set row=$order(^PA("DISSUM",intDSNum,"NG",row)) quit:row=""  do
+	..set intNGO=$piece(^PA("DISSUM",intDSNum,"NG",row),"^") quit:intNGO=""
+	..kill NonGovOrg if $$NonGovOrg^HL7OutExtract15(intNGO,.NonGovOrg) quit
+	..set mtable="PAC_NonGovOrg" do CodeTable^HL7OutExtract15(mtable)
+	..set location=$get(NonGovOrg(3)),phoneW=$get(NonGovOrg(8)),fax=$get(NonGovOrg(9)),email=$get(NonGovOrg(10)),PrefContact=$get(NonGovOrg(11)),role="RT^^TRAKCARE"
+	..do ProvLoc
+ 
+	kill DischSum,Referral,CareProv,RefDoctor,NonGovOrg,Location
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+	// set provider details
+ProvLoc(prdtype) set prdtype=$get(prdtype),count=count+1
+ 
+	set (code,name,nameD,nameL,nameG,nameO,nameT)=""
+ 
+	// build doctor details
+	if prdtype["DOC" do
+	.set (phoneH,phoneW,phoneM,fax,email,pager,PrefContact)=""
+	. // care provider
+	.if prdtype="DOC-C" do
+	..set mtable="CT_CareProv" do CodeTable^HL7OutExtract10(mtable)
+	..set code=$get(CareProv(2)),nameD=$get(CareProv(3)),nameL=$get(CareProv(75)),nameG=$get(CareProv(72)),nameO=$get(CareProv(73)),nameT=$get(CareProv(49)),nameT=$select($get(CareProv(74))'="":$get(CareProv(74)),1:nameT)
+	..set phoneW=$get(CareProv(18))_$char(1)_$get(CareProv(19)),phoneH=$get(CareProv(20)),pager=$get(CareProv(21)),phoneM=$get(CareProv(51)),fax=$get(CareProv(52))
+	..set email=$get(CareProv(54)),PrefContact=$get(CareProv(55))
+	. // referring doctor
+	.if prdtype="DOC-R" do
+	..set mtable="PAC_RefDoctor" do CodeTable^HL7OutExtract10(mtable)
+	..set code=$get(RefDoctor(2)),(nameD,nameL)=$get(RefDoctor(3)),nameG=$get(RefDoctor(51)),nameO=$get(RefDoctor(54)),nameT=$get(RefDoctor(4)),nameT=$select($get(RefDoctor(53))'="":$get(RefDoctor(53)),1:nameT)
+	..set phoneH=$get(RefDoctor(10)),phoneW=$get(RefDoctor(42)),fax=$get(RefDoctor(43)),phoneM=$get(RefDoctor(44)),email=$get(RefDoctor(45)),PrefContact=$get(RefDoctor(46)),pager=$get(RefDoctor(52))
+ 
+	.set name=nameD_"^^^^" if $length(nameL),$length(nameG) set name=nameL_"^"_nameG_"^"_nameO_"^^"_nameT
+	.set code=code_"^GpCode",location=""
+ 
+	// set contact details
+	set contact="" for var="phoneH","phoneW","phoneM","email","fax","pager" if $get(@var)'="" do
+	.if var="phoneH" set contact=contact_$select(contact'="":"~",1:"")_@var_"^PRN^PH^^^^^^"
+	.if var="phoneW" set contact=contact_$select(contact'="":"~",1:"")_$piece(@var,$char(1))_"^WPN^PH^^^^^"_$piece(@var,$char(1),2)_"^"
+	.if var="phoneM" set contact=contact_$select(contact'="":"~",1:"")_@var_"^ORN^CP^^^^^^"
+	.if var="email" set contact=contact_$select(contact'="":"~",1:"")_"^NET^Internet^"_@var_"^^^^^"
+	.if var="fax" set contact=contact_$select(contact'="":"~",1:"")_@var_"^ORN^FX^^^^^^"
+	.if var="pager" set contact=contact_$select(contact'="":"~",1:"")_@var_"^BPN^BP^^^^^^"
+ 
+	if count=1 do  quit
+	.set DATA("PRD",1)=role,DATA("PRD",2)=name,DATA("PRD",4)=$select(location'="":"^^^^^^^^"_location,1:""),DATA("PRD",5)=contact,DATA("PRD",6)=PrefContact,DATA("PRD",7)=code
+ 
+	if count>1,repeat="Y" do
+	.set Repeat("PRD",count,1)=role,Repeat("PRD",count,2)=name,Repeat("PRD",count,4)=$select(location'="":"^^^^^^^^"_location,1:""),Repeat("PRD",count,5)=contact,Repeat("PRD",count,6)=PrefContact,Repeat("PRD",count,7)=code
+ 
+	set (role,location,phoneH,phoneW,phoneM,fax,email,pager,PrefContact)=""
+	quit
+CheckRF1 ;; build DATA array - RF1
+RF1()	set intDSNum=$get(intDSNum) kill DATA
+	// extract discharge summary detail
+	kill DischSum if $$DischSum^HL7OutExtract14(intDSNum,.DischSum)
+	kill datetime if $get(DischSum(7))'="" set datetime("EFF")=$$Date^HL7($get(DischSum(7))_","_$get(DischSum(8)))
+	set DATA("RF1",1)="A^Accepted^HL70283",DATA("RF1",3)="DRF",DATA("RF1",4)="DS^Discharge Summary^HL70282",DATA("RF1",6)=intDSNum_"^AHS Austin Health"
+	set DATA("RF1",7)=$get(datetime("EFF")),DATA("RF1",10)="E^Event Summary^HL70336"
+	kill DischSum,doctor,date
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

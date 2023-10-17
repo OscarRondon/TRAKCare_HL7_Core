@@ -1,0 +1,92 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteSTACreateZ^MAC^^^0
+HL7SiteSTACreateZ // ML 21/01/2004 ; HL7 interface : create 'Z' transmission packets - St Andrews
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteSTACreateZ.rtn#1 $
+	quit
+CheckZID ;; build DATA array - ZID : Other Patient Demographics
+ZID()	set intRegMrn=$get(intRegMrn) kill DATA
+	// extract patient details
+	kill PatDetail,PatDetailx set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	//i SQLCODE q SQLCODE
+	// check for new null fields and change to ""
+	for xtable="PAPER","PAPMI" if $data(old(xtable)) do  quit
+	. do NullChange^HL7Common3(xtable)
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+	set occupation=PatDetail(57),interpreter=$select(PatDetail(168)="Y":1,PatDetail(168)="N":2,1:3),medsuffix=PatDetailx(105)
+	kill remarks set comm=$get(PatDetail(73)),remarks="" if $listlength(comm) do
+	. for j=1:1:$listlength(comm) set line=$list(comm,j),line=$translate(line,$char(0)),remarks=$get(remarks)_$select($length(remarks):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(line,"O"),$char(13,10),HL7("LINEBK"))
+	// extract doctors
+	kill doctor if $get(PatDetail(67))'="" do
+	. if PatDetail(67)=""""!(PatDetail(67)="""""") quit
+	. set drid=PatDetail(67),drcode=$$Provider^HL7Common5(drid,"","","","R","O")
+	. set doctor("FAM")=$$BuildDoctor^HL7Common5(drcode)
+	set DATA("ZID",1)=medsuffix,DATA("ZID",2)=occupation,DATA("ZID",3)=interpreter,DATA("ZID",4)=remarks,DATA("ZID",5)=$get(doctor("FAM"))
+	kill PatDetail,PatDetailx,doctor
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZPR ;; build DATA array - ZPR : Additional Procedure Details
+ZPR() set intAnaeOper=$get(intAnaeOper),intAnaeNum=$get(intAnaeNum) kill DATA
+	// get all required rowid's
+	if intAnaeOper'="",intAnaeNum="" set intAnaeNum=$piece(intAnaeOper,"||",1,2)
+	if intAnaeNum'="" do
+	. &SQL(SELECT ANA_RBOperatingRoom_DR INTO :intOperNum FROM OR_Anaesthesia WHERE ANA_RowId = :intAnaeNum)
+	if intAnaeNum="" quit 0
+	// extract operation details
+	kill Operation if $$Operation^HL7OutExtract16(intOperNum,.Operation)
+	// extract code table detail
+	set mtable="RB_OperatingRoom" do CodeTable^HL7OutExtract16(mtable)
+	// extract doctors
+	kill doctor set drcodes=""
+	for i=7,28 if $get(Operation(i))'="" do
+	. if Operation(i)=""""!(Operation(i)="""""") quit
+	. set drid=Operation(i)
+	. set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	. set Operation(i)=$$BuildDoctor^HL7Common5(drcode)
+	for i=7,28 set doctor($select(i=7:"OP-SURGEON",1:"OP-ANAESTHETIST"))=$get(Operation(i))
+	kill remarks set comm=$get(Operation(12)),remarks="" if $listlength(comm) do
+	. for j=1:1:$listlength(comm) set line=$list(comm,j),line=$translate(line,$char(0)),remarks=$get(remarks)_$select($length(remarks):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(line,"O"),$char(13,10),HL7("LINEBK"))
+	// extract anaesthesia details
+	kill Anaesthesia if $$Anaesthesia^HL7OutExtract16(intAnaeNum,.Anaesthesia)
+	// extract code table detail
+	set mtable="OR_Anaesthesia" do CodeTable^HL7OutExtract16(mtable)
+	set AnaesthesiaMethod=$get(Anaesthesia(6))
+	// extract doctors
+	set (doctor("ANA-ANAESTHETIST"),drcodes)=""
+	if $get(Anaesthesia(7))'="" do
+	. if Anaesthesia(7)=""""!(Anaesthesia(7)="""""") quit
+	. set drid=Anaesthesia(7)
+	. set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	. set Anaesthesia(7)=$$BuildDoctor^HL7Common5(drcode)
+	. set doctor("ANA-ANAESTHETIST")=$piece($get(Anaesthesia(7)),"^",1,3)
+	set SpecialEquipment=""
+	set row=0 for  set row=$order(^OR($piece(intAnaeNum,"||"),"ANA",$piece(intAnaeNum,"||",2),"OP",row)) quit:row=""  do
+	. set intAnaeOper=intAnaeNum_"||"_row
+	. // extract anaesthesia operation details
+	. kill AnaestOper if $$AnaestOper^HL7OutExtract16(intAnaeOper,.AnaestOper)
+	. // extract code table detail
+	. set mtable="OR_Anaest_Operation" do CodeTable^HL7OutExtract16(mtable)
+	. // extract doctors
+	. set (doctor("ANAOP-SURGEON"),drcodes)=""
+	. if $get(AnaestOper(11))'="" do
+	. . if AnaestOper(11)=""""!(AnaestOper(11)="""""") quit
+	. . set drid=AnaestOper(11)
+	. . set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	. . set AnaestOper(11)=$$BuildDoctor^HL7Common5(drcode)
+	. . set doctor("ANAOP-SURGEON")=$piece($get(AnaestOper(11)),"^",1,3)
+	. set procedure=$get(AnaestOper(44))
+	. // use last rowid's special equipment as field not repeatable
+	. if $translate($get(AnaestOper(45)),$char(13,10))'="" set SpecialEquipment=$translate($$TextConversion^HL7Common12(AnaestOper(45),"O"),$char(13,10),HL7("LINEBK"))
+	. // use last rowid's date/time as field not repeatable
+	. kill datetime for i="16^4^ANAOP-START^Y","19^5^ANAOP-FINISH^Y" do
+	. . set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(AnaestOper($piece(i,"^"))),$get(AnaestOper($piece(i,"^",2))),$piece(i,"^",4))
+	. set DATA("ZPR",3)=$get(DATA("ZPR",3))_$select($length($get(DATA("ZPR",3))):"~",1:"")_procedure_"^"_doctor("ANAOP-SURGEON")_"^"_doctor("ANA-ANAESTHETIST")
+	set DATA("ZPR",1)="",DATA("ZPR",2)=$get(remarks)_"^"_$piece($get(doctor("OP-SURGEON")),"^",1,3)_"^"_$piece($get(doctor("OP-ANAESTHETIST")),"^",1,3)
+	set DATA("ZPR",4)=$get(datetime("ANAOP-START"))_"^"_$get(datetime("ANAOP-FINISH")),DATA("ZPR",5)=$get(AnaesthesiaMethod),DATA("ZPR",6)=$get(SpecialEquipment)
+	kill Operation,AnaestOper,Anaesthesia,datetime,doctor
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

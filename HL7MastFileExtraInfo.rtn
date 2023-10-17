@@ -1,0 +1,131 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7MastFileExtraInfo^MAC^^^0
+HL7MastFileExtraInfo // ML 07/12/2005 ; HL7 interface : master file notification categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7MastFileExtraInfo.rtn#1 $
+	quit
+ 
+	// check and extract extra info
+Extra(updtable,code,desc) new (updtable,code,desc,cnt1,cnt2,PLIST,OTHER,OTHER1) set updtable=$get(updtable),code=$get(code),desc=$get(desc),cnt1=$get(cnt1),cnt2=$get(cnt2)
+	set othertable="" kill PLIST,OTHER,OTHER1
+ 
+	// check for body part symptoms
+	if updtable="MRCBodyPartsSymptoms" do  quit SQLCODE
+	.set othertable="MRCBodyParts"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. // run dynamic query with code and/or description
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"C","",codex,descx)
+	.if SQLCODE quit
+	.merge OTHER=PLIST kill PLIST
+	.set SQLCODE=$$DynamicQuery^HL7Common12(updtable,"P",OTHER(1),code,desc) 
+ 
+	// check for body part sub symptons
+	if updtable="MRCBodyPartsSympSubsym" do  quit SQLCODE
+	.set othertable="MRCBodyParts"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. // run dynamic query with code and/or description
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"C","",codex,descx)
+	.if SQLCODE quit
+	.merge OTHER=PLIST kill PLIST
+	.set othertable="MRCBodyPartsSymptoms"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",2)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"P",OTHER(1),codex,descx)
+	.if SQLCODE quit
+	.kill OTHER merge OTHER=PLIST kill PLIST
+	.set SQLCODE=$$DynamicQuery^HL7Common12(updtable,"P",OTHER(1),code,desc)
+ 
+	// check for social habit quantity
+	if updtable="MRCHabitsQuantity" do  quit SQLCODE
+	.set othertable="MRCHabits"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. // run dynamic query with code and/or description
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"C","",codex,descx)
+	.if SQLCODE quit
+	.merge OTHER=PLIST kill PLIST
+	.set SQLCODE=$$DynamicQuery^HL7Common12(updtable,"P",OTHER(1),code,desc)
+ 
+	// check alert category
+	if updtable="PACPatientAlert" do
+	.set othertable="PACAlertCategory"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. // run dynamic query with code and/or description
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"C","",codex,descx)
+	.merge OTHER=PLIST
+ 
+	// check allergy
+	if updtable="PACAllergy" do
+	.set othertable="PACAllergyCategory"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. // run dynamic query with code and/or description
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"C","",codex,descx)
+	.merge OTHER=PLIST
+ 
+	// check allergy severity
+	if updtable="PACAllergySeverity" do
+	.for i=1:1:4 set OTHER(i)=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",i)),"^")
+ 
+	// check question
+	if updtable="PACQuestion" do
+	.for i=1:1:2 set OTHER(i)=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",i)),"^")
+	.for  quit:OTHER(2)'["~"  set OTHER(2)=$piece(OTHER(2),"~")_", "_$piece(OTHER(2),"~",2,$length(OTHER(2),"~"))
+ 
+	// check insurance plan
+	if updtable="ARCAuxilInsurType" do
+	.set othertable="ARCInsuranceType"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. // run dynamic query with code and/or description
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"C","",codex,descx)
+	.merge OTHER=PLIST
+ 
+	// check operation and procedure
+	if updtable="ORCOperation" do  quit SQLCODE
+	. // use SQL not dynamic query as field 4 does not exist in table
+	. &SQL(SELECT * INTO :PLIST() FROM ORC_Operation WHERE OPER_Code = :code OR OPER_Desc = %ALPHAUP(:desc))
+ 
+	// check city
+	if updtable="CTCity" do  quit SQLCODE
+	.set othertable="CTProvince"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. // run dynamic query with code and/or description
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"C","",codex,descx)
+	.merge OTHER=PLIST kill PLIST set OTHER(1)=$get(OTHER(1))
+	. // use SQL not dynamic query as field 4 does not exist in table
+	. &SQL(SELECT * INTO :PLIST() FROM CT_City WHERE CTCIT_Code = :code OR CTCIT_Desc = %ALPHAUP(:desc) AND CTCIT_Province_DR = :OTHER(1))
+ 
+	// check post/zip code
+	if updtable="CTZip" do  quit SQLCODE
+	.set othertable="CTProvince"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",2)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. // run dynamic query with code and/or description
+	.set SQLCODE=$$DynamicQuery^HL7Common12(othertable,"C","",codex,descx)
+	.merge OTHER1=PLIST kill PLIST set OTHER1(1)=$get(OTHER1(1))
+	.set othertable="CTCity"
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1)),codex=$piece(detail,"^"),descx=$piece(detail,"^",2)
+	. &SQL(SELECT * INTO :PLIST() FROM CT_City WHERE CTCIT_Code = :codex OR CTCIT_Desc = %ALPHAUP(:descx) AND CTCIT_Province_DR = :OTHER1(1))
+	.merge OTHER=PLIST kill PLIST
+	. &SQL(SELECT * INTO :PLIST() FROM CT_Zip WHERE CTZIP_Code = :code OR CTZIP_Desc = %ALPHAUP(:desc) AND (CTZIP_CITY_DR = :OTHER(1) AND CTZIP_Province_DR = :OTHER1(1)))
+ 
+	// check non-government organisation
+	if updtable="PACNonGovOrg" do  quit SQLCODE
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",1))
+	. // extract city
+	.set codex=$piece(detail,"^",3)
+	. &SQL(SELECT * INTO :OTHER1() FROM CT_City WHERE CTCIT_Code = :codex)
+	. // extract province
+	.set codex=$piece(detail,"^",4)
+	. &SQL(SELECT * INTO :OTHER2() FROM CT_Province WHERE PROV_Code = :codex)
+	. // extract post/zip code
+	.set codex=$piece(detail,"^",5)
+	. &SQL(SELECT * INTO :OTHER3() FROM CT_Zip WHERE CTZIP_Code = :codex)
+	.for i=1:1:2 set OTHER(1)=$get(OTHER(1))_$listbuild($piece(detail,"^",i))
+	.set OTHER(2)=OTHER1(1),OTHER(3)=OTHER3(1),OTHER(4)=OTHER2(1)
+	.set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",2)),OTHER(5)=$piece(detail,"^"),OTHER(6)=$piece(detail,"^",2),OTHER(7)=$piece(detail,"^",3),OTHER(8)=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",3)),"^"),OTHER(9)=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZMF",4)),"^")
+	. &SQL(SELECT * INTO :PLIST() FROM PAC_NonGovOrg WHERE NGO_Code = :code OR NGO_Desc = %ALPHAUP(:desc))
+ 
+	// run dynamic query with code and/or description
+	set SQLCODE=$$DynamicQuery^HL7Common12(updtable,"C","",code,desc)
+ 
+	quit SQLCODE
+
+
+

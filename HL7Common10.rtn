@@ -1,0 +1,156 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Common10^MAC^^^0
+HL7Common10	// ML 19/4/2005 ; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common10.rtn#1 $
+	quit
+	
+	// external system query - search string field : 1 - registration number
+	//												2 - surname
+	//												3 - given name
+	//												4 - other name
+	//						- search filter field : 1 - date of birth
+	//												2 - sex
+	//												3 - age
+	//						- non standard filter : EPI - episode search
+	//												ALG - allergy search
+	//												AKA - alias search
+	//						- ReceivingApp 	      : QUERY1/QUERY2 etc. - used to differentiate between different final locations of message,
+	//																     sent in MSH-5 for use in Ensemble
+	//						- search filter 2	  :	1 - DOB range (low) ~ DOB range (high)
+	//												2 - DOD range (low) ~ DOD range (high)
+	//												3 - Address line 1 ~ address line 2 ~ suburb ~ state ~ postcode
+	//												4 - Family GP code ~ Family GP Practice
+	//												5 - Previous NHS contact
+	//												6 - wild card search required
+	//
+QueryString(string,filter,otherfilter,ReceivingApp,rowid,filter2) new (string,filter,otherfilter,ReceivingApp,rowid,filter2,%session,%request)
+	set string=$get(string),filter=$get(filter),otherfilter=$get(otherfilter),ReceivingApp=$get(ReceivingApp),rowid=$get(rowid),filter2=$get(filter2)
+	set uniqueid="" kill QueryInt
+	// check for existance of search string
+	if $translate(string,"^ ")="",$translate(filter,"^ ")="" quit "^No search parameters defined."
+	// check if dob/sex/age search only
+	set DOBSexAgeSearch="" if $translate(string,"^ ")="",$translate(filter,"^ ")'="" set DOBSexAgeSearch="Y"
+	set link="" for  set link=$order(^SSHL7(link)) quit:link=""  do
+	. // check if query interface
+	. if $piece($get(^SSHL7(link)),"^",35)'="Y" quit
+	. if $piece($get(^SSHL7(link,"QUERY",1)),"^",4)'="Y",DOBSexAgeSearch="Y" quit
+	. set queue="0" for cnt=1:1 set queue=$order(^SSHL7(link,"QUEUE",queue)) quit:queue=""
+	. set QueryInt(cnt,link)=""
+	if '$data(QueryInt) quit "^No HL7 query interfaces setup to allow a search with those requirements."
+	// check if demograhic lookup required or name lookup
+	set (querytype,intRegMrn)=""
+	if $translate($piece(string,"^")," ")'="" set querytype="DEM",intRegMrn=rowid
+	if querytype'="",$translate($piece(string,"^",2,4),"^ ")'="" set querytype="APN"
+	if otherfilter'="" set querytype=otherfilter
+	// if dob/sex/age search only then do not send query type
+	if $translate(string,"^ ")="",$translate(filter,"^ ")'="" set querytype=""
+	
+	// check if filter required
+	set filtertype=""
+	if $translate($piece(filter,"^")," ")'="" set filtertype="DOB"
+	if filtertype="",$translate($piece(filter,"^",2)," ")'="" set filtertype="SEX"
+	if filtertype="",$translate($piece(filter,"^",3)," ")'="" set filtertype="AGE"
+	if DOBSexAgeSearch="Y" set filtertype=""
+	// check number of messages queued for each interface
+	set (found,cnt)="" for  do  quit:cnt=""  quit:found
+	. set cnt=$order(QueryInt(cnt)) quit:cnt=""  do  quit:found
+	. . set link="" for  set link=$order(QueryInt(cnt,link)) quit:link=""  do  quit:found
+	. . . if DOBSexAgeSearch="Y",querytype="" set found=1 quit
+	. . . if ("*"_$piece($get(^SSHL7(link,"QUERY",1)),"^")_"*")[("*"_querytype_"*") set found=1
+	
+	if $get(link)="" quit "^No HL7 interfaces defined to perform requested "_$select(querytype="DEM":"demographic",1:"patient name")_" look up."
+	
+	set intLink=$$Interface^HL7(link)
+	// set unique query id
+	lock +^SSHL7(link,"QUERY",1,"QUERY-CNT")
+	set ok="" for  do  quit:ok
+	. set uniqueid=intLink_"-"_$increment(^SSHL7(link,"QUERY",1,"QUERY-CNT")) if $length(uniqueid)<11 set ok=1 quit
+	. // max length of query id is 10 - reset counter
+	. set ^SSHL7(link,"QUERY",1,"QUERY-CNT")=0
+	lock -^SSHL7(link,"QUERY",1,"QUERY-CNT")
+	
+	set msgtype="QRY_A19"
+	
+	set SessionData=""
+	set $list(SessionData,1)=$select($data(%session):$get(%session.Data("LOGON.USERID")),1:"")
+	set $list(SessionData,2)=$select($data(%session):$get(%session.Data("SPINEPROFILE")),1:"")
+	set $list(SessionData,3)=$select($data(%session):$get(%session.Data("LOGON.GROUPID")),1:"")
+	// message creation
+	job Query^HL7Create(link,msgtype,uniqueid,string,querytype,filter,filtertype,intRegMrn,ReceivingApp,filter2,SessionData)
+	
+	// set query trace
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"MSG")=msgtype,^SSHL7(link,"QUERY-DETAIL",uniqueid,"SEARCH")=string,^SSHL7(link,"QUERY-DETAIL",uniqueid,"FILTER")=filter
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"S-TYPE")=querytype,^SSHL7(link,"QUERY-DETAIL",uniqueid,"F-TYPE")=filtertype,^SSHL7(link,"QUERY-DETAIL",uniqueid,"PAT-ROWID")=intRegMrn
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"REC-APP")=ReceivingApp,^SSHL7(link,"QUERY-DETAIL",uniqueid,"FILTER2")=filter2,^SSHL7(link,"QUERY-DETAIL",uniqueid,"SESSION-DATA")=SessionData
+	
+	quit uniqueid
+	
+	// query result
+QueryResult(uniqueid) new (uniqueid) set uniqueid=$get(uniqueid)
+	
+	// no query id
+	if uniqueid="" quit 200
+	
+	// response of no match from external system
+	if $data(^TMP("HL7-QUERY",uniqueid,"NO-RES")) do  quit 100
+	. set link=$get(^TMP("HL7-QUERY",uniqueid,"LINK"))
+	. kill ^SSHL7(link,"QUERY-DETAIL",uniqueid)
+	
+	// no response within timeout limits
+	if $data(^TMP("HL7-QUERY",uniqueid,"NO-RESP")) do  quit 101
+	. set link=$get(^TMP("HL7-QUERY",uniqueid,"LINK"))
+	. kill ^SSHL7(link,"QUERY-DETAIL",uniqueid)
+	
+	// no response yet
+	if '$data(^TMP("HL7-QUERY",uniqueid,"RESULT")) quit 1
+	
+	// results exist but continuation in progress
+	if $data(^TMP("HL7-QUERY",uniqueid,"RESULT")),$data(^TMP("HL7-QUERY",uniqueid,"CONTINUE")) quit 2
+	
+	quit 0
+	
+	// query continuation required
+QueryContinuation(uniqueid,continuation) new (uniqueid,continuation) set uniqueid=$get(uniqueid),continuation=$get(continuation)
+	if uniqueid="" quit
+	
+	// no continuation
+	if continuation'="Y" do  quit
+	. set link=$get(^TMP("HL7-QUERY",uniqueid,"LINK"))
+	. kill ^TMP("HL7-QUERY",uniqueid),^SSHL7(link,"QUERY-DETAIL",uniqueid)
+	
+	// continuation requested
+	if continuation="Y" do
+	. set link=$get(^TMP("HL7-QUERY",uniqueid,"LINK"))
+	. set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"CONT")=$get(^TMP("HL7-QUERY",uniqueid,"CONT"))
+	. set ^TMP("HL7-QUERY",uniqueid,"CONTINUE")=""
+	
+	. // extract query conditions - QRY^A19
+	. if $get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"MSG"))="QRY_A19" do
+	. . set msgtype="QRY_A19",string=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"SEARCH")),filter=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"FILTER"))
+	. . set querytype=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"S-TYPE")),filtertype=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"F-TYPE"))
+	. . set intRegMrn=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"PAT-ROWID")),ReceivingApp=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"REC-APP"))
+	. . set filter2=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"FILTER2")),SessionData=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"SESSION-DATA"))
+	
+	. . // message creation
+	. . job Query^HL7Create(link,msgtype,uniqueid,string,querytype,filter,filtertype,intRegMrn,ReceivingApp,filter2,SessionData)
+	
+	. // extract query conditions - SQM^S25
+	. if $get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"MSG"))="SQM_S25" do
+	. . set msgtype="SQM_S25",services=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"SERVICE"))
+	. . set datetime=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"DATETIME-FROM")),datefrom=$piece(datetime,"^"),timefrom=$piece(datetime,"^",2)
+	. . set datetime=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"DATETIME-TO")),dateto=$piece(datetime,"^"),timeto=$piece(datetime,"^",2)
+	. . set querytype=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"QUERY-TYPE")),locations=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"LOCATION"))
+	. . set LogonUser=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"LOGONUSER")),intRegMrn=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"PAT-ROWID"))
+	. . set RequestRows=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"REQUEST-ROWS")),careprovider=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"CAREPROVIDER"))
+	. . set UBRN=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"UBRN"))
+	. . set ExtPrescriptionNum=$get(^SSHL7(line,"QUERY-DETAIL",uniqueid,"EXTPRESCRIPTIONNUM"))
+	. . set ExtraFieldText=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"EXTRAFIELDTEXT"))
+.
+	. . // message creation
+	. . job Query^HL7OutboundSQM(link,msgtype,uniqueid,LogonUser,querytype,services,datefrom,timefrom,locations,intRegMrn,RequestRows,dateto,timeto,careprovider,UBRN,ExtPrescriptionNum,ExtraFieldText)
+	
+	quit
+
+
+

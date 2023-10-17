@@ -1,0 +1,320 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SiteQPRes^MAC^^^0
+HL7SiteQPRes	// ML 17/9/01 ; HL7 interface : result processing - Qatar Petroleum
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteQPRes.rtn#1 $
+	quit
+	
+Check	;; file results
+Update	set $ztrap="Error^"_$zname kill reject,rejected
+	
+	// get patient
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  if SQLCODE quit
+	. if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. set reject=""
+	. if '$data(^TMP("HL7",$job,cnt1,"PID")) do  quit
+	. . set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100
+	. . do Reject^HL7Reject(reject),AckNak^HL7AckNak("AR",reject,$piece(reject("Detail"),"~"),$piece(reject("Detail"),"~",2))
+	. // extract internal/external registration numbers
+	. set numbers=$$RegNum^HL7Common2(.reject,"R01")
+	. set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+	. if reject'="" do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece(reject("Detail"),"~"),$piece(reject("Detail"),"~",2)) quit
+	. // check if merged
+	. set merge="",masternum=$$patto^CPAPerson(intRegMrn)
+	. if masternum'=intRegMrn do
+	. . set merge="Y",intRegMrn=masternum,RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+	
+	. // get episode
+	. set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . set intAdmNum="",AdmNum=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",19)),"^")
+	
+	. . set (TestStatus,parent)=""
+	. . set cnt3=0 for x=0:1 set cnt3=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3)) quit:cnt3=""  do  if SQLCODE quit
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR")) quit
+	. . . set (intOrdNum,OrdNum,FillerNum,AccessionNum,tests)="" kill date,time,OrdDetail
+	. . . // check patient details
+	. . . if $$PatCheck(intRegMrn,RegMrn,merge) do  quit
+	. . . . do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece($get(reject("Detail")),"~"),$piece($get(reject("Detail")),"~",2))
+	
+	. . . set reject=""
+	. . . // check order details
+	. . . set numbers=$$OrderNumExtract^HL7Common5(cnt1,cnt2,cnt3)
+	. . . set OrdNum=$piece(numbers,"|"),FillerNum=$piece(numbers,"|",2),AccessionNum=$piece(numbers,"|",4)
+	. . . do OrdNum^HL7Common2("Y",.reject) if reject'="" do  quit
+	. . . . do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece($get(reject("Detail")),"~"),$piece($get(reject("Detail")),"~",2))
+	
+	. . . // extract ordering care provider
+	. . . kill provider set drfound=""
+	. . . set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,"ORC",12,i)) quit:i=""  do  if drfound'="" quit
+	. . . . set OrderingDr=$get(^TMP("HL7",$job,cnt1,cnt2,"ORC",12,i)) if $piece(OrderingDr,"^")="" quit
+	. . . . set doctor=$piece(OrderingDr,"^"),drsystem=$piece(OrderingDr,"^",9) if drsystem="TRAKCARE" set drsystem=""
+	. . . . for drtype="C","R" do  if drfound'="" quit
+	. . . . . set drfound=$$Provider^HL7Common5(doctor,drsystem,"","",drtype,"I")
+	. . . . . if drfound'="" set provider(drtype)=$piece(drfound,$char(1)) if drtype="R" do
+	. . . . . . if $piece(drfound,$char(1),2)'="" set provider("R-CLIN")=$piece(drfound,$char(1),2)
+	
+	. . . if '$data(provider) do
+	. . . . set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,"ORC",12,i)) quit:i=""  do
+	. . . . . set OrderingDr=$get(^TMP("HL7",$job,cnt1,cnt2,"ORC",12,i)) if $piece(OrderingDr,"^",1)'="" set rejected("dr",$piece(OrderingDr,"^",1))=$piece(OrderingDr,"^",3)
+	. . . . if '$data(rejected) set reject="No ordering or referring provider sent on Order Id "_OrdNum
+	. . . . if $data(rejected) set reject="Ordering or referring provider " do  set reject=reject_" sent on Order Id "_OrdNum_", not found in TrakCare"
+	. . . . . set i="" for  set i=$order(rejected("dr",i)) quit:i=""  set reject=reject_i_" ("_rejected("dr",i)_") "_$select($order(rejected("dr",i))="":"",1:", ")
+	. . . . do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	
+	. . . kill date,time
+	. . . // extract required date/time's to check
+	. . . for i=44,45 set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",i)),date($select(i=44:"ADM",1:"DIS"))=$extract(datetime,1,8),time($select(i=44:"ADM",1:"DIS"))=$extract(datetime,9,12)
+	. . . for i=6,7,14,22 set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",i)),date($select(i=6:"REQ",i=7:"COL",i=14:"REC",1:"AUTH"))=$extract(datetime,1,8),time($select(i=6:"REQ",i=7:"COL",i=14:"REC",1:"AUTH"))=$extract(datetime,9,12)
+	. . . set datetime=$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",27)),"^",4),date("ST")=$extract(datetime,1,8),time("ST")=$extract(datetime,9,12)
+	. . . for datetype="ADM","AUTH","DIS","REQ","COL","REC","ST" do
+	. . . . if $data(date(datetype)) set date(datetype)=$select(date(datetype)?8N:$$DateConv^HL7Common2(.reject,"EI",date(datetype)),1:"")
+	. . . . if $data(time(datetype)) set time(datetype)=$select(time(datetype)?4N:$$TimeConv^HL7Common2("EI",$extract(time(datetype),1,2)_":"_$extract(time(datetype),3,4)),1:"")
+	. . . . if datetype="ST",+$get(time(datetype))="0" set time(datetype)="0"
+	. . . . if datetype="ST" set date("CREATE")=$get(date("ST")),time("CREATE")=$get(time("ST"))
+	
+	. . . // check if admission exists
+	. . . do AdmNum^HL7Common2(.reject) if reject'="" do  quit
+	. . . . do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece(reject("Detail"),"~"),$piece(reject("Detail"),"~",2))
+	
+	. . . // unsolicited result - find current admission number
+	. . . if AdmNum="none" do  if reject'="" quit
+	. . . . do CreateAdm(.reject)
+	
+	. . . // check for 'incorrect' multiple tests in OBR records, file results against all tests
+	. . . set count=$length(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",4),"~")
+	. . . for tcnt=1:1:count set tests=$piece(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",4),"~",tcnt) quit:tests=""  do
+	. . . . // check for previous parent reference and status
+	. . . . set prevParent=$select(parent=1:1,1:""),prevStatus=$select(parent=1:TestStatus,1:"")
+	. . . . // check for use of parent reference
+	. . . . set parent=cnt3
+	. . . . if cnt3'=1,$translate($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",26)),"^")'="" set parent=1,tests=$piece(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",4),"~")
+	
+	. . . . // check if test sent
+	. . . . if tests="" do  quit
+	. . . . . set reject="No test sent on Order Id <"_OrdNum_">, Patient Id <"_RegMrn_">" do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^4",101)
+	
+	. . . . // extract parent authorising date
+	. . . . set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",22)),date("AUTH")=$extract(datetime,1,8),time("AUTH")=$extract(datetime,9,12)
+	. . . . if $data(date("AUTH")) set date("AUTH")=$select(date("AUTH")?8N:$$DateConv^HL7Common2(.reject,"EI",date("AUTH")),1:"")
+	. . . . if $data(time("AUTH")) set time("AUTH")=$select(time("AUTH")?4N:$$TimeConv^HL7Common2("EI",$extract(time("AUTH"),1,2)_":"_$extract(time("AUTH"),3,4)),1:"")
+	
+	. . . . // check remaining details
+	. . . . set (intOrdNum,OrderedItem,OrderMaster)="" kill OrdDetail,res
+	. . . . // use placer order number
+	. . . . set orddet=$$ExternalCode^HL7Common1(.reject,$piece(tests,"^"),$piece(tests,"^",2))
+	. . . . if reject'="" do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",1))_"^4",103) quit
+	. . . . set OrderedItem=$piece(orddet,"^"),reclocat=$piece(orddet,"^",2)
+	. . . . // order item subcategory type
+	. . . . set SubCatType=$$SubCatType^HL7Common11(OrderedItem)
+	. . . . if SubCatType="SUBCAT"!(SubCatType="EXECTYPE") do  quit
+	. . . . . set reject="No "_$select(SubCatType="SUBCAT":"sub-category setup against",1:"execution type setup against sub-category on")_" test "_$piece(tests,"^")_", order "_OrdNum do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",1))_"^4",207)
+	. . . . if SubCatType'="LAB" do
+	. . . . . // extract non-lab order collection date and time
+	. . . . . kill date("COL"),time("COL")
+	. . . . . set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",8)),date("COL")=$extract(datetime,1,8),time("COL")=$extract(datetime,9,12)
+	. . . . . if $data(date("COL")) set date("COL")=$select(date("COL")?8N:$$DateConv^HL7Common2(.reject,"EI",date("COL")),1:"")
+	. . . . . if $data(time("COL")) set time("COL")=$select(time("COL")?4N:$$TimeConv^HL7Common2("EI",$extract(time("COL"),1,2)_":"_$extract(time("COL"),3,4)),1:"")
+	
+	. . . . set specimen="" if SubCatType="LAB" do
+	. . . . . // add/update specimen, primary body site detail
+	. . . . . set specimen=$piece(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",15),"^") if $piece(specimen,"&")="" quit
+	. . . . . do Specimen^HL7Common9($piece(specimen,"&"),$piece(specimen,"&",2),OrderedItem)
+	
+	. . . . // extract priority
+	. . . . set priority="",priority=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ORC",7)),"^",6) if priority'="" do
+	. . . . . &SQL(SELECT OECPR_Desc INTO :priority FROM OEC_Priority WHERE OECPR_Code = :priority)
+	
+	. . . . set OrderRow=$$CheckLab^HL7Common1(OrdNum,FillerNum,intAdmNum,RegMrn,OrderedItem,.provider,reclocat,priority,"",.date,.time,$piece(specimen,"&"),"",AccessionNum)
+	. . . . set intOrdNum=$piece(OrderRow,"^"),OrderNew=$piece(OrderRow,"^",2),AccessionNumFail=$piece(OrderRow,"^",3)
+	. . . . if intOrdNum="",AccessionNumFail="IN-USE" do  quit
+	. . . . . set reject="Unable to add/update order "_OrdNum_", test "_tests_".  Accession number received "_AccessionNum_" already in use" do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",1))_"^4",207)
+	. . . . if intOrdNum="",AccessionNumFail="NOT-RECEIVED" do  quit
+	. . . . . set reject="Unable to add/update order "_OrdNum_", test "_tests_".  Valid accession number not received" do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",1))_"^4",207)
+	. . . . if intOrdNum="" do  quit
+	. . . . . set reject="Unable to add/update order "_OrdNum_", test "_tests do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",1))_"^4",207)
+	
+	. . . . // get external info system
+	. . . . set ExternalSys=$$ExternalSys^HL7Common1(intOrdNum,.reject)
+	. . . . if reject'="" do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",1))_"^4",207) quit
+	. . . . set ExternalType=$$ExternalType^HL7Common1(ExternalSys)
+	. . . . // get HL7 result type : AT - Atomic
+	. . . . //                       AI - Atomic & Image
+	. . . . //                       IM - Image
+	. . . . set ResultType=$$ResultType^HL7Common1(intOrdNum)
+	
+	. . . . // extract text result type
+	. . . . set TextType=""
+	. . . . if ResultType="IM"!(ResultType="AI") do  quit:reject'=""
+	. . . . . set TextType=$$TextType^HL7Common3(intOrdNum)
+	. . . . . if TextType="" set reject="No text result type setup against sub-category for image result on test "_$piece(tests,%1)_", order "_OrdNum do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",1))_"^4",207)
+	
+	. . . . set %routine=$$ResultFile^HL7Common1(ExternalSys)
+	
+	. . . . // extract test status
+	. . . . set TestStatus=$piece($get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",25)),"^")
+	. . . . if $length(%routine),prevStatus'="" do
+	. . . . . if $$ResultStatus^HL7Common8(%routine,prevStatus)="K",prevParent=1,parent=1 set TestStatus=prevStatus
+	
+	. . . . // perform result filing
+	. . . . if $length(%routine) xecute "d File^"_%routine_"("""_intOrdNum_""","""_TextType_""","""_tests_""","""_ResultType_""","""_TestStatus_""","""",.reject)"
+	. . . . if reject'="" quit
+.
+	. . . . // add accession number to new order only
+	. . . . if ExternalType="PACS",OrderNew="Y",AccessionNum'="" do OrderUpdate^HL7Common3(intOrdNum,"MF",AccessionNum,148)
+	. . . . // add filler number to order
+	. . . . if FillerNum'="" do OrderUpdate^HL7Common3(intOrdNum,"FN",FillerNum)
+	
+	. . . . // add/update specimen site detail
+	. . . . if SubCatType="LAB" do
+	. . . . . // add/update specimen on order
+	. . . . . set specimen=$piece(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",15),"^") if $piece(specimen,"&")'="" do
+	. . . . . . set sitecode=$piece(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",15),"^",4)
+	. . . . . . do OrderSpec^HL7Common9(intOrdNum,$piece(specimen,"&"),$piece(sitecode,"&"),$get(date("COL")),$get(time("COL")))
+	. . . . . set specsite=$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",15)),bodysite=$piece($piece(specsite,"^",4),"&",2),sitemod=$piece($piece(specsite,"^",5),"&",2)
+	. . . . . do OrderUpdate^HL7Common3(intOrdNum,"MF",bodysite_"^"_sitemod,"257^258")
+	
+	. . . . if SubCatType="LAB" do
+	. . . . . // update atomic lab episode request/received/collection date and time
+	. . . . . if ResultType="AT"!(ResultType="AI") do TestDateTime^HL7Common4,BuildEpisode^HL7Common4(OrdNum)
+	. . . . . // update lab order collection/received date and time
+	. . . . . do OrderUpdate^HL7Common3(intOrdNum,"MF",$select(OrderNew'="Y":$get(date("COL"))_"^"_$get(time("COL"))_"^",1:"")_$get(date("REC"))_"^"_$get(time("REC")),$select(OrderNew'="Y":"189^190^",1:"")_"218^219")
+	
+	. . . . if SubCatType'="LAB",OrderNew'="Y" do
+	. . . . . // update non-lab order collection date and time
+	. . . . . kill date,time
+	. . . . . set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",8)),date("COL")=$extract(datetime,1,8),time("COL")=$extract(datetime,9,12)
+	. . . . . if $data(date("COL")) set date("COL")=$select(date("COL")?8N:$$DateConv^HL7Common2(.reject,"EI",date("COL")),1:"")
+	. . . . . if $data(time("COL")) set time("COL")=$select(time("COL")?4N:$$TimeConv^HL7Common2("EI",$extract(time("COL"),1,2)_":"_$extract(time("COL"),3,4)),1:"")
+	. . . . . do OrderUpdate^HL7Common3(intOrdNum,"MF",$get(date("COL"))_"^"_$get(time("COL")),"189^190")
+	
+	. . . . // add referring dr
+	. . . . if $data(provider("R")) do OrderUpdate^HL7Common3(intOrdNum,"MF",$get(provider("R")),"259")
+	
+	. . . . // add HL7/order authorised date/time and status
+	. . . . set TStatus="" if $length(%routine) set TStatus=$$ResultStatus^HL7Common8(%routine,TestStatus)
+	. . . . set statusdesc=$select(TStatus'="":##class(websys.StandardTypeItem).GetDescriptionFromCode("ResultType",TStatus),1:TestStatus),SQLCODE=""
+	. . . . do OrderUpdate^HL7Common3(intOrdNum,"MF",statusdesc_"^"_$get(date("AUTH"))_"^"_$get(time("AUTH")),"262^263^264")
+	
+	. . . . set updhosp=$$Hospital^HL7Common9($piece($get(^TMP("HL7",$job,"MSH",3)),"^"),"R")
+	
+	. . . . // add order user/date/time update detail
+	. . . . do OrderUpdate^HL7Common3(intOrdNum,"MF",HL7("USER")_"^"_+$h_"^"_$piece($h,",",2)_"^"_updhosp,"141^192^193^223")
+	
+	. . . . // add result user/date/time/hospital update detail
+	. . . . do OrderUpdate^HL7Common3(intOrdNum,"MF",+$h_"^"_$piece($h,",",2)_"^"_HL7("USER")_"^"_updhosp,"250^251^252^253")
+	
+	. . . . // update order with updated fields
+	. . . . if $data(OrdDetail) do OrderUpdate^HL7Common3(intOrdNum,"","","",1) kill OrdDetail
+	
+	. . if x=0,'SQLCODE do AckNak^HL7AckNak("AR","No results sent for Patient Id <"_RegMrn_">",,"OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^4",100)
+	
+	// unlock all  - unable to unlock OEORD by itself
+	zdeallocate
+	
+	if $data(rejected) do  kill rejected
+	. set (drreject,reject)=""
+	. set rejtype="" for  set rejtype=$order(rejected(rejtype)) quit:rejtype=""  do
+	. . set rejectx="" for  set rejectx=$order(rejected(rejtype,rejectx)) quit:rejectx=""  do
+	. . . set drreject=drreject_$select($length(drreject):", ",1:"")_rejectx_" ("_rejected(rejtype,rejectx)_")"
+	. if $length(drreject) set reject=$select($length(reject):", ",1:"")_"Ordering dr/s "_drreject_" not found in Medtrak"
+	. do AckNak^HL7AckNak("AR",reject,"ORC^^12",101) set SQLCODE=100
+	
+	if 'SQLCODE do
+	. set forwardok=1
+	. do AckNak^HL7AckNak("AA")
+	quit
+	
+	// compare patient detail - special for SBAHC
+PatCheck(intid,extid,merge) set intid=$get(intid),extid=$get(extid),merge=$get(merge) set (HL7Surname,HL7Given,HL7Middle,SQLCODE)=""
+	
+	if intid'="",extid="" do
+	. &SQL(SELECT %ALPHAUP(PAPMI_Name),%ALPHAUP(PAPMI_Name4),%ALPHAUP(PAPMI_Name3), %INTERNAL(PAPMI_Dob), CTSEX_Code
+		INTO :surname, :given, :middle, :dob, :sex FROM PA_PatMas, CT_Sex
+		WHERE PAPMI_RowId = :intid AND CTSEX_RowID = PAPMI_Sex_DR)
+	if SQLCODE set reject="Unable to extract stored patient details for Patient Id (internal) "_intid,reject("Detail")="^^~207" quit 1
+	
+	if intid'="",extid'="" do
+	. &SQL(SELECT %ALPHAUP(PAPMI_Name),%ALPHAUP(PAPMI_Name4),%ALPHAUP(PAPMI_Name3), %INTERNAL(PAPMI_Dob), CTSEX_Code
+		INTO :surname, :given, :middle, :dob, :sex FROM PA_PatMas, CT_Sex
+		WHERE PAPMI_No = :extid AND CTSEX_RowID = PAPMI_Sex_DR)
+	if SQLCODE set reject="Unable to extract stored patient details for Patient Id (external) "_extid,reject("Detail")="^^~207" quit 1
+	// extract current details only - match cannot happen on merged patients as details from msg to actual patient may be different [Log 81320]
+	if merge="Y" quit 0
+	// check if matching on registration/med record number only
+	if $$Rules^HL7Common7(link)
+	if $get(RULES(11))="Y" quit 0
+	
+	set HL7Surname=$piece(^TMP("HL7",$job,cnt1,"PID",5),%1,1),HL7Given=$piece(^TMP("HL7",$job,cnt1,"PID",5),%1,2),HL7Middle=$piece(^TMP("HL7",$job,cnt1,"PID",5),%1,3)
+	
+	// check name
+	if ##class(%Collation).AlphaUp($translate($$BuildName^HL7Common3(surname,given,middle),%1))'=##class(%Collation).AlphaUp($translate($$BuildName^HL7Common3(HL7Surname,HL7Given,HL7Middle),%1)) do  quit 1
+	. set reject="Name sent for Patient Id "_extid_" does not match system details",reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^5~103"
+	
+	// check dob
+	if ^TMP("HL7",$job,cnt1,"PID",7)?8N,dob'=$$DateConv^HL7Common2(.reject,"EI",$extract(^TMP("HL7",$job,cnt1,"PID",7),1,8)) do  quit 1
+	. set reject="DOB sent for Patient Id "_extid_" does not match system details or was in an incorrect format",reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^7~103"
+	
+	// check sex
+	if sex'=$$Sex^HL7Common3(^TMP("HL7",$job,cnt1,"PID",8),"C") set reject="Sex sent for Patient Id "_extid_" does not match system details",reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^8~103" quit 1
+	
+	quit 0
+	
+CheckAdm	;; unsolicited result - find current admission number
+CreateAdm(reject) set (found,intAdmNum,AdmNum)=""
+	
+	// check 'I'npat and 'E'mergency episodes first
+	do
+	. for admtype="I","E" kill ^TMP($zname,$job,"Find-Adm",intRegMrn) do  quit:found
+	. . set intnum=0 for  set intnum=$order(^PAPERdr(intRegMrn,"ADM",admtype,intnum)) quit:intnum=""  do
+	. . . kill PAADM if $$SelectAdm(intnum) quit
+	. . . // do not include cancelled admission
+	. . . quit:$get(PAADM(25))="C"
+	. . . set admdate=$piece(PAADM(7),$char(1)),admtime=$piece(PAADM(8),$char(1)) if admtime="" set admtime=" "
+	. . . quit:admdate=""  set ^TMP($zname,$job,"Find-Adm",intRegMrn,admdate)=intnum
+	
+	. . set admdate="" for  set admdate=$order(^TMP($zname,$job,"Find-Adm",intRegMrn,admdate),-1) quit:admdate=""  do  quit:found
+	. . . set x=^TMP($zname,$job,"Find-Adm",intRegMrn,admdate),intnum=$piece(x,"^")
+	. . . if date("COL")>(admdate-1) set found=1
+	. . . if found set AdmNum=$piece(x,"^",2),intAdmNum=intnum
+	
+	. // check for default outpatient episode
+	. if 'found do
+	. . set intnum="" for  set intnum=$order(^PAADMi("RefDoc",intRegMrn,HL7("DEFREFDR"),intnum),-1) quit:intnum=""  do  quit:found
+	. . . kill PAADM if $$SelectAdm(intnum) quit
+	. . . quit:$get(PAADM(9))'=HL7("DEFADMTYPE")
+	. . . quit:$get(PAADM(5))'=HL7("DEFADMDEPT")
+	. . . set found=1,intAdmNum=intnum,AdmNum=$get(PAADM(2))
+	
+	. . // create default admission
+	. . if 'found do
+	. . . set AdmDate=+$h,AdmTime=$piece($h,",",2),HL7Flag="Y"
+	. . . set intAdmNum=$$ADMInsert^CPAAdm(intRegMrn,AdmDate,AdmTime,"",HL7("DEFADMDEPT"),HL7("DEFREFDR"),"","","","","","","",HL7("DEFADMTYPE"),"","","","","")
+	. . . kill HL7Flag
+	. . . if intAdmNum="" set reject="Unable to create/locate admission episode for unsolicited result order "_OrdNum_", Patient Id "_RegMrn do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,"",207)
+	. . . set AdmNum=$piece(^PAADM(intAdmNum),"^",81)
+	
+	kill ^TMP($zname,$job,"Find-Adm",intRegMrn)
+	quit
+	
+	// check admission date
+DateCheck(datetype) set datetype=$get(datetype)
+	if date(datetype)>(admdate-1) do
+	. if date(datetype)=admdate do  quit
+	. . if time(datetype)=""!(time(datetype)>(admtime-1)) set found=1
+	. set found=1
+	quit
+	
+	// select admission details
+SelectAdm(intnum) set intnum=$get(intnum)
+	&SQL(SELECT * INTO :PAADM() FROM PA_Adm WHERE PAADM_RowID =:intnum)
+	quit SQLCODE
+	
+	// log errors
+Error	if $zerror["READ"!$zerror["WRITE" set WriteRead=1
+	do AckNak^HL7AckNak("AR","TrakCare Cache Error","",207,"Cache Error: "_$zerror)
+	do BACK^%ETN set $ztrap="Error^"_$zname
+	set SQLCODE=100
+	quit
+
+
+

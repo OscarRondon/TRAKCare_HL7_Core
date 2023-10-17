@@ -1,0 +1,181 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract4^MAC^^^0
+HL7OutExtract4 // ML 03/06/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract4.rtn#1 $
+	quit
+	
+	// extract admission detail
+MRAdmDetail(intMRAdmNum,MRAdm) new (intMRAdmNum,MRAdm,old,curr) set intMRAdmNum=$get(intMRAdmNum)
+	&SQL(SELECT * INTO :MRAdm() FROM MR_Adm WHERE MRADM_RowId = :intMRAdmNum)
+	quit SQLCODE
+	
+	// extract diagnosis detail
+Diagnosis(intDiagNum,Diagnosis) new (intDiagNum,Diagnosis,old,curr) set intDiagNum=$get(intDiagNum)
+	&SQL(SELECT * INTO :Diagnosis() FROM MR_Diagnos WHERE MRDIA_RowId = :intDiagNum)
+	quit SQLCODE
+	
+	// extract diagnosis type detail
+DiagType(intDiagType,DiagType) new (intDiagType,DiagType,old,curr) set intDiagType=$get(intDiagType)
+	&SQL(SELECT * INTO :DiagType() FROM MR_DiagType WHERE TYP_RowId = :intDiagType)
+	quit SQLCODE
+	
+	// extract evolution detail
+Evolution(intMREvoNum,Evolution) new (intMREvoNum,Evolution) set intMREvoNum=$get(intMREvoNum)
+	&SQL(SELECT * INTO :Evolution() FROM MR_Evolution WHERE EVO_RowId = :intMREvoNum)
+	quit SQLCODE
+	
+	// extract procedure detail
+Procedure(intProcNum,Procedure) new (intProcNum,Procedure,old,curr) set intProcNum=$get(intProcNum)
+	&SQL(SELECT * INTO :Procedure() FROM MR_Procedures WHERE PROC_RowId = :intProcNum)
+	quit SQLCODE
+	// extract nursing notes detail
+NursingNotes(intNursing,Nursing) new (intNursing,Nursing) set intNursing=$get(intNursing)
+	&SQL(SELECT * INTO :Nursing() FROM MR_NursingNotes WHERE NOT_RowId = :intNursing)
+	quit SQLCODE
+	// extract present illness detail
+Illness(intIllness,Illness) new (intIllness,Illness) set intIllness=$get(intIllness)
+	&SQL(SELECT * INTO :Illness() FROM MR_PresentIllness WHERE PRESI_RowId = :intIllness)
+	quit SQLCODE
+	// extract DRG detail
+DRGDetail(intDRGNum,DRGDetail) new (intDRGNum,DRGDetail) set intDRGNum=$get(intDRGNum)
+	&SQL(SELECT * INTO :DRGDetail() FROM MRC_DRGCodes WHERE DRG_RowId = :intDRGNum)
+	quit SQLCODE
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable),(code,desc,other)=""
+	
+	if mtable="MR_Adm" do
+	. for i=14,15,44,45,46,53,55,58,63,65,90,91,93,99,100,108,116,137,138,139,140,141 if $get(MRAdm(i))'="" do  set MRAdm(i)=$select($get(MRAdm(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	. . set value=MRAdm(i) quit:value=""""""
+	. . if i=14 do
+	. . . &SQL(SELECT DISCON_Code, DISCON_Desc INTO :code, :desc FROM PAC_DischCondit WHERE DISCON_RowId = :value)
+	. . if i=15 do
+	. . . &SQL(SELECT CTDSP_Code, CTDSP_Desc INTO :code, :desc FROM CT_Disposit WHERE CTDSP_RowId = :value)
+	. . if i=44 do
+	. . . &SQL(SELECT COND_Code, COND_Desc INTO :code, :desc FROM MRC_PatientCondition WHERE COND_RowId = :value)
+	. . if i=45 do
+	. . . set detail=##class(web.PACVisitorStatus).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=46 do
+	. . . &SQL(SELECT DRG_Code, DRG_Desc INTO :code, :desc FROM MRC_DRGCodes WHERE DRG_RowId = :value)
+	. . if i=53 do
+	. . . set detail=##class(web.PACTransferMeans).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=55 do
+	. . . &SQL(SELECT DDEST_Code, DDEST_Desc INTO :code, :desc FROM PAC_DischargeDestination WHERE DDEST_RowId = :value)
+	. . if i=58 do
+	. . . &SQL(SELECT DSCL_Code, DSCL_Desc INTO :code, :desc FROM PAC_DischClassification WHERE DSCL_RowId = :value)
+	. . if i=63 do
+	. . . &SQL(SELECT CARETYP_Code, CARETYP_desc INTO :code, :desc FROM PAC_CareType WHERE CARETYP_RowId = :value)
+	. . if i=65 do
+	. . . &SQL(SELECT PFS_Code, PFS_Desc INTO :code, :desc FROM PAC_ProgramFundingSource WHERE PFS_RowId = :value)
+	. . if i=90 do
+	. . . &SQL(SELECT TRD_Code, TRD_Desc INTO :code, :desc FROM PAC_TransferDestination WHERE TRD_RowId = :value)
+	. . if i=91 do
+	. . . &SQL(SELECT RETRA_Code, RETRA_Desc INTO :code, :desc FROM PAC_ReasonForTransfer WHERE RETRA_RowId = :value)
+	. . if i=93 do
+	. . . &SQL(SELECT REFDEP_Code, REFDEP_Desc INTO :code, :desc FROM PAC_ReferredDeparture WHERE REFDEP_RowId = :value)
+	. . if i=99 do
+	. . . set detail=##class(web.PACVisitType).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=100 do
+	. . . &SQL(SELECT TRD_Code, TRD_Desc INTO :code, :desc FROM PAC_TransferDestination WHERE TRD_RowId = :value)
+	. . if i=108 do
+	. . . &SQL(SELECT CONST_Code, CONST_Desc INTO :code, :desc FROM MRC_ConsciousState WHERE CONST_RowId = :value)
+	. . if i=116 do
+	. . . &SQL(SELECT TRANSF_Code, TRANSF_Desc INTO :code, :desc FROM PAC_Transferring WHERE TRANSF_RowId = :value)
+	. . if i=137 do
+	. . . &SQL(SELECT OTHCON_Code, OTHCON_Desc INTO :code, :desc FROM PAC_OtherConditions WHERE OTHCON_RowId = :value)
+	. . if i=138 do
+	. . . &SQL(SELECT IVT_Code, IVT_Desc INTO :code, :desc FROM PAC_IVTherapy WHERE IVT_RowId = :value)
+	. . if i=139 do
+	. . . &SQL(SELECT VENT_Code, VENT_Desc INTO :code, :desc FROM PAC_Ventilation WHERE VENT_RowId = :value)
+	. . if i=140 do
+	. . . set detail=##class(web.PACIsolation).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . if i=141 do
+	. . . set detail=##class(web.PACDrainTubes).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	. . . set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(MRAdm(""),-1) if $data(MRAdm(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",14,15,44,45,46,53,55,58,63,65,90,91,93,99,100,108,116,137,138,139,140,141,"[(","_i_",") quit
+	. . set MRAdm(i)=$$TextConversion^HL7Common12(MRAdm(i),"O")
+	
+	if mtable="MR_Diagnos" do
+	. for i=4 if $get(Diagnosis(i))'="" do  set Diagnosis(i)=$select($get(Diagnosis(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	. . set value=Diagnosis(i) quit:value=""""""
+	. . if i=4 do
+	. . . &SQL(SELECT MRCID_Code, MRCID_Desc INTO :code, :desc FROM MRC_ICDDx WHERE MRCID_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(Diagnosis(""),-1) if $data(Diagnosis(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",4,"[(","_i_",") quit
+	. . set Diagnosis(i)=$$TextConversion^HL7Common12(Diagnosis(i),"O")
+	
+	if mtable="MR_DiagType" do
+	. for i=3 if $get(DiagType(i))'="" do  set DiagType(i)=$select($get(DiagType(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	. . set value=DiagType(i) quit:value=""""""
+	. . if i=3 do
+	. . . &SQL(SELECT DTYP_Code, DTYP_Desc INTO :code, :desc FROM MRC_DiagnosType WHERE DTYP_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(DiagType(""),-1) if $data(DiagType(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",3,"[(","_i_",") quit
+	. . set DiagType(i)=$$TextConversion^HL7Common12(DiagType(i),"O")
+	
+	if mtable="MR_Procedures" do
+	. for i=3 if $get(Procedure(i))'="" do  set Procedure(i)=$select($get(Procedure(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	. . set value=Procedure(i) quit:value=""""""
+	. . if i=3 do
+	. . . &SQL(SELECT OPER_Code, OPER_Desc INTO :code, :desc FROM ORC_Operation WHERE OPER_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(Procedure(""),-1) if $data(Procedure(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",3,"[(","_i_",") quit
+	. . set Procedure(i)=$$TextConversion^HL7Common12(Procedure(i),"O")
+	if mtable="MR_NursingNotes" do
+	. for i=8,9 if $get(Nursing(i))'="" do  set Nursing(i)=$select($get(Nursing(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	. . set value=Nursing(i) quit:value=""""""
+	. . if i=8 do
+	. . . &SQL(SELECT CNT_Code, CNT_Desc INTO :code, :desc FROM MRC_ClinNotesType WHERE CNT_RowId = :value)
+	. . if i=9 do
+	. . . &SQL(SELECT NNS_Code, NNS_Desc INTO :code, :desc FROM MRC_NursingNotesStatus WHERE NNS_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(Nursing(""),-1) if $data(Nursing(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",8,9,"[(","_i_",") quit
+	. . set Nursing(i)=$$TextConversion^HL7Common12(Nursing(i),"O")
+	if mtable="MR_PresentIllness" do
+	. for i=10,11 if $get(Illness(i))'="" do  set Illness(i)=$select($get(Illness(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	. . set value=Illness(i) quit:value=""""""
+	. . if i=10 do
+	. . . &SQL(SELECT DSTAT_Code, DSTAT_Desc INTO :code, :desc FROM MRC_DiagnosStatus WHERE DSTAT_RowId = :value)
+	. . if i=11 do
+	. . . &SQL(SELECT MRCID_Code, MRCID_Desc INTO :code, :desc FROM MRC_ICDDx WHERE MRCID_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(Illness(""),-1) if $data(Illness(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",10,11,"[(","_i_",") quit
+	. . set Illness(i)=$$TextConversion^HL7Common12(Illness(i),"O")
+	if mtable="MRC_DRGCodes" do
+	. for i=4 if $get(DRGDetail(i))'="" do  set DRGDetail(i)=$select($get(DRGDetail(i))="""""":"""""",1:code_"^"_desc_$select(other'="":"^"_other,1:"")),(code,desc,other)=""
+	. . set value=DRGDetail(i) quit:value=""""""
+	. . if i=4 do
+	. . . &SQL(SELECT DRGTYP_Code, DRGTYP_Desc INTO :code, :desc FROM MRC_DRGType WHERE DRGTYP_RowId = :value)
+	. . // convert escape characters
+	. . for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. for i=1:1:$order(DRGDetail(""),-1) if $data(DRGDetail(i)) do
+	. . // exclude code table entries and list build fields
+	. . if ",4,"[(","_i_",") quit
+	. . set DRGDetail(i)=$$TextConversion^HL7Common12(DRGDetail(i),"O")
+	quit
+
+
+

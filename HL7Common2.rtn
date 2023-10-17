@@ -1,0 +1,375 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Common2^MAC^^^0
+HL7Common2 // ML 11/6/02 ; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common2.rtn#1 $
+	quit
+	
+	// extract internal/external registration numbers
+RegNum(reject,event,hospcheck,partialmatch) new (link,HL7,PatNum,reject,event,hospcheck,partialmatch,DATA,cnt1,version,%,%1,%2,%3,%4,%5)
+	set event=$get(event),hospcheck=$get(hospcheck),partialmatch=$get(partialmatch),cnt1=$get(cnt1),(RegMrn,intRegMrn,othermatch,reject,rejtype)=""
+	
+	for type="INT","REG" if $data(PatNum(type)) do  quit:RegMrn'=""  quit:foundnum=1
+	. set foundnum=""
+	. do NumTypeDetail(PatNum(type),.seg,.field,"","","","",.usetype,.usecode)
+	. set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+	. for i=1:1:$length(numbers,"~") set number=$piece(numbers,"~",i) do  quit:foundnum=1
+	. . if $piece($piece(number,"^",usetype),"&")'=usecode!($piece(number,"^")="") quit
+	. . set num=$piece(number,"^")
+	
+	. . // registration number
+	. . if type="REG" do  if intRegMrn'="" set RegMrn=num
+	. . . set RegMrn=num
+	. . . set intRegMrn=$$intRegMrn(num) if intRegMrn="" set reject="Patient Id "_num_" is not known to MedTrak",reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~204",rejtype="REG" quit
+	. . . if event="A28" set reject="Registration number "_RegMrn_" already exists",reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~205",rejtype="REG" quit
+	. . . set foundnum=1,reject=""
+	
+	. . // internal pat number
+	. . if type="INT" do
+	. . . if $data(^PAPER(num)) do  quit
+	. . . . set RegMrn=$$extRegMrn(num)
+	. . . . if event="A28" set reject=$select(RegMrn="":"Internal Patient Id "_num,1:"Registration number "_RegMrn)_" already exists",reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~205",rejtype="INT" quit
+	. . . . set intRegMrn=num,foundnum=1
+	. . . else  set reject="Internal Patient Id "_num_" is not known to MedTrak",reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~204",rejtype="INT" quit
+	
+	// hospital/ur/med record number
+	if (RegMrn=""!(intRegMrn="")),$data(PatNum("HOSP")) do
+	. if event="A28",RegMrn'="",intRegMrn="" quit
+	. if event="A31",intRegMrn="" set RegMrn=""
+	. do NumTypeDetail(PatNum("HOSP"),.seg,.field,.asstype,"","",.idmrtype,.usetype,.usecode)
+	. set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+	. for i=1:1:$length(numbers,"~") set number=$piece(numbers,"~",i) do  quit:intRegMrn'=""
+	. . set found="" if idmrtype="Y" do  if 'found quit
+	. . . set usecode=$piece($piece(number,"^",usetype),"&") if usecode'="",$data(^RTC("TYPE",0,"Code",usecode)) set found=1
+	. . if idmrtype'="Y",$piece($piece(number,"^",usetype),"&")'=usecode!($piece(number,"^")="") quit
+	. . set num=$piece(number,"^")
+	. . set mrtype=$$MedRecType^HL7Common5(.reject,$piece($piece(number,"^",asstype),"&"),idmrtype,usecode,num) if reject'="" set reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~204",rejtype="HOSP" quit
+	. . set intHospMrn=$$intHospMrn(num,mrtype) if intHospMrn="" set reject="Hospital number "_num_" is not known to Medtrak",reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~204",rejtype="HOSP" quit
+	. . set intRegMrn=$piece(^RT(intHospMrn),"^",2) if intRegMrn="" set reject="Unable to find registration number for hospital number "_num,reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~204",rejtype="HOSP" quit
+	. . set RegMrn=$$extRegMrn(intRegMrn)
+	. . if event="A28" set reject="Hospital number "_num_" of type "_$piece($piece(number,"^",usetype),"&")_" already exists",reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~205",rejtype="HOSP"
+	
+	// check other patient number type and extract registration number
+	if (RegMrn=""!(intRegMrn="")) do
+	. if event="A28" quit
+	. if event="A08",RegMrn'="",intRegMrn="" quit
+	. for type="CHINHS","DVA","GOV","MC" if $data(PatNum(type)) do  if intRegMrn'=""!(RegMrn'="") quit
+	. . do NumTypeDetail(PatNum(type),.seg,.field,"","","","",.usetype,.usecode)
+	. . set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+	. . for i=1:1:$length(numbers,"~") set number=$piece(numbers,"~",i) do  quit:RegMrn'=""  quit:reject'=""
+	. . . if $piece($piece(number,"^",usetype),"&")'=usecode!($piece(number,"^")="") quit
+	. . . set num=$piece(number,"^"),num=$$extNumRegMrn(num,type,event)
+	. . . set RegMrnx=$piece(num,"|"),intRegMrnx=$piece(num,"|",2) if intRegMrnx'="" set othermatch="Y"
+	. . . set RegMrn=$select(RegMrnx="":RegMrn,1:RegMrnx),intRegMrn=$select(intRegMrnx="":"",1:intRegMrnx)
+	
+	if intRegMrn="",reject="",event'="A28" do  quit ""
+	. set reject="Unable to find registration number based on the number list received",reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^3~207"
+	
+	// return RegMrn without 'msg' set for these events : A08 - update patient information
+	//													 A28 - add person information
+	if intRegMrn'="",event'="A28" set (reject,reject("Detail"))=""
+	if intRegMrn="",event="A28" set (reject,reject("Detail"))=""
+	if rejtype'="HOSP",event="A08" set (reject,reject("Detail"))=""
+	
+	quit RegMrn_"|"_intRegMrn_"|"_othermatch
+	
+	// extract number type detail
+NumTypeDetail(detail,seg,field,asstype,asscode,idcode,idmrtype,usetype,usecode,expfield,expformat,cardtype) new (detail,seg,field,asstype,asscode,idcode,idmrtype,usetype,usecode,expfield,expformat,cardtype)
+	set detail=$get(detail),(seg,field,asstype,asscode,idcode,idmrtype,usetype,usecode,expfield,expformat)=""
+	set seg=$piece(detail,"^"),field=$piece(detail,"^",2),asstype=$piece(detail,"^",3),asscode=$piece(detail,"^",4),idcode=$piece(detail,"^",5),idmrtype=$piece(detail,"^",6),expdate=$piece(detail,"^",7),expfield=$piece(detail,"^",8),expformat=$piece(detail,"^",10),cardtype=$piece(detail,"^",11)
+	set expfield=$select(expfield'?1.5N:"",expdate'="Y":"",1:expfield)
+	if expdate="Y",expformat="" set expformat="YYYYMMDD"
+	if expdate'="Y" set expfield=""
+	if asscode="",idcode'=""!(idmrtype="Y") set usecode=idcode,usetype=5 quit
+	if asscode'="" set usecode=asscode,usetype=asstype
+	quit
+	
+	// extract number from segment ONLY
+ExtractNumber(PatRef,type) set PatRef=$get(PatRef),type=$get(type),number=""
+	
+	if PatRef=""!(type="") quit ""
+	
+	// extract patient related numbers
+	if PatRef="P" do
+	. // check if hospital mrn
+	. if type="HOSP",$data(PatNum(type)) do  quit
+	. . do NumTypeDetail^HL7Common2(PatNum(type),.seg,.field,.asstype,"","",.idmrtype,.usetype,.usecode)
+	. . kill HospMrn set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+	. . for i=1:1:$length(numbers,"~") if $piece($piece(numbers,"~",i),"^")'="" do  quit:number'=""
+	. . . set found="" if idmrtype="Y" do  quit:'found
+	. . . . set usecode=$piece($piece($piece(numbers,"~",i),"^",usetype),"&") if usecode'="",$data(^RTC("TYPE",0,"Code",usecode)) set found=1
+	. . . if idmrtype'="Y",$piece($piece($piece(numbers,"~",i),"^",usetype),"&")'=usecode quit
+	. . . set number=$piece($piece(numbers,"~",i),"^")
+	
+	. // check for all other number types
+	. if type'="HOSP",$data(PatNum(type)) do
+	. . do NumTypeDetail^HL7Common2(PatNum(type),.seg,.field,"","","","",.usetype,.usecode,.expfield)
+	. . set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+	. . if field'=2,field'=3 do  quit
+	. . . set number=$piece(numbers,"^")
+	. . for i=1:1:$length(numbers,"~") if $piece($piece($piece(numbers,"~",i),"^",usetype),"&")=usecode do  quit:number'=""
+	. . . set number=$piece($piece($piece(numbers,"~",i),"^"),"&")
+	
+	// extract referral related numbers
+	if PatRef="R",$data(RefNum(type)) do
+	. do NumTypeDetail^HL7Common2(RefNum(type),.seg,.field,"","","","",.usetype,.usecode,.expfield)
+	. set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+	. if usetype="" set number=$piece($piece(numbers,"^"),"~") quit
+	. for i=1:1:$length(numbers,"~") if $piece($piece($piece(numbers,"~",i),"^",usetype),"&")=usecode do
+	. . set number=$piece($piece($piece(numbers,"~",i),"^"),"&")
+	
+	quit number
+	
+	// get all external registration numbers for patient number type
+extNumRegMrn(id,numtype,event) set idx=##class(%Collation).AlphaUp($get(id)),event=$get(event),(extid,intid)="" kill ^TMP($zname,$job,"NatReg")
+	if idx="" quit extid_"|"_intid
+	
+	set index=$select(numtype="CHINHS":"PAPMI_ICPPBC",numtype="GOV":"Govern",numtype="DVA":"DVA",1:"Medicare")
+	set idx=$select(numtype="DVA":idx,1:idx_"Z")
+	
+	set rowid="" for  set rowid=$order(^PAPERi(index,idx,rowid)) quit:rowid=""  do
+	. set ^TMP($zname,$job,"NatReg",rowid)=""
+	
+	// check for merges
+	kill merged set intid="" for  set intid=$order(^TMP($zname,$job,"NatReg",intid)) quit:intid=""  do
+	. set masterid=$$patto^CPAPerson(intid),merged(masterid,intid)=""
+	set (mastercnt,masterid)="" for  set masterid=$order(merged(masterid)) quit:masterid=""  set mastercnt=mastercnt+1
+	if mastercnt>1 set reject="More than one match found for received Patient Id "_id_", number type '"_##class(websys.StandardTypeItem).GetDescription("HL7PatientNumberTypes",numtype)_"'",reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^"_field_"~207" quit ""
+	
+	set firstfound="N" if event="A31"!(event="A08")!(event="A40") set firstfound="Y"
+	
+	// match on patient details
+	set rejfield="" if firstfound="N" do
+	. set (found,intid)="" set intid=$order(merged("")) quit:intid=""  do
+	. . // check patient details - ignore rejections
+	. . if $$PatCheck^HL7Common3(intid,"",partialmatch) quit
+	. . set found=1,extid=$$extRegMrn(intid)
+	. if found set reject="" kill reject("Detail")
+	. if 'found,(event="R01"!(event="O01")) set reject="Unable to match patient details sent with Patient Id "_id_" to system details",reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^"_rejfield_"~207"
+	if $get(reject)'="" quit ""
+	
+	// first patient to be used
+	if firstfound="Y" do
+	. set intid=$order(^TMP($zname,$job,"NatReg","")) quit:intid=""
+	. set extid=$$extRegMrn(intid)
+	
+	if extid'=""!(intid'="") set reject=""
+	
+	kill ^TMP($zname,$job,"NatReg"),merged
+	quit extid_"|"_intid
+	
+	// get and check admission number
+AdmNum(reject,notreject) set (intAdmNum,AdmDetail)="",notreject=$get(notreject)
+	set AdmFlag=HL7("INT-ADM-NUM")
+	if AdmNum'="" set intAdmNum=$$intAdmNum(AdmNum,intRegMrn,HL7("INT-ADM-NUM"))
+	if AdmNum'="",intAdmNum="",'notreject do  quit
+	. set reject="Received "_$select(HL7("INT-ADM-NUM")="Y":"internal admission number ",1:"admission number ")_AdmNum_" does not exist on received Patient Id "_RegMrn,reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~207"
+	// check if order exists and get admission details
+	if AdmNum="" do  if AdmNum="none" quit
+	. set AdmDetail=$$GetAdm(OrdNum),AdmNum=$piece(AdmDetail,"^"),intAdmNum=$piece(AdmDetail,"^",2),AdmFlag=""
+	set (admfnd,atype)=""
+	for  set atype=$order(^PAPERdr(intRegMrn,"ADM",atype)) quit:atype=""  if $data(^PAPERdr(intRegMrn,"ADM",atype,intAdmNum)) set admfnd=1
+	if admfnd'=1 do  quit
+	. set reject="Order Number "_OrdNum_" received was found on "_$select(AdmFlag="Y":"internal admission number ",1:"admission number ")_AdmNum_", which does not exist on received Patient Id "_RegMrn,reject("Detail")=""
+	quit
+	
+	// get admission number from external reference number
+GetAdm(ExtNum) new (ExtNum) set ExtNum=$get(ExtNum)
+	set intOrdNum=$order(^OEORD(0,"EpisNo",ExtNum,""),-1) if intOrdNum="" quit "none"
+	set intAdmNum=$piece($get(^OEORD(intOrdNum)),"^") if intAdmNum="" quit "none"
+	set num=$$extAdmNum(intAdmNum)
+	quit num_"^"_intAdmNum
+	
+	// get and check order number
+OrdNum(existord,reject) set existord=$get(existord),OrdNum1=""
+	
+	// no order number - use accession number
+	if OrdNum="",AccessionNum'="" set OrdNum=$$FillerPlacer("","","",AccessionNum)
+	if OrdNum="" set OrdNum=AccessionNum
+	
+	// no order number - use filler order number
+	if OrdNum="" set OrdNum=$$FillerPlacer("",FillerNum)
+	if OrdNum="" set OrdNum=FillerNum
+	
+	// if order number doesn't exist, use filler to get correct number
+	if OrdNum'="",'$data(^OEORD(0,"EpisNo",OrdNum)),existord="Y" do
+	. if AccessionNum'="" set OrdNum1=$$FillerPlacer("","","",AccessionNum)
+	. if FillerNum'="",OrdNum1="" set OrdNum1=$$FillerPlacer("",FillerNum)
+	. if OrdNum1'="" set OrdNum=OrdNum1
+	
+	// check if order number has been sent on correct patient
+	if OrdNum'="",($extract(OrdNum,1,3)'="Unk")!($extract(OrdNum,1,3)'="UNK")!($extract(OrdNum,1,3)'="""")!($extract(OrdNum,1,3)'="""""") do  if reject'="" quit
+	. set reject=""
+	. // order does not yet exist
+	. set intOrdNum=$order(^OEORD(0,"EpisNo",OrdNum,""),-1) if intOrdNum="" quit
+	. set adm=$piece($get(^OEORD(intOrdNum)),"^")
+	. // based on admission number, get internal rego number and check against one sent
+	. if '$data(^PAADM(adm)) do  quit
+	. . set reject="Unable to match existing Order Id "_OrdNum_" to an admission for Patient Id "_RegMrn,reject("Detail")="OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^2~207"
+	. if $piece(^PAADM(adm),"^")'=intRegMrn do  quit
+	. . set reject="Patient Id "_RegMrn_" sent does not match the Patient Id against admission episode "_$piece($get(^PAADM(adm)),"^",81)_" for Order Id "_OrdNum,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^"_$piece($get(PatNum("REG")),"^",2)_"~207"
+	
+	// no order number sent
+	if OrdNum="" do  quit
+	. set reject="No Order Id received",reject("Detail")="OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^2~101"
+	// invalid order number sent
+	if $extract(OrdNum,1,3)="Unk"!($extract(OrdNum,1,3)="UNK") do  quit
+	. set reject="Invalid Order Id "_OrdNum_" received",reject("Detail")="OBR^"_$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",1))_"^2~204"
+	quit
+	
+	// extract order number using filler/placer
+FillerPlacer(intOrdNum,filler,placer,accession) new (intOrdNum,filler,placer,accession)
+	set intOrdNum=$get(intOrdNum),filler=$get(filler),placer=$get(placer),accession=$get(accession),ordnum=""
+	
+	// get order number if accession/filler/placer number exists
+	if $get(accession)'="" do
+	. &SQL(SELECT OEORI_LabEpisodeNo INTO :ordnum FROM OE_OrdItem WHERE OEORI_AccessionNumber = :accession AND OEORI_LabEpisodeNo IS NOT NULL ORDER BY OEORI_OEORD_ParRef DESC)
+	if $get(filler)'="",ordnum="" do
+	. &SQL(SELECT OEORI_LabEpisodeNo INTO :ordnum FROM OE_OrdItem WHERE OEORI_FillerNo = :filler AND OEORI_LabEpisodeNo IS NOT NULL ORDER BY OEORI_OEORD_ParRef DESC)
+	if $get(placer)'="",ordnum="" do
+	. &SQL(SELECT OEORI_LabEpisodeNo INTO :ordnum FROM OE_OrdItem WHERE OEORI_PlacerNo = :placer AND OEORI_LabEpisodeNo IS NOT NULL ORDER BY OEORI_OEORD_ParRef DESC)
+	
+	quit ordnum
+	
+	// extract the lab episode test rowid
+LabTestRowId(intOrdNum) new (intOrdNum,LabTestRowId) set intOrdNum=$get(intOrdNum),LabTestRowId=""
+	&SQL(SELECT OEORI_LabTestSetRow INTO :LabTestRowId FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	quit LabTestRowId
+	
+	// get internal id for order number
+intOrdNum(id)	new (id) set id=##class(%Collation).AlphaUp($get(id)),intid=""
+	&SQL(SELECT OEORI_RowId INTO :intid FROM OE_OrdItem WHERE OEORI_LabEpisodeNo = :id)
+	quit intid
+	
+	// get external order number for internal id
+extOrdNum(id) new (id) set id=$get(id),extid=""
+	&SQL(SELECT OEORI_LabEpisodeNo INTO :extid FROM OE_OrdItem WHERE OEORI_RowId = :id)
+	quit extid
+	
+	// get internal id for admission number
+intAdmNum(id,intRegMrn,internalnum)	new (id,intRegMrn,internalnum) set id=##class(%Collation).AlphaUp($get(id)),intRegMrn=$get(intRegMrn),internalnum=$get(internalnum),intid=""
+	if id="" quit ""
+	if internalnum="Y" do
+	. if intRegMrn="" do
+	. . if $data(^PAADM(id)) set intid=id
+	. if intRegMrn'="" do
+	. . if $data(^PAADM(id)),$piece($get(^PAADM(id)),"^")=intRegMrn set intid=id
+	if internalnum'="Y" do
+	. if intRegMrn="" do
+	. . &SQL(SELECT PAADM_RowId INTO :intid FROM PA_Adm WHERE PAADM_ADMNo = :id)
+	. if intRegMrn'="" do
+	. . &SQL(SELECT PAADM_RowId INTO :intid FROM PA_Adm WHERE PAADM_ADMNo = :id AND PAADM_PAPMI_DR = :intRegMrn)
+	. if SQLCODE set intid=""
+	quit intid
+	
+	// get external admission number for internal id
+extAdmNum(id) new (id) set id=$get(id),extid=""
+	&SQL(SELECT PAADM_ADMNo INTO :extid FROM PA_Adm WHERE PAADM_RowId = :id)
+	quit extid
+	// get internal id for MR admission
+intMRAdm(intAdmNum) new (intAdmNum) set intAdmNum=$get(intAdmNum),intid=""
+	&SQL(SELECT PAADM_MainMRADM_DR INTO :intid FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+	quit intid
+	// get internal id for waitlist number
+intWaitListNum(id) new (id) set id=##class(%Collation).AlphaUp($get(id)),intid=""
+	&SQL(SELECT WL_RowId INTO :intid FROM PA_WaitingList WHERE WL_NO = :id)
+	quit intid
+	
+	// get internal id for operation number
+intOperNum(id) new (id) set id=$get(id),intid=""
+	&SQL(SELECT ANAOP_RowId INTO :intid FROM OR_Anaest_Operation WHERE ANAOP_No = :id)
+	quit intid
+	
+	// get internal id for hospital mrn
+intHospMrn(id,type)	new (id,type) set id=##class(%Collation).AlphaUp($get(id)),type=$get(type),intid=""
+	if type="" do
+	. &SQL(SELECT RTMAS_RowId INTO :intid FROM RT_Master WHERE RTMAS_MRNo = :id)
+	if type'="" do
+	. &SQL(SELECT RTMAS_RowId INTO :intid FROM RT_Master WHERE RTMAS_MRNo = :id AND RTMAS_MRType_DR = :type)
+	quit intid
+	
+	// extract rowid of hospital number for a given registration number
+intHospRegMrn(HospMrn,intRegMrn) new (HospMrn,intRegMrn) set HospMrn=$get(HospMrn),intRegMrn=$get(intRegMrn),intid=""
+	&SQL(SELECT RTMAS_RowId INTO :intid FROM RT_Master WHERE RTMAS_MRNo = :HospMrn AND RTMAS_PatNo_Dr = :intRegMrn)
+	quit intid
+	
+	// extract rowid of registration number for a given hospital number rowid
+intRegMrnHosp(intHospMrn) new (intHospMrn) set intHospMrn=$get(intHospMrn),intid=""
+	&SQL(SELECT RTMAS_PatNo_DR INTO :intid FROM RT_Master WHERE RTMAS_RowId = :intHospMrn)
+	quit intid
+	
+	// get internal id for registration number
+intRegMrn(id)	new (id) set id=##class(%Collation).AlphaUp($get(id)),intid=""
+	&SQL(SELECT PAPMI_RowId INTO :intid FROM PA_PatMas WHERE PAPMI_No = :id)
+	quit intid
+	
+	// get external registration number for internal id
+extRegMrn(id)	new (id) set id=$get(id),extid=""
+	&SQL(SELECT PAPMI_No INTO :extid FROM PA_PatMas WHERE PAPMI_RowId = :id)
+	quit extid
+	
+	// update registration number
+updRegMrn(id,number)	new (id,number) set id=$get(id),number=$get(number)
+	set (pPLIST(8),pPLIST(9))=number,HL7Flag="Y"
+	&SQL(UPDATE PA_PatMas VALUES :pPLIST() WHERE PAPMI_RowId = :id)
+	kill HL7Flag
+	quit 0
+	
+	// compile date/time field
+DateTime(date,time,timereq,timelen) new (date,time,timereq,timelen) set date=$get(date),time=$get(time),timereq=$get(timereq),timelen=$get(timelen)
+	set datetime="" if timelen="" set timelen=6
+	
+	if date'="" set date=$select(date="""""":"""""",1:$$DateConv(.reject,"IE",date,"B"))
+	set time=$translate($$TimeConv("IE",time),":") if date?8N,time="",timereq="Y" set time="000000"
+	if time'="" set time=$extract(time_"00",1,timelen)
+	
+	quit date_time
+	
+	// convert date - method : EI - external to internal
+	//						  IE - internal to external
+	//			   - format : B  - backwards
+	//							 - normal
+DateConv(reject,method,date,format,field)
+	new (method,date,format,reject,field,link)
+	set method=$get(method),date=$get(date),format=$get(format),field=$get(field),(datex,reject)="",link=$get(link)
+	if date="" quit ""
+	
+	// ab 22.06.08 67901
+	set ReplaceDayMonth=""
+	if link'="" set ReplaceDayMonth=$piece($get(^SSHL7(link,"RULES",1)),"^",12)
+	
+	if method="EI",date?8N do
+	. set yyyy=$extract(date,1,4) if yyyy<1841 set reject=$select(field'="":field_": ",1:"")_"Invalid year "_yyyy_" received, must be greater than 1840." quit
+	. if $translate(date," ")=""!($translate(date," ")="00000000") quit
+	. set mm=$extract(date,5,6)
+	. if ReplaceDayMonth="Y",mm="00" set (mm,$extract(date,5,6))="01"
+	. if mm<"01"!(mm>"12") set reject=$select(field'="":field_": ",1:"")_"Invalid month "_mm_" received." quit
+	. set dd=$extract(date,7,8)
+	. if ReplaceDayMonth="Y",dd="00" set (dd,$extract(date,7,8))="01"
+	. do  if reject'="" quit
+	. . set day=$select(mm="01":31,mm="03":31,mm="04":30,mm="05":31,mm="06":30,mm="07":31,mm="08":31,mm="09":30,mm="10":31,mm="11":30,mm="12":31,1:"")
+	. . if mm="02" set day=$select($$LEAP^%DATE(yyyy)=1:29,1:28)
+	. . if dd<"00"!(dd>day) set reject=$select(field'="":field_": ",1:"")_"Invalid day "_dd_" received." quit
+	. set datex=$zdateh(date,8)
+	if method="EI",date'?8N set reject="Invalid date format received "_date_". Must be in the format of YYYYMMDD"
+	if method="IE" do
+	. if format="B" set datex=$zdate(date,8) quit
+	. set datex=$zdate(date,4) if $length($piece(datex,"/",3))'=4 set datex=$piece(datex,"/",1,2)_"/19"_$piece(datex,"/",3)
+	quit datex
+	
+	// convert time - method : EI - external to internal
+	//						  IE - internal to external
+TimeConv(method,time)	new (method,time) set method=$get(method),time=$get(time),timex=""
+	if method="EI",$translate(time,":")'="" do
+	. set timex=##class(websys.Conversions).TimeHtmlToLogical(time)
+	if method="IE" do
+	. set timex=##class(websys.Conversions).TimeLogicalToHtml(time)
+	quit timex
+	
+	// labtrak or external lab system used
+LabSystem()	new  set external="N",rowid=1
+	&SQL(SELECT SMCF_LinkExtLab INTO :external FROM CF_SM WHERE SMCF_RowId = :rowid)
+	quit external
+
+
+

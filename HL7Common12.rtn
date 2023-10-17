@@ -1,0 +1,94 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Common12^MAC^^^0
+HL7Common12	// ML 13/7/2005 ; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common12.rtn#1 $
+	quit
+ 
+	// convert delimiters in text to escape sequence
+TextConversion(text,direction) new (text,direction) set text=$get(text),direction=$get(direction)
+ 
+	// convert delimiters for inbound messages
+	if direction="I" do
+	.for delim="\E\","\F\","\R\","\S\","\T\","\H\","\N\" do
+	..if text'[delim quit
+	..for  do  if text'[delim quit
+	...set text=$piece(text,delim)_$select(delim="\F\":"|",delim="\S\":"^",delim="\R\":"~",delim="\E\":"\",delim="\T\":"&",1:"")_$piece(text,delim,2,999)
+ 
+	// convert delimiters for outbound messages
+	if direction="O" do
+	.for delim="|","^","~","\","&" do
+	..if text'[delim quit
+	.. // search for ctrl char to use for '\' translation wrap
+	..set stop="" for char=1:1:31 if text'[$char(char) quit
+	..for  do  if text'[delim quit
+	...set text=$piece(text,delim)_$select(delim="|":$char(20)_"F"_$char(20),delim="^":$char(20)_"S"_$char(20),delim="~":$char(20)_"R"_$char(20),delim="\":$char(20)_"E"_$char(20),delim="&":$char(20)_"T"_$char(20),1:"")_$piece(text,delim,2,999)
+	.set text=$translate(text,$char(20),"\")
+ 
+	quit text
+ 
+	// convert text formatting codes
+TextFormatCode(routine,result) new (routine,result,link) set routine=$get(routine),result=$get(result)
+ 
+	if '$data(^SSHL7(link,"TEXT-FORMAT-CODE",routine)) quit result
+ 
+	set TextFormat="" for  set TextFormat=$order(^SSHL7(link,"TEXT-FORMAT-CODE",routine,TextFormat)) quit:TextFormat=""  do
+	.set format="\"_TextFormat_"\",Convert=$get(^SSHL7(link,"TEXT-FORMAT-CODE",routine,TextFormat)) if Convert="" quit
+	.if result'[format quit
+	.for  do  if result'[format quit
+	..set result=$piece(result,format)_$char(Convert)_$piece(result,format,2,9999)
+ 
+	quit result
+ 
+	// run dynamic query with code and/or description
+DynamicQuery(updtable,codepar,ParRef,code,desc) new (updtable,codepar,ParRef,code,desc,PLIST) set updtable=$get(updtable),codepar=$get(codepar)
+	set ParRef=$get(ParRef),code=$get(code),desc=$get(desc),Found="" kill SQL
+ 
+	// setup dynamic query select statements
+	for tag="CODE","DESC" set SQL(tag)=##class(websys.Conversions).GetClassParameter("web."_updtable,$select(tag="CODE":"SQLCODE",1:"SQLDESCRIPTION"))
+	if codepar="P" set SQL("PARREF")=$piece(SQL("CODE"),"_")_"_ParRef"
+	set SQL("TABLE")=##class(websys.Conversions).GetSQLTableName("User."_updtable)
+	if codepar="P" set SQL="SELECT * FROM "_SQL("TABLE")_" WHERE "_SQL("PARREF")_" = ? AND "_SQL("CODE")_" = ?"
+	if codepar="C" set SQL="SELECT * FROM "_SQL("TABLE")_" WHERE "_SQL("CODE")_" = ? OR "_SQL("DESC")_" = %ALPHAUP(?)"
+ 
+	set result=##class(%ResultSet).%New("%DynamicQuery:SQL")
+	do result.Prepare(SQL)
+	if codepar="P" do result.Execute(ParRef,code)
+	if codepar="C" do result.Execute(code,desc)
+	if result.Next() do
+	.set count=result.GetColumnCount(),Found=0
+	. // cater for ParRef fields as zero
+	.set colfactor=$select(codepar="P":1,1:0)
+	.for col=1:1:count set name=result.GetColumnName(col) set PLIST(col-colfactor)=result.Data(name)
+	else  set Found=100
+	do result.Close()
+ 
+	quit Found
+ 
+	// calculate duration
+CalculateDuration(datefrom,timefrom,dateto,timeto) new (datefrom,timefrom,dateto,timeto)
+	set datefrom=$get(datefrom),timefrom=$get(timefrom),dateto=$get(dateto),timeto=$get(timeto)
+ 
+	if 'datefrom quit ""
+	if 'timefrom set timefrom=0
+	if 'dateto set dateto=+$h
+	if 'timeto set timeto=+$piece($h,",",2)
+ 
+	new dur,units,startsecs,endsecs
+	set (dur,units)=""
+ 
+	set startsecs=((datefrom*86400)+timefrom)
+	set endsecs=((dateto*86400)+timeto)
+	set dur=(endsecs-startsecs)
+ 
+	if dur'>60 set units="S"
+	else  if dur'>3600 set dur=dur\60,units="M"
+	else  if dur'>86400 set dur=dur\3600,units="H"
+	else  if dur'>604800 set dur=dur\86400,units="D"
+	else  if dur'>2419200 set dur=dur\604800,units="W"
+	else  set dur=dur\2419200,units="L"
+ 
+	quit dur_"^"_units
+
+
+

@@ -1,0 +1,177 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7ResultImage^MAC^^^0
+HL7ResultImage // ML 04/04/2003 ; HL7 Interface - Image/text result processing
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7ResultImage.rtn#1 $
+	quit
+	// file image/text results
+FileImage set flag=$get(PLIST(30))
+	// check if order is clinically significant
+	set ClinSignf=$$IsOrdClinSignf^COEOrdItem18(intOrdNum)
+	if exists do  quit
+	. // create text result history
+	. do ##class(web.OETextResultHistory).websysSaveHistory(TextId)
+	. // update existing result
+	. do Abnormal(TextId,flag)
+	. set PLIST(28)=ClinSignf
+	. set err=$$UpdImageResult(TextId) quit:err
+	. set currStatus=$get(PLIST(3))
+	. // update section(s)
+	. set x="" for  set x=$order(Result(x)) quit:x=""  do
+	. . kill PLIST merge PLIST=Result(x)
+	. . set err=$$putdesc() kill PLIST set PLIST(3)=x
+	. . &SQL(SELECT SEC_RowID INTO :TextResId FROM OE_TextResultSection WHERE SEC_ResultTypeSection_DR = :x AND SEC_ParRef = :TextId)
+	. . kill newResults merge newResults=Result(x) set newStatus=""
+	. . // perform site specific status check
+	. . set routine="HL7Site"_HL7("INCODE")_"Res",LineRoutine="CheckStatus^"_routine
+	. . if $length($text(@LineRoutine),";;")=2 do
+	. . . xecute "s newStatus=$$StatusCheck^"_routine_"("""_"IMAGE"_""","""_TextResId_""","""_currStatus_""")"
+	. . kill newResults
+	. . // check if status has changed based on result comparision
+	. . if newStatus'="",newStatus'=currStatus do
+	. . . set newStatusExt=$piece($get(^OEC("RESST",newStatus)),"^"),HL7Flag="Y"
+	. . . &SQL(UPDATE OE_TextResult SET TR_ResStat_DR = :newStatus, TR_ExternalResultStatus = :newStatusExt WHERE TR_RowId = :TextId)
+	. . // find section to update
+	. . if 'SQLCODE set err=$$UpdImageResultSection(TextResId,HL7("USER")) quit
+	. . set err=$$InsImageResultSection(TextId,HL7("USER"))
+	. // Log 74065 YC - save to index table
+	. if TextId'="" do ##class(web.OEResult).UpdateIndexTable("",TextId)
+	. // set clinically significant result flag
+	. set $piece(^OEORD(+intOrdNum,"I",$piece(intOrdNum,"||",2),12),"^",31)=ClinSignf
+	. set SQLCODE=0
+	// insert header
+	set PLIST(28)=$select(ClinSignf="Y":"Y",1:"")
+	set err=$$InsImageResult
+	set par=$piece($get(%ROWID),$char(1))
+	do Abnormal(par,flag)
+	// insert section(s)
+	set x="" for  set x=$order(Result(x)) quit:x=""  do
+	. kill PLIST merge PLIST=Result(x) set err=$$putdesc()
+	. kill PLIST set PLIST(3)=x
+	. set err=$$InsImageResultSection(par,HL7("USER"))
+	// set clinically significant result flag
+	set $piece(^OEORD(+intOrdNum,"I",$piece(intOrdNum,"||",2),12),"^",31)=ClinSignf
+	// update pointer to result
+	kill PLIST set PLIST(3)=par,err=$$InsOrdImageResult(intOrdNum)
+	// update result exists against order
+	do OrderUpdate^HL7Common3(intOrdNum,"MF","Y",317)
+	// Log 74065 YC - save to index table
+	if par'="" do ##class(web.OEResult).UpdateIndexTable("",par)
+	// RTT - update stage (log 80708)
+	do ##class(web.PARefPathwayStage).SetStageToResulted(intOrdNum)
+	quit
+	// select the data
+SelImageResult(TextId) kill PLIST
+	&SQL(SELECT * INTO :PLIST() FROM OE_TextResult WHERE TR_RowId = :TextId)
+	set PLIST=$order(PLIST(""),-1)
+	quit SQLCODE
+	// insert result header
+InsImageResult() kill PLIST(1) set HL7Flag="Y"
+	&SQL(INSERT INTO OE_TextResult VALUES :PLIST())
+	kill HL7Flag
+	quit SQLCODE
+	// update pointer to result
+InsOrdImageResult(intOrdNum) kill PLIST(2) set PLIST(0)=intOrdNum,HL7Flag="Y"
+	&SQL(INSERT INTO OE_OrdTextResult VALUES :PLIST())
+	kill HL7Flag
+	quit SQLCODE
+	// insert the data
+InsImageResultSection(TextId,user) kill PLIST(2) set PLIST(0)=TextId,HL7Flag="Y"
+	// manually insert to cater for results >32000 characters
+	set row2=$increment(^OETR(TextId,"SEC",0)),^OETR(TextId,"SEC",row2)=PLIST(3)
+	set i="" for  set i=$order(RESULT(i)) quit:i=""  do
+	. set linecnt=$increment(^OETR(TextId,"SEC",row2,"REM",0)),^OETR(TextId,"SEC",row2,"REM",linecnt)=RESULT(i)
+	do OnAudit("INSERT",user,TextId)
+	kill HL7Flag
+	quit 0
+	// update existing result
+UpdImageResult(TextId) set TextId=$get(TextId),HL7Flag="Y"
+	&SQL(UPDATE OE_TextResult VALUES :PLIST() WHERE TR_RowID = :TextId)
+	kill HL7Flag
+	set chl="" for  set chl=$order(^OEORDi(0,"FLabResult",ord1,chl)) quit:chl=""  do
+	. if $order(^OEORD(ord1,"I",chl,"TR",0))'="" do resstat^at1395(ord1_"||"_chl)
+	quit SQLCODE
+	// update the data
+UpdImageResultSection(TextResId,user) set TextResId=$get(TextResId),HL7Flag="Y" new oldGlob
+	set row1=$piece(TextResId,"||"),row2=$piece(TextResId,"||",2)
+	kill oldGlob merge oldGlob=^OETR(row1,"SEC",row2)
+	// manually insert to cater for results >32000 characters
+	kill ^OETR(row1,"SEC",row2,"REM")
+	set ^OETR(row1,"SEC",row2)=PLIST(3)
+	set i="" for  set i=$order(RESULT(i)) quit:i=""  do
+	. set linecnt=$increment(^OETR(row1,"SEC",row2,"REM",0)),^OETR(row1,"SEC",row2,"REM",linecnt)=RESULT(i)
+	do OnAudit("UPDATE",user,TextResId)
+	kill HL7Flag
+	kill oldGlob
+	quit 0
+	// check for abnormal results
+Abnormal(intOrdNum,flag) new (intOrdNum,flag,OrdDetail) set intOrdNum=$get(intOrdNum),flag=$get(flag),abnormal=""
+	set abnormal="N"
+	set panic="N"
+	if flag'="",flag'="N" set abnormal="Y"
+	if (flag="HH")||(flag="LL") set panic="Y"
+	// update order if abnormal or panic result found
+	do OrderUpdate^HL7Common3(intOrdNum,"MF",abnormal_"^"_panic,191_"^"_328)
+	quit
+	// set RESULT called before insert or update
+putdesc() kill RESULT do Truncate
+	merge RESULT=PLIST kill PLIST
+	quit 0
+	// check string lengths
+LongString set str=$get(str)
+	new l1,i,ind,string,j,jj
+	set l1=$length(^TMP($zname,$job,2))
+	set i=0,ind=0,len00=0,len=512
+	for  do  quit:i'<l1
+	. set len00=len00+len
+	. for i=len00:-1:(len00-len+1) if " .?!,;-/"[$extract(^TMP($zname,$job,2),i) quit
+	. if i=(len00-len+1) set i=len00
+	. set ind=ind+1,string(ind)=$extract(^TMP($zname,$job,2),len00-len+1,i),len00=i
+	for jj=1:1 quit:'$data(string(jj))  do
+	. set cnt=$order(^TMP($zname,$job,1,""),-1)+1,^TMP($zname,$job,1,cnt)=string(jj)
+	quit
+	// truncate description up to 512 bytes
+Truncate new (PLIST) kill ^TMP($zname,$job) set cnt=0
+	for i=1:1 quit:'$data(PLIST(i))  set ^TMP($zname,$job,2)=PLIST(i) do LongString
+	set ^TMP($zname,$job,1)=$order(^TMP($zname,$job,1,""),-1)+0
+	kill PLIST merge PLIST=^TMP($zname,$job,1) kill ^TMP($zname,$job)
+	quit
+OnAudit(oper,user,txtid) //n (%d,%old,%session,gUserRowId)
+	// Log 66992 YC - make sure can audit over 32k chars - will truncate for the audit.
+	set rule=$order(^CT("AUDR",0,"TableName","OETEXTRESULTSECTION",""))
+	quit:rule=""
+	if oper="INSERT",$piece(^CT("AUDR",rule),"^",2)'="Y" quit
+	if oper="UPDATE",$piece(^CT("AUDR",rule),"^",3)'="Y" quit
+	do:oper="INSERT" OnAuditInsert(user,txtid)
+	do:oper="UPDATE" OnAuditUpdate(user,txtid)
+	quit
+OnAuditInsert(user,txtid) new userdr,ctlocdr,groupdr,parref //n (%d,%old,%session,gUserRowId)
+	set userdr="",ctlocdr="",groupdr=""
+	set:$data(%session) userdr=$get(%session.Data("LOGON.USERID")),ctlocdr=$get(%session.Data("LOGON.CTLOCID")),groupdr=$get(%session.Data("LOGON.GROUPID"))
+	if userdr="" set userdr=user
+	set parref=$$InsertTrail^SSAUDIT("I",$zutil(67,11,$job),+$h,"OE_TextResultSection",txtid,$piece($h,",",2),userdr,ctlocdr,groupdr)
+	quit
+OnAuditUpdate(user,txtid) new userdr,ctlocdr,groupdr,parref,e,d,j
+	set userdr="",ctlocdr="",groupdr=""
+	set:$data(%session) userdr=$get(%session.Data("LOGON.USERID")),ctlocdr=$get(%session.Data("LOGON.CTLOCID")),groupdr=$get(%session.Data("LOGON.GROUPID"))
+	if userdr="" set userdr=user
+	set parref=""
+	// SEC_ResultTypeSection_DR
+	set e=$piece($get(oldGlob),"^"),d=oldGlob
+	if e'=d if parref="" set parref=$$InsertTrail^SSAUDIT("U",$zutil(67,11,$job),+$h,"OE_TextResultSection",txtid,$piece($h,",",2),userdr,ctlocdr,groupdr)
+	if e'=d if parref'="" if $$InsertTrailFields^SSAUDIT(parref,"SEC_ResultTypeSection_DR",e)
+	// SEC_Text - if over 9999 chars, always log, dont bother to check differences (audit user class only accepts 9999 chars)
+	set e="",j=0,over9999=0 for  set j=$order(oldGlob("REM",j)) quit:j=""  quit:($length(e)>=9999)  do
+	. set e=e_$extract(oldGlob("REM",j),1,(9999-$length(e)))_"|"
+	. if $length(e)>=9999 set over9999=1
+	set e=$extract(e,1,($length(e)-1))
+	set d="" if 'over9999 do
+	. set j=0 for  set j=$order(^OETR(+txtid,"SEC",$piece(txtid,"||",2),"REM",j)) quit:j=""  quit:($length(d)>=9999)  do
+	. . set d=d_$extract($get(^OETR(+txtid,"SEC",$piece(txtid,"||",2),"REM",j)),1,(9999-$length(d)))_"|"
+	. set d=$extract(d,1,($length(d)-1))
+	if e'=d if parref="" set parref=$$InsertTrail^SSAUDIT("U",$zutil(67,11,$job),+$h,"OE_TextResultSection",txtid,$piece($h,",",2),userdr,ctlocdr,groupdr)
+	if e'=d if parref'="" if $$InsertTrailFields^SSAUDIT(parref,"SEC_Text",e)
+	quit
+
+
+

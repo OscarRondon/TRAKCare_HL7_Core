@@ -1,0 +1,174 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutboundORM^MAC^^^0
+HL7OutboundORM // ML 20/03/2003 ; HL7 Interface - Outbound ORM message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutboundORM.rtn#1 $
+	quit
+check(table,rowid,trigger) new (table,rowid,trigger,%d,%e,%old,%before,%after,insert,ScreenForm,LogonUser) set (type,ok,ordtype)="" kill old,curr
+	set table=$get(table),rowid=$get(rowid),trigger=$get(trigger),insert=$get(insert),ScreenForm=$get(ScreenForm),LogonUser=$get(LogonUser)
+	set intOrdNum=$select(rowid'="":rowid,1:$get(%d(1)))
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2),OrdNum=""
+	&SQL(SELECT OEORI_LabEpisodeNo INTO :OrdNum FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if OrdNum="" quit
+	// extract links to send message to
+	kill SendTo if '$$sendto^HL7Outbound("","",intOrdNum) if $order(SendTo(""))="" do  quit
+	. kill ^||TMP("HL7-TRACK",$job,intOrdNum)
+	set link=$get(SendTo(1))
+	// check link status
+	if '$$Init^HL7Create quit
+	// check for site specific conditions before allowing order to be sent
+	set conditions=1
+	if HL7("OUTCODE")'="" do
+	. set routine="HL7Site"_HL7("OUTCODE")_"OutboundORM",LineRoutine="CheckConditions^"_routine do
+	. . if $length($text(@LineRoutine),";;")=2 xecute "s conditions=$$Conditions^"_routine_"("""_intOrdNum_""")"
+	if 'conditions quit
+	set sendon=$$sendon^HL7Outbound(intOrdNum) if sendon="" quit
+	// track OE_OrdItem for ORM^O01 off RB_Appointment - no tracking required if sendon not APPT or APC
+	if table="OEORDITEM",trigger="Insert",(sendon="APPT"!(sendon="APC")) do
+	. kill ^||TMP("HL7-TRACK",$job,intOrdNum) if $piece($get(%d(118)),$char(1))="" quit
+	. set ^||TMP("HL7-TRACK",$job,intOrdNum,table)=trigger
+	set externalsys=$$ExternalSys^HL7Common1(intOrdNum),externaltype=""
+	if externalsys'="" do
+	. set external=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("HL7ExternalSystem",externalsys)
+	. if external="" quit
+	. set externaltype=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7ExternalSystem",external),2)
+	// check for new and discontinued items
+	if table="OEORDITEM" do
+	. // ignore inactive order
+	. set strowid=$piece($get(%d(10)),$char(1)),stcode="" if strowid'="" do  if stcode="I" quit
+	. . &SQL(SELECT OSTAT_Code INTO :stcode FROM OEC_OrderStatus WHERE OSTAT_RowId = :strowid)
+	. if trigger="Update"!(trigger="Insert"&(ScreenForm="OEOrder.Details")) do  quit
+	. . // process authorised date and time changes
+	. . if sendon="AUTH" do
+	. . . if $piece($get(%d(165)),$char(1))'="",$piece($get(%d(165)),$char(1))'=$piece($get(%old(165)),$char(1)) set ok=1,insert=1 quit
+	. . . if $piece($get(%d(186)),$char(1))'="",$piece($get(%d(186)),$char(1))'=$piece($get(%old(186)),$char(1)) set ok=1,insert=1 quit
+	. . . if $piece($get(^OEORD(ord1,"I",ord2,9)),"^",14)'="" do  if ok=1 quit
+	. . . . if ((ScreenForm="OEOrder.ChangeStatus"!($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))!(trigger="Insert"&(ScreenForm="OEOrder.Details")))) set ok=1 quit
+	. . . . if ScreenForm="OEOrdItem.Discontinue"!($piece($get(%d(10)),$char(1))'=""&($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))) set ok=1 quit
+	. . . . if ScreenForm="OEOrdItem.PostExam",$piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)) set ok=1
+	. . . . if ScreenForm="RBAppointment.ChangeStatus",$piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)) set ok=1
+	. . // process arrive date and time changes
+	. . if sendon="PA" do
+	. . . if $piece($get(%d(189)),$char(1))'="",$piece($get(%d(189)),$char(1))'=$piece($get(%old(189)),$char(1)) set ok=1,insert=1 quit
+	. . . if $piece($get(%d(190)),$char(1))'="",$piece($get(%d(190)),$char(1))'=$piece($get(%old(190)),$char(1)) set ok=1,insert=1 quit
+	. . . if $piece($get(^OEORD(ord1,"I",ord2,11)),"^")'="" do  if ok=1 quit
+	. . . . if ((ScreenForm="OEOrder.ChangeStatus"!($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))!(trigger="Insert"&(ScreenForm="OEOrder.Details")))) set ok=1 quit
+	. . . . if ScreenForm="OEOrdItem.Discontinue"!($piece($get(%d(10)),$char(1))'=""&($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))) set ok=1 quit
+	. . . . if ScreenForm="OEOrdItem.PostExam",$piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)) set ok=1
+	. . . if ScreenForm="RBAppointment.ChangeStatus",$piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)) set ok=1
+	. . // process new appointment orders
+	. . if sendon="APC"!(sendon="APPT") do
+	. . . if $get(^||TMP("HL7-TRACK",$job,intOrdNum,table))'="" do  set ok=1,insert=1 quit
+	. . . . kill ^||TMP("HL7-TRACK",$job,intOrdNum)
+	. . . if $piece($get(%d(118)),$char(1))'="",$piece($get(%old(118)),$char(1))="" set ok=1,insert=1 quit
+	. . . if $piece($get(%d(118)),$char(1))'="",$piece($get(%old(118)),$char(1))'="",($piece($get(%d(118)),$char(1))'=$piece($get(%old(118)),$char(1))) set ok=1 quit
+	. . . if sendon="APC" do  quit
+	. . . . if $piece($get(^OEORD(ord1,"I",ord2,6)),"^",5)="" quit
+	. . . . if ((ScreenForm="OEOrder.ChangeStatus"!($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))!(trigger="Insert"&(ScreenForm="OEOrder.Details")))) set ok=1 quit
+	. . . . if ScreenForm="OEOrdItem.Discontinue"!($piece($get(%d(10)),$char(1))'=""&($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))) set ok=1
+	. . . . if ScreenForm="OEOrdItem.PostExam",$piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)) set ok=1
+	. . . . if ScreenForm="RBAppointment.ChangeStatus",$piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)) set ok=1
+	. . . if $piece($get(%d(189)),$char(1))'="",$piece($get(%d(189)),$char(1))'=$piece($get(%old(189)),$char(1)) set ok=1,insert=1 quit
+	. . . if $piece($get(%d(190)),$char(1))'="",$piece($get(%d(190)),$char(1))'=$piece($get(%old(190)),$char(1)) set ok=1,insert=1 quit
+	. . . if $piece($get(^OEORD(ord1,"I",ord2,11)),"^")'="" do  if ok=1 quit
+	. . . . if ((ScreenForm="OEOrder.ChangeStatus"!($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))!(trigger="Insert"&(ScreenForm="OEOrder.Details")))) set ok=1 quit
+	. . . . if ScreenForm="OEOrdItem.Discontinue"!($piece($get(%d(10)),$char(1))'=""&($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))) set ok=1
+	. . . . if ScreenForm="OEOrdItem.PostExam",$piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)) set ok=1
+	. . . if ScreenForm="RBAppointment.ChangeStatus",$piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)) set ok=1
+	. . // non radiology appointment orders
+	. . if sendon="NRA" do
+	. . . if $piece($get(%d(118)),$char(1))'="",$piece($get(%old(118)),$char(1))="" set ok=1,insert=1 quit
+	. . . if $piece($get(^OEORD(ord1,"I",ord2,6)),"^",5)="" quit
+	. . . if ((ScreenForm="OEOrder.ChangeStatus"!($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))!(ScreenForm="OEOrdItem.PostExam"&($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1))))!(ScreenForm="RBAppointment.ChangeStatus"&($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))))) set ok=1 quit
+	. . . if ScreenForm="OEOrdItem.Discontinue"!($piece($get(%d(10)),$char(1))'=""&($piece($get(%d(10)),$char(1))'=$piece($get(%old(10)),$char(1)))) set ok=1
+	. . if trigger="Insert"&(ScreenForm="OEOrder.Details"),ok=1 set insert=1
+	. // send only on order entry
+	. if sendon="OE" do  quit
+	. . // extract order status
+	. . &SQL(SELECT OEORI_ItemStat_DR INTO :status FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	. . // only send if new or discontinued
+	. . if insert!(",OEOrder.Order,OEOrder.ChangeStatus,OEOrdItem.Discontinue,OEOrdItem.PostExam,ARPatientBill.DiscontinueItem,"[(","_ScreenForm_",")) do
+	. . . // send only if questions answered
+	. . . set ok=$$Question(ord1,ord2)
+	if table="OEORDQUESTION" do
+	. if insert set ok=1
+	// send on specimen collect or receive
+	if sendon="SC"!(sendon="SR") do
+	. if table="OEORDSPECIMEN" do  quit
+	. . set ok=$$Question(ord1,ord2) if ok=1 set insert=1 quit
+	. . if 'ok set ^||TMP("HL7-TRACK",$job,table,intOrdNum)=""
+	. if $data(^||TMP("HL7-TRACK",$job,"OEORDSPECIMEN",intOrdNum)) do  quit
+	. . set ok=$$Question(ord1,ord2) if ok=1 set insert=1 kill ^||TMP("HL7-TRACK",$job,"OEORDSPECIMEN",intOrdNum) quit
+	. // only generate on call from OEHL7Messages UDF
+	. if ScreenForm="OEOrder.ChangeStatus",trigger="" set ok=1,insert=""
+	. if ScreenForm="OEOrdItem.Discontinue",trigger="" set ok=1,insert=""
+	if 'ok quit
+	do
+	. set link=SendTo(1)
+	. // build order
+	. do Order(intOrdNum,link) quit
+	quit
+	// check if questions to be answered before sending
+Question(ord1,ord2) set ord1=$get(ord1),ord2=$get(ord2),ok=0,pass=1,currdate=+$h
+	if '$data(^OEORD(ord1,"I",ord2,"QA")) do  if 'pass quit 0
+	. set ordereditem=$piece($get(^OEORD(ord1,"I",ord2,1)),"^",2),item1=$piece(ordereditem,"||"),item2=$piece(ordereditem,"||",2),(patage,patsex)=""
+	. if $$OrdAdmNum^HL7OutExtract8(ord1_"||"_ord2,"",.intAdmNum)
+	. set intRegMrn=$$AdmPatNum^HL7OutExtract2(intAdmNum)
+	. &SQL(SELECT PAPER_AgeYr, PAPER_Sex_DR INTO :patage, :patsex FROM PA_Person WHERE PAPER_Rowid = :intRegMrn)
+	. // order item questions
+	. if $order(^ARCIM(item1,item2,"QUES",0))'="" do  quit:'pass
+	. . set row="0" for  set row=$order(^ARCIM(item1,item2,"QUES",row),1,detail) quit:row=""  do  quit:'pass
+	. . . set ques=$piece(detail,"^"),qdateto=$piece(detail,"^",5)
+	. . . if qdateto'="",currdate>qdateto set pass=1 quit
+	. . . set pass=$$Ques(ques)
+	. // subcategory questions
+	. set subcat=$piece(^ARCIM(item1,item2,1),"^",10)
+	. if $order(^ARC("IC",subcat,"QUES",0))'="" do  quit:'pass
+	. . set row="0" for  set row=$order(^ARC("IC",subcat,"QUES",row),1,detail) quit:row=""  do  quit:'pass
+	. . . set ques=$piece(detail,"^"),qdateto=$piece(detail,"^",4)
+	. . . if qdateto'="",currdate>qdateto set pass=1 quit
+	. . . set pass=$$Ques(ques)
+	. // category questions
+	. set category=$piece(^ARC("IC",subcat),"^",8)
+	. if $order(^OEC("ORCAT",category,"QUES",0))'="" do  quit:'pass
+	. . set row="0" for  set row=$order(^OEC("ORCAT",category,"QUES",row),1,detail) quit:row=""  do  quit:'pass
+	. . . set ques=$piece(detail,"^"),qdateto=$piece(detail,"^",4)
+	. . . if qdateto'="",currdate>qdateto set pass=1 quit
+	. . . set pass=$$Ques(ques)
+	quit 1
+	// check if questions valid for order
+Ques(ques) new (ques,patage,patsex,currdate) set ques=$get(ques),patage=$get(patage),patsex=$get(patsex),currdate=$get(currdate)
+	set detail=$get(^PAC("QUES",ques)),age1=$piece(detail,"^",5),age2=$piece(detail,"^",6),sex=$piece(detail,"^",7),qdateto=$piece(detail,"^",11)
+	if qdateto'="",currdate>qdateto quit 1
+	if sex'="",patsex'=sex quit 1
+	if age1'="",age2="",patage<age1 quit 1
+	if age2'="",age1="",patage>age2 quit 1
+	if age1'="",age2'="",((patage<age1)||(patage>age2)) quit 1
+	quit 0
+	// build segments and message
+Order(intOrdNum,link) new (intOrdNum,link,table,LogonUser,LogonHosp,old,curr,insert) set intOrdNum=$get(intOrdNum),link=$get(link),table=$get(table),LogonUser=$get(LogonUser),LogonHosp=$get(LogonHosp),insert=$get(insert)
+	set msgtype="",ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2),trigger="" kill queue,^TMP("HL7-OUT",$job)
+	// check link status
+	if '$$Init^HL7Create quit
+	// extract required external/internal numbers
+	set (OrdNum,intRegMrn,intAdmNum,ReceivingApp,ReceivingFac)=""
+	set SQLCODE=$$OrdAdmNum^HL7OutExtract8(intOrdNum,.OrdNum,.intAdmNum)
+	set intRegMrn=$$AdmPatNum^HL7OutExtract2(intAdmNum)
+	set RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+	// get external system for location
+	set ExternalSys=$$ExternalSys^HL7Common1(intOrdNum,.reject) if $get(reject)'="" do  quit
+	. do trace^HL7Trace("*****",$h,reject,"","","INF")
+	// extract segments required
+	for msgtype="ORM_O01","OMG_O19" do  if $order(SEG(""))'="" quit
+	. kill SEG if '$$Segment^HL7Create(msgtype)
+	. if $order(SEG(""))="" quit
+	. set msgtype=$translate(msgtype,"_","^")
+	if $order(SEG(""))="" quit
+	// build segment information
+	do BuildSegment^HL7Create if fail kill ^TMP("HL7-OUT",$job) quit
+	if $length(queue) do Queue^HL7Queue(link,msgtype,ReceivingApp,ReceivingFac)
+	kill queue,^TMP("HL7-OUT",$job)
+	quit
+
+
+

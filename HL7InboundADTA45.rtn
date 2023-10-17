@@ -1,0 +1,46 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundADTA45^MAC^^^0
+HL7InboundADTA45	// ML 18/08/2011 ;  HL7 interface : patient event ADT_A45
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundADTA45.rtn#1 $
+	quit
+	// A45 - move visit number
+A45()
+	set HL7Flag="Y"
+	set (reject,rejecthere)=""
+	// check if message forwarding required
+	set forward=$$MsgForward^HL7Inbound(msgtype)
+	set cnt1=0 for  {
+		if reject'="" quit
+		set cnt1=$order(^TMP("HL7",$job,cnt1)) if cnt1="" quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		if '$data(^TMP("HL7",$job,cnt1,"MRG")) set reject="Required segment MRG not received in message",reject("Detail")="MRG^^^~"_100,rejecthere="Y" quit
+		// check if pre-existing patient
+		set numbers=$$RegNum^HL7Common2(.reject,"A45")
+		set intRegMrn=$piece(numbers,"|",2)
+		if reject'="" set rejecthere="Y" quit
+		kill MERGE
+		// extract MRG information
+		do MRG^HL7InboundExtract1 if reject'="" quit
+		if MERGE("EpisodeIDString")="" set reject="No admission number received, unable to move admission",reject("Detail")="MRG^^5~101",rejecthere="Y" quit
+		// check if admission exists
+		set intAdmNum=$$intAdmNum^HL7Common2(MERGE("EpisodeIDString"),"",HL7("INT-ADM-NUM"))
+		if intAdmNum="" set reject=$select(HL7("INT-ADM-NUM")="Y":"Internal admission number ",1:"Admission number ")_MERGE("EpisodeIDString")_" does not exist",reject("Detail")="MRG^^5~205",rejecthere="Y" quit
+		set intRegFrom=$$AdmPatNum^HL7OutExtract2(intAdmNum)
+		if intRegFrom="" set reject="Unable to locate existing registration number for admission number "_MERGE("EpisodeIDString"),reject("Detail")="MRG^^5~205",rejecthere="Y" quit
+		set MERGE("TOPatientID")=intRegMrn,MERGE("FROMPatientID")=intRegFrom
+		set MERGE("EpisodeIDString")=intAdmNum
+		set reject=""
+		// move admission
+		do MOVEADM^HL7InboundUpdate2
+		// check if message forwarding required
+		if forward,reject="" set forwardnum(cnt1,intAdmNum_"||"_intRegMrn)=""
+		kill PERSON,MERGE,SQL
+	}
+	kill PERSON,MERGE,SQL
+	if rejecthere="Y" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

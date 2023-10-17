@@ -1,0 +1,833 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7PatEv^MAC^^^0
+HL7PatEv // ML 18/9/01 ; HL7 interface : patient event categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7PatEv.rtn#1 $
+	quit
+	
+	// decide what ADT processing needs to occur
+Check(adttype) new (adttype,link,INT,HL7,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,version,PatNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum)
+	set adttype=$get(adttype),(forward,forwardnum,forwardtable,ok,foundPV1,reject,reject("Detail"))="" kill forwardnum,old
+	
+	do
+	. // ADT^A01 - admit a patient, ADT^A11 - cancel admission
+	. if adttype="A01"!(adttype="A11") set ok=$$Admit(adttype) quit
+	. // ADT^A02 - transfer a patient, ADT^A12 - cancel transfer
+	. if adttype="A02"!(adttype="A12") set ok=$$Transfer(adttype) quit
+	. // ADT^A03 - discharge a patient, ADT^A13 - cancel discharge
+	. if adttype="A03"!(adttype="A13") set ok=$$Discharge(adttype) quit
+	. // ADT^A05 - pre-admission, ADT^A38 - cancel pre-admission
+	. if adttype="A05"!(adttype="A38") set ok=$$PreAdmit(adttype) quit
+	. // ADT^A08 - update patient information
+	. if adttype="A08" set ok=$$Update(adttype) quit
+	. // ADT^A16 - pending discharge, ADT^A25 - cancel pending discharge
+	. if adttype="A16"!(adttype="A25") set ok=$$PendDischarge(adttype) quit
+	. // ADT^A17 - swap patients
+	. if adttype="A17" set ok=$$SwapPat(adttype) quit
+	. // ADT^A19 - query (normally QRY^A19)
+	. if adttype="A19" set ok=$$Query(adttype) quit
+	. // ADT^A21 - patient 'leave of absence', ADT^A22 - patient return from 'leave of absence'
+	. if adttype="A21"!(adttype="A22") set ok=$$Leave(adttype) quit
+	. // ADT^A28 - add person information, ADT^A31 - update person information
+	. if adttype="A28"!(adttype="A31") set ok=$$Person(adttype) quit
+	. // ADT^A23 - deactivate a patient record, ADT^A29 - deactivate a person record
+	. if adttype="A23"!(adttype="A29") set ok=$$Deactivate(adttype) quit
+	. // ADT^A34 - merge patient information - patient id ONLY
+	. if adttype="A34" set ok=$$MergePat(adttype) quit
+	. // ADT^A37 - unmerge patient/person
+	. if adttype="A37" set ok=$$UnMergePat(adttype) quit
+	. // ADT^A40 - merge patient information - patient identifier list
+	. if adttype="A40" set ok=$$MergePatIdList(adttype) quit
+	. // ADT^A45 - move visit information - visit number
+	. if adttype="A45" set ok=$$MoveVis(adttype) quit
+	. // ADT^A47 - change patient identifier
+	. if adttype="A47" set ok=$$ChangePatId(adttype) quit
+	. // ADT^A60 - update adverse reaction information
+	. if adttype="A60" set ok=$$AdverseReaction(adttype) quit
+	
+	quit ok
+	
+	// check for site specific code
+SiteCode() new done set done=""
+	set routine="HL7Site"_HL7("INCODE")_"PatEv",LineRoutine="Check"_adttype_"^"_routine if $length($text(@LineRoutine),";;")=2 do
+	. xecute "d "_label_"^"_routine_"(.reject,"""_adttype_""")" set done=1
+	quit done
+	
+	// check if message forwarding required
+MsgForward() set msgtype="ADT_"_adttype
+	set forward=$order(^SSHL7(link,"MSG-FWD",msgtype,"INT",""))
+	set forward=$select(forward="":0,1:1)
+	quit forward
+	
+	// A01 - admit a patient
+	// A11 - cancel admission
+Admit(adttype) set adttype=$get(adttype),label="Admit"
+	
+	if adttype="A01" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . // check if patient exists
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	. . // extract visit details
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . // ignore segment codes in cnt2
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+	. . . if foundPV1,cnt2?1.3A quit
+	. . . if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100 quit
+	. . . kill PLIST
+	. . . do VisDet^HL7PatEv2(cnt1,cnt2) if $$intAdmNum^HL7Common2(visit)'="" set reject="Episode number "_visit_" already exists",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~205" quit
+	. . . do VisSet^HL7PatEv2
+	. . . do VisInsert^HL7PatEv2 quit:reject'=""
+	. . . set intAdmNum=$$intAdmNum^HL7Common2(visit)
+	. . . // insert insurance details
+	. . . do InDet^HL7PatEv1,InSet^HL7PatEv1,InInsert^HL7PatEv1
+	
+	. . . // updating user and location
+	. . . do UpdateUser^HL7PatEv1("EX"),UpdateUser^HL7PatEv1("CT")
+	
+	. . . // get start date/time for transactions
+	. . . set (startdate,starttime,date)="" do
+	. . . . if $piece($get(^TMP("HL7",$job,"EVN",6)),"^")'="" set date=$extract($get(^TMP("HL7",$job,"EVN",6)),1,8),time=$extract($get(^TMP("HL7",$job,"EVN",6)),9,12)
+	. . . . if $translate(date,"0")="" do
+	. . . . . if $piece($get(^TMP("HL7",$job,"EVN",2)),"^")'="" set date=$extract($get(^TMP("HL7",$job,"EVN",2)),1,8),time=$extract($get(^TMP("HL7",$job,"EVN",2)),9,12)
+	. . . . set startdate=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	. . . . set starttime=$select(time?4N:$$TimeConv^HL7Common2("EI",$extract(time,1,2)_":"_$extract(time,3,4)),1:"")
+	. . . if startdate="" set datetime=$h,startdate=$piece(datetime,","),starttime=$piece(datetime,",",2)
+	
+	. . . // create attending doctor transaction
+	. . . if $get(provider("ATT"))'="" do
+	. . . . set HL7Flag="Y"
+	. . . . if $$Update^CPAAdmTransaction("",intAdmNum,"","","","T","","",$get(provider("ATT")),"",upduser,startdate,starttime,"","",upddate,updtime,"","","","","T")
+	
+	. . . // extract ward/room/bed rowid
+	. . . if CurrWard="",CurrRoom="",CurrBed="" quit
+	. . . set WardRoomBed=$$WardRoomBed^HL7Common9(CurrWard,CurrRoom,CurrBed,CurrHosp)
+	. . . if $piece(WardRoomBed,"^",4) do  quit
+	. . . . set reject="Ward "_CurrWard_" ,Room "_CurrRoom_", Bed "_CurrBed_", Hospital "_CurrHosp_" received on episode "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~206" quit
+	. . . set WardRow=$piece(WardRoomBed,"^"),RoomRow=$piece(WardRoomBed,"^",2),BedRow=$piece(WardRoomBed,"^",3)
+	. . . // if ward/room only check if room should be populated (ward list)
+	. . . if BedRow="",RoomRow'="" do
+	. . . . if $$RoomQuery^HL7PatEv3(RoomRow)'="MPR" set RoomRow=""
+	. . . // is bed available
+	. . . if BedRow'="" set BedAvail=$$BedAvailable^HL7PatEv3(BedRow) if $piece(BedAvail,"|")="N" do  quit
+	. . . . set reject="Unable to complete bed placement. Ward "_CurrWard_", Room "_CurrRoom_", Bed "_CurrBed_", Hospital "_CurrHosp_" received on episode "_visit_" already occupied by episode "_$$extAdmNum^HL7Common2($piece(BedAvail,"|",2))
+	. . . . set reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~206"
+	. . . set HL7Flag="Y"
+	. . . // create bed transfer and transaction
+	. . . set intTransNum=$$update^CPACWardAdm(intAdmNum,WardRow,BedRow,"O",upduser,updhosp,startdate,starttime,"","","_zz","",RoomRow,"_zz","","","")
+	. . . if intTransNum="" do  quit
+	. . . . set reject="Unable to complete transfer. Ward "_CurrWard_", Room "_CurrRoom_", Bed "_CurrBed_", Hospital "_CurrHosp_" for episode "_visit
+	. . . . set reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~206"
+	
+	. . . // update visit details
+	. . . kill PAADM set PAADM(1)=intAdmNum,PAADM(163)=RoomRow,PAADM(164)=WardRow,PAADM(167)=BedRow
+	. . . if $$VisUpdate^HL7PatEv2(intAdmNum,1)
+	
+	. . . // check if message forwarding required
+	. . . if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmNum)="PAADM"
+	
+	if adttype="A11" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . // ignore segment codes in cnt2
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+	. . . if foundPV1,cnt2?1.3A quit
+	. . . if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100 quit
+	. . . do VisDet^HL7PatEv2(cnt1,cnt2) set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" set reject="Episode number "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~204" quit
+	. . . if $$cancel^MVBPAADM1(intAdmNum)
+	. . . // check if message forwarding required
+	. . . if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmNum)="PAADM"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A02 - transfer a patient
+	// A12 - cancel transfer
+Transfer(adttype) set adttype=$get(adttype),label="Transfer"
+	
+	if adttype="A02"!(adttype="A12") do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . // ignore segment codes in cnt2
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+	. . . if foundPV1,cnt2?1.3A quit
+	. . . if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100 quit
+	. . . do VisDet^HL7PatEv2(cnt1,cnt2) set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" set reject="Episode number "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~204" quit
+	
+	. . . // updating user and location
+	. . . do UpdateUser^HL7PatEv1("EX"),UpdateUser^HL7PatEv1("CT")
+	
+	. . . // get start date/time for transactions
+	. . . set (startdate,starttime,date)="" do
+	. . . . if $piece($get(^TMP("HL7",$job,"EVN",6)),"^")'="" set date=$extract($get(^TMP("HL7",$job,"EVN",6)),1,8),time=$extract($get(^TMP("HL7",$job,"EVN",6)),9,12)
+	. . . . if $translate(date,"0")="" do
+	. . . . . if $piece($get(^TMP("HL7",$job,"EVN",2)),"^")'="" set date=$extract($get(^TMP("HL7",$job,"EVN",2)),1,8),time=$extract($get(^TMP("HL7",$job,"EVN",2)),9,12)
+	. . . . set startdate=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	. . . . set starttime=$select(time?4N:$$TimeConv^HL7Common2("EI",$extract(time,1,2)_":"_$extract(time,3,4)),1:"")
+	. . . if startdate="" set datetime=$h,startdate=$piece(datetime,","),starttime=$piece(datetime,",",2)
+	. . . // end date/time same as start date/time for closing transactions
+	. . . set enddate=startdate,endtime=starttime
+	
+	. . . // extract ward/room/bed rowid
+	. . . if CurrWard="" set reject="No ward sent for transfer. Room "_CurrRoom_", Bed "_CurrBed_", Hospital "_CurrHosp_" on episode "_visit,reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~101" quit
+	. . . set WardRoomBed=$$WardRoomBed^HL7Common9(CurrWard,CurrRoom,CurrBed,CurrHosp)
+	. . . if $piece(WardRoomBed,"^",4) do  quit
+	. . . . set reject="Ward "_CurrWard_", Room "_CurrRoom_", Bed "_CurrBed_", Hospital "_CurrHosp_" received on episode "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~206" quit
+	. . . set WardRow=$piece(WardRoomBed,"^"),RoomRow=$piece(WardRoomBed,"^",2),BedRow=$piece(WardRoomBed,"^",3)
+	. . . // if ward/room only check if room should be populated (ward list)
+	. . . if BedRow="",RoomRow'="" do
+	. . . . if $$RoomQuery^HL7PatEv3(RoomRow)'="MPR" set RoomRow=""
+	. . . // is bed available
+	. . . if BedRow'="" set BedAvail=$$BedAvailable^HL7PatEv3(BedRow,intAdmNum) if $piece(BedAvail,"|")="N" do  quit
+	. . . . set reject="Unable to complete transfer. Ward "_CurrWard_", Room "_CurrRoom_", Bed "_CurrBed_", Hospital "_CurrHosp_" received on episode "_visit_" already occupied by episode "_$$extAdmNum^HL7Common2($piece(BedAvail,"|",2))
+	. . . . set reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~206"
+	
+	. . . // create bed transfer and transaction
+	. . . if adttype="A02" do  quit:reject'=""
+	. . . . set intTransNum=$$update^CPACWardAdm(intAdmNum,WardRow,BedRow,"O",upduser,updhosp,startdate,starttime,"","","_zz","",RoomRow,"_zz","","","")
+	. . . . if intTransNum="" set reject="Unable to complete transfer. Ward "_CurrWard_", Room "_CurrRoom_", Bed "_CurrBed_", Hospital "_CurrHosp_" for episode "_visit,reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~206" quit
+	
+	. . . // cancel current transfer, reopen previous
+	. . . if adttype="A12" do  quit:reject'=""
+	. . . . if PrevWard="" set reject="No ward sent for cancel transfer: Room "_PrevRoom_", Bed "_PrevBed_", Hospital "_PrevHosp_" on episode "_visit,reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^6~101" quit
+	. . . . set WardRoomBed=$$WardRoomBed^HL7Common9(PrevWard,PrevRoom,PrevBed,PrevHosp)
+	. . . . if $piece(WardRoomBed,"^",4) do  quit
+	. . . . . set reject="Previous Ward "_PrevWard_", Room "_PrevRoom_", Bed "_PrevBed_", Hospital "_PrevHosp_" received on episode "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^6~206" quit
+	. . . . set oldWardRow=$piece(WardRoomBed,"^"),oldRoomRow=$piece(WardRoomBed,"^",2),oldBedRow=$piece(WardRoomBed,"^",3)
+	. . . . // if ward/room only check if room should be populated (ward list)
+	. . . . if oldBedRow="",oldRoomRow'="" do
+	. . . . . if $$RoomQuery^HL7PatEv3(oldRoomRow)'="MPR" set oldRoomRow=""
+	. . . . // is bed available
+	. . . . if oldBedRow'="" set BedAvail=$$BedAvailable^HL7PatEv3(oldBedRow,intAdmNum) if $piece(BedAvail,"|")="N" do  quit
+	. . . . . set reject="Unable to complete transfer. Ward "_PrevWard_", Room "_PrevRoom_", Bed "_PrevBed_", Hospital "_PrevHosp_" received on episode "_visit_" already occupied by episode "_$$extAdmNum^HL7Common2($piece(BedAvail,"|",2))
+	. . . . . set reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~206"
+	. . . . // find transaction to close and reject
+	. . . . set (found,oldTransNum)="" kill transaction
+	. . . . set trans="" for  set trans=$$GetNextPrevTransactionNew^CPAAdmTransaction(intAdmNum,oldTransNum,"D","M","",+$h),oldTransNum=$piece(trans,"^",1) quit:oldTransNum=""  do  if found quit
+	. . . . . if $get(oldBedRow)'=$piece(trans,"^",9),$get(oldWardRow)'=$piece(trans,"^",10) quit
+	. . . . . set found=1,transaction(oldTransNum)=1
+	. . . . set oldTransNum=$piece(oldTransNum,"^") if oldTransNum="" do  quit
+	. . . . . set reject="Unable to cancel transfer.  Existing transfer for Previous Ward "_PrevWard_", Room "_PrevRoom_", Bed "_PrevBed_", Hospital "_PrevHosp_" received on episode "_visit_" does not exist"
+	. . . . . set reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^6~206" quit
+	. . . . // find transaction to reopen
+	. . . . set (found,intTransNum)=""
+	. . . . set trans="" for  set trans=$$GetNextPrevTransactionNew^CPAAdmTransaction(intAdmNum,oldTransNum,"D","M","",+$h),oldTransNum=$piece(trans,"^",1) quit:oldTransNum=""  do  if found quit
+	. . . . . if $get(BedRow)'=$piece(trans,"^",9)!($get(WardRow)'=$piece(trans,"^",10)) set transaction(oldTransNum)="" quit
+	. . . . . set found=1,intTransNum=$piece(trans,"^")
+	. . . . set intTransNum=$piece(intTransNum,"^") if intTransNum="" do  quit
+	. . . . . set reject="Unable to cancel transfer.  Old transfer for Ward "_CurrWard_", Room "_CurrRoom_", Bed "_CurrBed_", Hospital "_CurrHosp_" received on episode "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^6~206" quit
+	. . . . set HL7Flag="Y"
+	. . . . // reject old transaction
+	. . . . set oldTransNum="" for  set oldTransNum=$order(transaction(oldTransNum)) quit:oldTransNum=""  do
+	. . . . . set (xWardRow,xRoomRow,xBedRow)=""
+	. . . . . // extract ward/room/bed for other transaction to be reject
+	. . . . . if transaction(oldTransNum)="" do
+	. . . . . . set transdet=$get(^PAADM(intAdmNum,"TRANS",$piece(oldTransNum,"||",2)))
+	. . . . . . set xWardRow=$piece(transdet,"^",9),xBedRow=$piece(transdet,"^",8) if $translate(xBedRow,"||")'="" set xRoomRow=$piece($get(^PAWARD(+$piece(xBedRow,"||"),"BED",+$piece(xBedRow,"||",2))),"^",3)
+	. . . . . if transaction(oldTransNum)'="" set xWardRow=oldWardRow,xRoomRow=oldRoomRow,xBedRow=oldBedRow
+	. . . . . if $$Update^CPAAdmTransaction(oldTransNum,intAdmNum,xWardRow,xRoomRow,xBedRow,"D","","","","",upduser,"_zz","_zz",enddate,endtime,upddate,updtime,"","","","","M")
+	. . . . // reopen transaction
+	. . . . if $$Update^CPAAdmTransaction(intTransNum,intAdmNum,WardRow,RoomRow,BedRow,"T","","","","",upduser,"_zz","_zz","","",upddate,updtime,"","","","","M")
+	. . . . // remove admission from previously occupied bed
+	. . . . do PACBedAdmDeleteBed^CPACBedAdm(intAdmNum,$piece(oldBedRow,"||"),$piece(oldBedRow,"||",2),"O")
+	. . . . // place admission against newly occupied bed
+	. . . . if $translate(BedRow,"||")'="" do PACBedAdmUpdate^CPACBedAdm("_zz",intAdmNum,BedRow,"","","T",intTransNum)
+	. . . . // place admission against ward if no bed
+	. . . . if $translate(BedRow,"||")="" do inswardadm^CPACWardAdm(WardRow,intAdmNum,"O",intTransNum,RoomRow)
+	
+	. . . // update visit details
+	. . . kill PAADM set PAADM(1)=intAdmNum,PAADM(163)=$select(RoomRow="":"""",1:RoomRow),PAADM(164)=$select(WardRow="":"""",1:WardRow),PAADM(167)=$select(BedRow="":"""",1:BedRow)
+	. . . if $$VisUpdate^HL7PatEv2(intAdmNum)
+	
+	. . . // check if message forwarding required
+	. . . if forward,reject="" do
+	. . . . // current plist required for forwarding
+	. . . . kill Transaction if $$AdmTransaction^HL7OutExtract2(intTransNum,.Transaction) quit
+	. . . . set forwardnum(cnt1_"-"_cnt2,intTransNum)="PAADMTRANSACTION"
+	. . . . merge forwardnum(cnt1_"-"_cnt2,intTransNum,"curr")=Transaction
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A03 - discharge a patient
+	// A13 - cancel discharge
+Discharge(adttype) set adttype=$get(adttype),label="Discharge"
+	
+	if adttype="A03"!(adttype="A13") do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	
+	. . // extract visit details
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . // ignore segment codes in cnt2
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+	. . . if foundPV1,cnt2?1.3A quit
+	. . . if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100 quit
+	. . . do VisDet^HL7PatEv2(cnt1,cnt2) set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" set reject="Episode number "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~204" quit
+	. . . do VisSet^HL7PatEv2 set dischclassif=$get(MRADM(58)),caretype=$get(MRADM(63))
+	. . . set admtype=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",2)),"^")
+	. . . // discharge admission
+	. . . if adttype="A03" do Discharge^HL7PatEv3(intAdmNum,admtype,.PAADM,.MRADM)
+	. . . // cancel discharge
+	. . . if adttype="A13" do unDischarge^HL7PatEv3(intAdmNum)
+	. . . // check if message forwarding required
+	. . . if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmNum)="PAADM"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A05 - update pre-admission
+	// A38 - cancel pre-admission
+PreAdmit(adttype) set adttype=$get(adttype),label="PreAdmit"
+	
+	if adttype="A05" do
+	. // check if site specific code required
+	. if $$SiteCode quit
+	
+	if adttype="A38" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . // ignore segment codes in cnt2
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+	. . . if foundPV1,cnt2?1.3A quit
+	. . . if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100 quit
+	. . . do VisDet^HL7PatEv2(cnt1,cnt2) set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" set reject="Episode number "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~204" quit
+	. . . if $$cancel^MVBPAADM1(intAdmNum)
+	. . . // check if message forwarding required
+	. . . if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmNum)="PAADM"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A08 - update patient information
+Update(adttype) set adttype=$get(adttype),label="Update"
+	
+	if adttype="A08" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . // check patient details and update/insert
+	. . do PatCheck^HL7PatEv1 if reject'="" quit
+	. . // extract visit details and update
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) quit
+	. . . kill PAADM,oldPAADM,xPAADM
+	. . . do VisDet^HL7PatEv2(cnt1,cnt2)
+	. . . set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" set reject="Episode number "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~204" quit
+	. . . do VisSet^HL7PatEv2 kill xPAADM merge xPAADM=PAADM kill PAADM
+	. . . if $$VisSelect^HL7PatEv2(intAdmNum)
+	. . . merge oldPAADM=PAADM merge PAADM=xPAADM kill xPAADM
+	. . . set PAADM(152)=$get(oldPAADM(152))
+	. . . if $$VisUpdate^HL7PatEv2(intAdmNum)
+	. . . // update insurance details
+	. . . do InDet^HL7PatEv1,InSet^HL7PatEv1,InUpdate^HL7PatEv1
+	. . . // check if new attending dr transaction needed
+	. . . if $get(PAADM(12))'=$get(oldPAADM(12)) do
+	. . . . set HL7Flag="Y"
+	. . . . // find and close previous transaction
+	. . . . do
+	. . . . . set (found,trans)="" for  set trans=$order(^PAADM(intAdmNum,"TRANS",trans),-1) quit:trans=""  do  quit:found
+	. . . . . . if $piece(^(trans),"^",5)="" quit
+	. . . . . . if $piece(^(trans),"^",5)=$get(oldPAADM(12)),$piece(^(trans),"^",4)="" set found=1
+	. . . . . // close previous transaction
+	. . . . . if found if $$Update^CPAAdmTransaction(intAdmNum_"||"_trans,intAdmNum,"","","","T","","",$get(oldPAADM(12)),"",upduser,"_zz","_zz",+$h,$piece($h,",",2),upddate,updtime,"","","","","T")
+	. . . . // create new transaction
+	. . . . if $$Update^CPAAdmTransaction("",intAdmNum,"","","","T","","",$get(PAADM(12)),"",upduser,+$h,$piece($h,",",2),"","",upddate,updtime,"","","","","T")
+	
+	. . . // check if message forwarding required
+	. . . if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmNum)="PAADM"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A16 - pending discharge
+	// A25 - cancel pending discharge
+PendDischarge(adttype) set adttype=$get(adttype),label="PendDischarge"
+	
+	if adttype="A16" do
+	. // check if site specific code required
+	. if $$SiteCode quit
+	
+	if adttype="A25" do
+	. // check if site specific code required
+	. if $$SiteCode quit
+	
+	quit
+	
+	// A17 - bed swap patients
+SwapPat(adttype) set adttype=$get(adttype),label="SwapPat" kill Swap
+	
+	if adttype="A17" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . // ignore segment subscripts
+	. . . if cnt2?1.3A quit
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100 quit
+	. . . do VisDet^HL7PatEv2(cnt1,cnt2) set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" set reject="Episode number "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~204" quit
+	. . . set BedRowId=$$SetBed^HL7PatEv3(CurrWard,CurrBed,CurrHosp) if BedRowId'["||" set reject="Bed "_CurrBed_"/"_CurrWard_"/"_CurrHosp_" for episode "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^3~103" quit ##; noalert
+	. . . set j=$order(Swap(""),-1)+1
+	. . . set Swap(j,"intRegMrn")=intRegMrn,Swap(j,"intAdmNum")=intAdmNum
+	. . . set Swap(j,"BedRowId")=bedRowId,Swap(j,"AdmDate")=AdmDate,Swap(j,"AdmTime")=AdmTime
+	set j=$order(Swap(""),-1) if j'=2 quit
+	set j="" for  set j=$order(Swap(j)) quit:j=""  do FreeBed^HL7PatEv3(Swap(j,"intAdmNum"))
+	set (room,booked)=""
+	set j="" for  set j=$order(Swap(j)) quit:j=""  do PlaceBed^HL7PatEv3(Swap(j,"intAdmNum"),Swap(j,"BedRowId"),room,Swap(j,"AdmDate"),Swap(j,"AdmTime"),booked)
+	set j="" for  set j=$order(Swap(j)) quit:j=""  kill PLIST set PLIST(1)=Swap(j,"intAdmNum"),PLIST(167)=Swap(j,"BedRowId") if $$VisUpdate^HL7PatEv2(Swap(j,"intAdmNum"))
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A19 - query (normally QRY^A19)
+Query(adttype) set adttype=$get(adttype),label="Query"
+	if adttype="A19" do
+	. // check if site specific code required
+	. if $$SiteCode quit
+	quit "SKIP"
+	
+	// A21 - patient 'leave of absence'
+	// A22 - patient return from 'leave of absence'
+Leave(adttype) set adttype=$get(adttype),label="Leave"
+	
+	if adttype="A21"!(adttype="A22") do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	. . // extract visit details
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . // ignore segment codes in cnt2
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+	. . . if foundPV1,cnt2?1.3A quit
+	. . . if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100 quit
+	. . . do VisDet^HL7PatEv2(cnt1,cnt2) set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" set reject="Episode number "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~204" quit
+	. . . set EventDate=$extract(^TMP("HL7",$job,"EVN",6),1,8) set:EventDate'="" EventDate=$$DateConv^HL7Common2(.reject,"EI",EventDate)
+	. . . set EventTime=$extract(^TMP("HL7",$job,"EVN",6),9,13) set:EventTime'="" EventTime=$$TimeConv^HL7Common2("EI",$extract(EventTime,1,2)_":"_$extract(EventTime,3,4))
+	. . . set leave=$get(^PAADM(intAdmNum,"LEA",0)),intAdmLeave=intAdmNum_"||"_leave
+	. . . // leave of absence
+	. . . if $get(^TMP("HL7",$job,"EVN",1))="A21" do
+	. . . . // add or update
+	. . . . if $get(^TMP("HL7",$job,"EVN",4))="" do
+	. . . . . if leave="" do  quit
+	. . . . . . set LeaveRow=$$LeaveAbs^HL7PatEv3(intAdmNum,EventDate,EventTime),intAdmLeave=$piece(LeaveRow,"^",2)
+	. . . . . if leave'="" do
+	. . . . . . if $$SelectAbs^HL7PatEv3(intAdmLeave)
+	. . . . . . // check for return date and time
+	. . . . . . if PLIST(11)=""!(PLIST(12)="") do  quit
+	. . . . . . . if $$UpdateAbs^HL7PatEv3(intAdmLeave,EventDate,EventTime)
+	. . . . . . if PLIST(11)'=""!(PLIST(12)="") do  quit
+	. . . . . . . if $$LeaveAbs^HL7PatEv3(intAdmNum,EventDate,EventTime),intAdmLeave=$piece(LeaveRow,"^",2)
+	. . . . // cancel
+	. . . . if $get(^TMP("HL7",$job,"EVN",4))="C",leave'="" do
+	. . . . . if $$LeaveAbsRetCan^HL7PatEv3(intAdmLeave)
+	
+	. . . // update/cancel return leave of absence
+	. . . if $get(^TMP("HL7",$job,"EVN",1))="A22" do
+	. . . . if $$SelectAbs^HL7PatEv3(intAdmLeave) quit
+	. . . . if $get(^TMP("HL7",$job,"EVN",4))="" do
+	. . . . . if $$LeaveAbsRet^HL7PatEv3(intAdmLeave,EventDate,EventTime)
+	. . . . // cancel
+	. . . . if $get(^TMP("HL7",$job,"EVN",4))="C" do
+	. . . . . if $$LeaveAbsCan^HL7PatEv3(intAdmLeave)
+	
+	. . . // check if message forwarding required
+	. . . if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmLeave)="PAADMLEAVE"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A28 - add person information
+	// A31 - update existing person information
+Person(adttype) set adttype=$get(adttype),label="Person"
+	
+	if adttype="A28" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. // extract patient details
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . kill PLIST
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . do PatSet^HL7PatEv1 if reject'="" quit
+	. . do PatInsert^HL7PatEv1A
+	. . // check if message forwarding required
+	. . if forward,reject="" set forwardnum(cnt1,intRegMrn)="PAPERSON"
+	
+	if adttype="A31" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . // check patient detail and update
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check if PDS update and SCN against patient is not set (value of 0 or "") then do not update
+	. . if $piece($get(^CF("SM",1)),"^",67)="Y",'+($piece($get(^PAPER(intRegMrn,"PER",6)),"^",6)) quit
+	. . do PatSet^HL7PatEv1 if reject'="" quit
+	. . // insert hospital mrn if not exist
+	. . set x="" for  set x=$order(HospMrn(x)) quit:x=""  do
+	. . . set HospMrn=$piece(HospMrn(x),"^")
+	. . . if HospMrn'="" do HospMrn^HL7PatEv1A
+	. . // update patient detail
+	. . if '$$PatUpdate^HL7PatEv1A(intRegMrn,.reject) quit:reject'=""
+	. . // check if message forwarding required
+	. . if forward,reject="" set forwardnum(cnt1,intRegMrn)="PAPERSON"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A23 - deactivate a patient record
+	// A29 - deactivate a person record
+Deactivate(adttype) set adttype=$get(adttype),label="Deactivate"
+	
+	if adttype="A23" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . // check patient details
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	. . set x="" for  set x=$order(HospMrn(x)) quit:x=""  do
+	. . . set HospMrn=$piece(HospMrn(x),"^") quit:HospMrn=""
+	. . . set mrtype=$$MedRecType^HL7Common5(.reject,$piece(HospMrn(x),"^",2),$piece(HospMrn(x),"^",3),$piece(HospMrn(x),"^",4))
+	. . . if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)="" quit
+	. . . set intHospMrn=$$intHospMrn^HL7Common2(HospMrn,mrtype) quit:intHospMrn=""
+	. . . set PLIST(13)="N" if $$HospUpdate^HL7PatEv1A(intHospMrn)
+	
+	if adttype="A29" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . // check patient details
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	. . // deactivate record
+	. . kill PAPMI set PAPMI(42)="N" if '$$PapmiUpdate^HL7PatEv1A(intRegMrn) kill PAPMI
+	. . kill PAPER set PLIST(123)=upduser,PLIST(145)=upddate,PLIST(146)=updtime,PLIST(164)=updhosp if '$$PaperUpdate^HL7PatEv1A(intRegMrn) kill PAPER
+	
+	. . // check if message forwarding required
+	. . if forward,reject="" set forwardnum(cnt1,intRegMrn)="PAPATMAS"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A34 - merge patient information - patient id ONLY
+MergePat(adttype) set adttype=$get(adttype),label="MergePat"
+	
+	if adttype="A34" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // registration number merge
+	. . set found="" do  if reject'=""!(found=1) quit
+	. . . do NumTypeDetail^HL7Common2($get(PatNum("REG")),"","","","","","",.usetype,.usecode)
+	. . . set extReg=^TMP("HL7",$job,cnt1,"MRG",1) for i=1:1:$length(extReg,"~") if $piece($piece($piece(extReg,"~",i),"^",usetype),"&")=usecode do  quit:reject'=""
+	. . . . set RegMrnFrom=$piece($piece(extReg,"^"),"~",i) if RegMrnFrom="",found="" set reject="No registration number supplied for merge",reject("Detail")="MRG^^1~101" quit
+	. . . . set intRegFrom=$$intRegMrn^HL7Common2(RegMrnFrom) if intRegFrom="" set reject="Registration number "_RegMrnFrom_" does not exist",reject("Detail")="MRG^^1~204" quit
+	. . . . set found=1
+	. . . . // extract old patient details
+	. . . . kill PLIST,PAPER if $$PaperSelect^HL7PatEv1A(intRegFrom) set reject="Unable to extract patient details for 'merge from' number "_RegFrom,reject("Detail")="MRG^^1~207" quit
+	. . . . merge PLIST=PAPER set PLIST(123)=upduser,PLIST(145)=upddate,PLIST(146)=updtime,PLIST(164)=updhosp
+	. . . . set HL7Flag="Y" if $$merge^MVBPAMR(intRegFrom,intRegMrn,HL7("USER"))
+	. . . . kill HL7Flag
+	
+	. . // hospital number merge
+	. . kill HospMrn do NumTypeDetail^HL7Common2($get(PatNum("HOSP")),"","",.asstype,"","",.idmrtype,.usetype,.usecode)
+	. . set extReg=^TMP("HL7",$job,cnt1,"MRG",1) for i=1:1:$length(extReg,"~") do  quit:reject'=""
+	. . . set found="" if idmrtype="Y" do  quit:'found
+	. . . . set usecode=$piece($piece($piece(extReg,"~",i),"^",usetype),"&") if usecode'="",$data(^RTC("TYPE",0,"Code",usecode)) set found=1
+	. . . if idmrtype'="Y",$piece($piece($piece(extReg,"~",i),"^",usetype),"&")=usecode quit
+	
+	. . . set HospMrnFrom=$piece($piece(extReg,"~",i),"^") if HospMrnFrom="",found="" set reject="No Hospital number supplied for merge",reject("Detail")="MRG^^1~101" quit
+	. . . set mrtype=$$MedRecType^HL7Common5(.reject,$piece($piece($piece(extReg,"~",i),"^",asstype),"&"),idmrtype,usecode,HospMrnFrom,$get(RegMrn)) if reject'="" set reject("Detail")="MRG^^1~204" quit
+	. . . set intHospFrom=$$intHospMrn^HL7Common2(HospMrnFrom,mrtype) if intHospFrom="" set reject="Hospital number "_HospMrnFrom_" does not exist",reject("Detail")="MRG^^1~204" quit
+	. . . set found=1
+	. . . set intRegFrom=$piece(^RT(intHospFrom),"^",2)
+	. . . kill ^RT(0,"PAT",intRegFrom,intHospFrom)
+	. . . set ^RT(0,"PAT",intRegMrn,intHospFrom)="",$piece(^RT(intHospFrom),"^",2)=intRegMrn
+	
+	. . // check if message forwarding required
+	. . if forward,reject="" set forwardnum(cnt1,intRegMrn_"||"_intRegFrom)=""
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A37 - unmerge patient/person
+UnMergePat(adttype) set adttype=$get(adttype),label="UnMergePat",(merge,success,RegMrn)=""
+	
+	if adttype="A37" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=999,cnt1=$order(^TMP("HL7",$job,cnt1),-1) quit:cnt1=""  do  quit:reject'=""  quit:success=0
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . set numbers=$$RegNum^HL7Common2(.reject) if reject'="" quit
+	. . set RegMrnInAct=$piece(numbers,"|"),intRegMrnInAct=$piece(numbers,"|",2)
+	. . // extract merge record
+	. . set merge=$order(^PAMRi("PAT-FROM",intRegMrnInAct,""),-1)
+	. . if merge="" set reject="No merge record exists for Registration number "_RegMrnInAct,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~206",RegMrn=RegMrnInAct quit
+	. . if '$data(^PAMR(merge)) set reject="No merge record exists for Registration number "_RegMrnInAct,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~206",RegMrn=RegMrnInAct quit
+	. . set detail=$get(^PAMR(merge)),intRegInAct=$piece(detail,"^"),intRegActive=$piece(detail,"^",2)
+	. . set cnt1=$order(^TMP("HL7",$job,cnt1),-1) quit:cnt1=""  do  quit:reject'=""
+	. . . if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	. . . set numbers=$$RegNum^HL7Common2(.reject) if reject'="" quit
+	. . . set RegMrnActive=$piece(numbers,"|"),intRegMrnActive=$piece(numbers,"|",2)
+	. . . if intRegActive'=intRegMrnActive set reject="No merge record exists for Registration numbers "_RegMrnActive_"/"_RegMrnInAct,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~206",RegMrn=RegMrnActive quit
+	. . . set HL7Flag="Y" set success=$$unmerge^MVBPAMR(intRegMrnInAct,HL7("USER")) kill HL7Flag
+	
+	. . // update patient details
+	. . if success=0 do
+	. . . set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . . . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . . . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . . . // check patient details and update/insert
+	. . . . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . . . do PatSet^HL7PatEv1 if reject'="" quit
+	. . . . set x="" for  set x=$order(HospMrn(x)) quit:x=""  set HospMrn=$piece(HospMrn(x),"^") if HospMrn'="" do
+	. . . . . set mrtype=$$MedRecType^HL7Common5(.reject,$piece(HospMrn(x),"^",2),$piece(HospMrn(x),"^",3),$piece(HospMrn(x),"^",4),HospMrn,$get(RegMrn))
+	. . . . . if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)="" quit
+	. . . . . set intHospMrn=$$intHospMrn^HL7Common2(HospMrn,mrtype) quit:intHospMrn'=""
+	. . . . . set PLIST(13)="Y" if $$HospUpdate^HL7PatEv1A(intHospMrn)
+	. . . . // update patient detail
+	. . . . if '$$PatUpdate^HL7PatEv1A(intRegMrn,.reject) quit:reject'=""
+	
+	. . // check if message forwarding required
+	. . if forward,reject="" set forwardnum(1,intRegMrnActive_"||"_intRegMrnInAct)=""
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A40 - merge patient information - patient identifier list
+MergePatIdList(adttype) set adttype=$get(adttype),label="MergePatIdList"
+	if adttype="A40" do
+	. set (intRegMrn,RegMrn,intRegFrom,RegMrnFrom)=""
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"MRG")) set reject="Required segment MRG not received in message",reject("Detail")="MRG^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // registration number merge
+	. . set found="" do  if reject'="" quit
+	. . . for numtype="REG","CHINHS" if $data(PatNum(numtype)) do  if found quit
+	. . . . do NumTypeDetail^HL7Common2($get(PatNum(numtype)),"","","","","","",.usetype,.usecode)
+	. . . . set extReg=^TMP("HL7",$job,cnt1,"MRG",1)
+	. . . . for i=1:1:$length(extReg,"~") if $piece($piece($piece(extReg,"~",i),"^",usetype),"&")=usecode do  quit:found
+	. . . . . set num=$piece($piece(extReg,"~",i),"^")
+	. . . . . // registration number
+	. . . . . if numtype="REG" do
+	. . . . . . set intRegFrom=$$intRegMrn^HL7Common2(num) if intRegFrom'="" set RegMrnFrom=num,found=1
+	. . . . . // chi/nhs number
+	. . . . . if numtype="CHINHS" do
+	. . . . . . set numbers=$$extNumRegMrn^HL7Common2(num,"CHINHS","A40")
+	. . . . . . set RegMrnFrom=$piece(numbers,"|"),intRegFrom=$piece(numbers,"|",2) if intRegFrom'="" set found=1
+	. . . if 'found set reject="Unable to locate registration number for merge",reject("Detail")="MRG^^1~204" quit
+	. . . // extract old patient details
+	. . . kill PLIST,PAPER if $$PaperSelect^HL7PatEv1A(intRegFrom) set reject="Unable to extract patient details for 'merge from' number "_RegMrnFrom,reject("Detail")="MRG^^1~206" quit
+	. . . merge PLIST=PAPER set PLIST(123)=upduser,PLIST(145)=upddate,PLIST(146)=updtime,PLIST(164)=updhosp
+	. . . set HL7Flag="Y" if $$merge^MVBPAMR(intRegFrom,intRegMrn,HL7("USER")) kill PLIST
+	. . . kill HL7Flag
+	
+	. . // deactivate mrn's no longer required
+	. . do NumTypeDetail^HL7Common2($get(PatNum("HOSP")),"","",.asstype,"","",.idmrtype,.usetype,.usecode)
+	. . kill HospMrn set extReg=^TMP("HL7",$job,cnt1,"MRG",1) for i=1:1:$length(extReg,"~") do  quit:reject'=""
+	. . . set found="" if idmrtype="Y" do  quit:'found
+	. . . . set usecode=$piece($piece($piece(extReg,"~",i),"^",usetype),"&") if usecode'="",$data(^RTC("TYPE",0,"Code",usecode)) set found=1
+	. . . if idmrtype'="Y",$piece($piece($piece(extReg,"~",i),"^",usetype),"&")=usecode quit
+	. . . set HospMrn=$piece($piece(extReg,"~",i),"^") quit:HospMrn=""
+	. . . set mrtype=$$MedRecType^HL7Common5(.reject,$piece($piece($piece(extReg,"~",i),"^",asstype),"&"),idmrtype,usecode,HospMrn,$get(RegMrn)) if reject'="" set reject("Detail")="MRG^^1~204" quit
+	. . . set intHospMrn=$$intHospMrn^HL7Common2(HospMrn,mrtype) if intHospMrn="" quit
+	. . . kill PLIST set PLIST(13)="N" if $$HospUpdate^HL7PatEv1A(intHospMrn) kill PLIST
+	
+	. . // check if message forwarding required
+	. . if forward,reject="" set forwardnum(cnt1,intRegMrn_"||"_intRegFrom)=""
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A45 - move visit information - visit number
+MoveVis(adttype) set adttype=$get(adttype),label="MoveVis"
+	
+	if adttype="A45" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // check patient details
+	. . if $$PatCheck^HL7Common3(intRegMrn) quit
+	. . set visit=$piece($get(^TMP("HL7",$job,cnt1,"MRG",5)),"^") if visit="" set reject="No episode number supplied for move",reject("Detail")="MRG^^5~101" quit
+	. . set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" set reject="Episode number "_visit_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~204" quit
+	. . set HL7Flag="Y" do updadm^MVBPAMR(intAdmNum,intRegMrn) kill HL7Flag
+	. . // switch mrn and episode volumes
+	. . if EpisVolNum="" quit
+	. . set intHospMrn=$$intHospMrn^HL7Common2(HospMrn) if intHospMrn="" quit
+	. . kill ^RT(0,"Adm",intAdmNum)
+	. . set found="",i=0 for  set i=$order(^RT(intHospMrn,"RTMAV",i)) quit:i=""  do  quit:found=1
+	. . . if $piece(^(i),"^",13)=EpisVolNum set found=1
+	. . if found set ^RT(0,"Adm",intAdmNum,intHospMrn,i)=""
+	
+	. . // check if message forwarding required
+	. . if forward,reject="" set forwardnum(cnt1,intAdmNum_"||"_intRegMrn)=""
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A47 - change patient identifier ** PID is new number, MRG is existing number **
+ChangePatId(adttype) set adttype=$get(adttype),label="ChangePatId"
+	
+	if adttype="A47" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . // ignore national numbers
+	. . if $piece($piece(^TMP("HL7",$job,cnt1,"PID",3),"~"),"^",NatField)=NatCode!($piece($piece(^TMP("HL7",$job,cnt1,"MRG",1),"~"),"^",NatField)=NatCode) quit
+	. . set newMrn=$piece($piece(^TMP("HL7",$job,cnt1,"PID",3),"~"),"^"),oldMrn=$piece($piece(^TMP("HL7",$job,cnt1,"MRG",1),"~"),"^")
+	. . // ignore deletions
+	. . if newMrn=""""!(newMrn="""""") quit
+	. . // check if old mrn was registration # or hospital #
+	. . set oldintRegMrn=$$intRegMrn^HL7Common2(oldMrn),oldintHospMrn=$$intHospMrn^HL7Common2(oldMrn)
+	. . if oldintRegMrn="",oldintHospMrn="" set reject="Mrn supplied in MRG "_oldMrn_" could not be located",reject("Detail")="MRG^^1~204",RegMrn=oldMrn quit
+	. . if oldintRegMrn'="",oldintHospMrn'="" set reject="Mrn supplied in MRG "_oldMrn_" is registered as a hospital and registration number, not proceeding",reject("Detail")="MRG^^1~206",RegMrn=oldMrn quit
+	
+	. . // change registration numbers
+	. . if oldintRegMrn'="" do  quit
+	. . . set newintRegMrn=$$intRegMrn^HL7Common2(newMrn)
+	. . . // add patient
+	. . . if newintRegMrn="" do
+	. . . . set RegMrn=newMrn,nationalnum="" do PatDet1^HL7PatEv1,PatSet^HL7PatEv1,PatInsert^HL7PatEv1A
+	. . . set newintRegMrn=$$intRegMrn^HL7Common2(newMrn)
+	. . . // updating user and location
+	. . . do UpdateUser^HL7PatEv1("EX")
+	. . . // perform merge
+	. . . kill PLIST,PAPER if $$PaperSelect^HL7PatEv1A(oldintRegMrn) set reject="Unable to extract patient details for 'merge from' number "_oldMrn,reject("Detail")="MRG^^1~206",RegMrn=oldMrn quit
+	. . . merge PLIST=PAPER  set PLIST(123)=upduser,PLIST(145)=upddate,PLIST(146)=updtime,PLIST(164)=updhosp
+	. . . set HL7Flag="Y" if $$merge^MVBPAMR(oldintRegMrn,newintRegMrn,HL7("USER"))
+	. . . kill HL7Flag
+	. . . // release 'old' number for re-use
+	. . . if $$updRegMrn^HL7Common2(oldintRegMrn,"")
+	
+	. . // change hospital numbers
+	. . if oldintHospMrn'="" do  quit
+	. . . set newintHospMrn=$$intHospMrn^HL7Common2(newMrn)
+	. . . set intRegMrn=$piece(^RT(oldintHospMrn),"^",2)
+	. . . // add hospital number
+	. . . if newintHospMrn="" do
+	. . . . set PLIST(2)=newMrn,PLIST(9)=$$CheckCT^HL7UCN("medrecord",$piece($piece(^TMP("HL7",$job,cnt1,"PID",3),"~",1),"^",AssField)) ##; noalert
+	. . . . set HL7Flag=1
+	. . . . &SQL(UPDATE RT_Master VALUES :PLIST() WHERE RTMAS_RowId = :oldintHospMrn)
+	. . . . kill HL7Flag
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// A60 - update adverse reaction information
+AdverseReaction(adttype) set adttype=$get(adttype),label="AdverseReaction"
+	
+	if adttype="A60" do
+	. // check if message forwarding required
+	. set forward=$$MsgForward
+	. // check if site specific code required
+	. if $$SiteCode quit
+	. set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. . if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. . if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100 quit
+	. . do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. . // add/update/delete adverse reactions
+	. . if '$data(AdverseReact) quit
+	. . do AdverseReaction^HL7PatEv3
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+
+
+

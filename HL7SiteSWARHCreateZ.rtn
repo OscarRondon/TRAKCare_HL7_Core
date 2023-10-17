@@ -1,0 +1,39 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteSWARHCreateZ^MAC^^^0
+HL7SiteSWARHCreateZ // ML 21/01/2004 ; HL7 interface : create 'Z' transmission packets - South West Alliance of Rural Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteSWARHCreateZ.rtn#1 $
+	quit
+ 
+CheckZID ;; build DATA array - ZID : Other Patient Demographics
+ZID()	set intRegMrn=$get(intRegMrn) kill DATA
+ 
+	// extract patient details
+	kill PatDetail,PatDetailx set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	//i SQLCODE q SQLCODE
+ 
+	// check for new null fields and change to ""
+	for xtable="PAPER","PAPMI" if $data(old(xtable)) do  quit
+	.do NullChange^HL7Common3(xtable)
+ 
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+ 
+	set occupation=PatDetail(57),interpreter=$select(PatDetail(168)="Y":1,PatDetail(168)="N":2,1:3),medsuffix=PatDetailx(105)
+	kill remarks set comm=$get(PatDetail(73)),remarks="" if $listlength(comm) do
+	.for j=1:1:$listlength(comm) set line=$list(comm,j),line=$translate(line,$char(0)),remarks=$get(remarks)_$select($length(remarks):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(line,"O"),$char(13,10),HL7("LINEBK"))
+ 
+	// extract doctors
+	kill doctor if $get(PatDetail(67))'="" do
+	.if PatDetail(67)=""""!(PatDetail(67)="""""") quit
+	.set drid=PatDetail(67),drcode=$$Provider^HL7Common5(drid,"","","","R","O")
+	.set doctor("FAM")=$$BuildDoctor^HL7Common5(drcode)
+ 
+	set DATA("ZID",1)=medsuffix,DATA("ZID",2)=occupation,DATA("ZID",3)=interpreter,DATA("ZID",4)=remarks,DATA("ZID",5)=$get(doctor("FAM"))
+ 
+	kill PatDetail,PatDetailx,doctor
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

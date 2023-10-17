@@ -1,0 +1,72 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteQLDQuery^MAC^^^0
+HL7SiteQLDQuery // ML 20/09/2004 ; HL7 interface : patient event categories - Queensland Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteQLDQuery.rtn#1 $
+	quit
+         
+CheckA19 ;; A19 - query
+QueryA19(reject,adttype) set adttype=$get(adttype),(msgtype,reject)=""
+	kill queue,^TMP("HL7-OUT",$job)
+ 
+	// extract search type : DEM - demographic
+	set searchtype=$get(^TMP("HL7",$job,"QRD",9)) if searchtype'="DEM" do  quit
+	.set reject="Query interface does not cater for "_searchtype_" searches.",reject("Detail")="QRD^^9~207"
+ 
+	// extract search criteria
+	set number=$piece($get(^TMP("HL7",$job,"QRD",8)),"^"),facility=$get(^TMP("HL7",$job,"QRD",11))
+	if number="" do  quit
+	.set reject="Query could not be performed as no Medical Record Number was received in the query",reject("Detail")="QRD^^8~205"
+ 
+	// override facility received with interface facility
+	if sendfac'="",sendfac'=facility set facility=sendfac
+	if facility="" do  quit
+	.set reject="Query for Medical Record Number "_number_" cannot be performed as no facility could be located for search criteria",reject("Detail")="QRD^^11~205"
+ 
+	// demographic search
+	set (intRegMrn,intHospMrn,intAdmNum,SQLCODE)=""
+ 
+	// check if valid mrn
+	&SQL(SELECT RTMAS_RowId INTO :intHospMrn FROM RT_Master, RTC_MRecordType, CT_Loc, CT_Hospital
+	      WHERE RTMAS_MRNo = :number AND RTMAS_MRType_DR = TYP_RowId AND CTLOC_RowId = TYP_CTLOC_DR
+		AND HOSP_RowId = CTLOC_Hospital_DR AND HOSP_Code = :facility)
+	if SQLCODE do  quit
+	.set reject="Medical Record Number "_number_" received for facility "_facility_" does not exist in MedTrak.",reject("Detail")="QRD^^8~205"
+ 
+	// extract registration number, current inpatient admission
+	set intRegMrn=$$intRegMrnHosp^HL7Common2(intHospMrn) if intRegMrn="" do  quit
+	.set reject="Medical Record Number "_number_" received for facility "_facility_" does not belong to a patient in MedTrak.",reject("Detail")="QRD^^8~205"
+ 
+	// extract current/most recent admission
+	set found=""
+	set intAdmNum="" for  set intAdmNum=$order(^PAPERdr(intRegMrn,"ADM","I",intAdmNum),-1) quit:intAdmNum=""  do  quit:found
+	.set current="" &SQL(SELECT PAADM_Current INTO :current FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+	.if current="Y" set found=1 quit
+	if 'found set intAdmNum=$order(^PAPERdr(intRegMrn,"ADM","I",intAdmNum),-1)
+ 
+	set table=""
+	// build segments
+	merge ^TMP("HL7-OUT",$job,"QRD")=^TMP("HL7",$job,"QRD")
+	do Build^HL7Queue("QRD",13)
+	set msgtype="ADR^A19" for segment="PID^Y^N^","NK1^N^Y^99","PV1^Y^N^","ZV1^N^N^","ZPD^N^N^" if $increment(cnt) set SEG(cnt)=segment
+	do BuildSegment^HL7Create
+ 
+	// send query response
+	if $data(queue) do  kill queue
+	.set controlid=$$ControlId^HL7AckNak
+	. // reverse sending and receiving applications found in interface info
+	.set mshmsg="MSH"_msh_%_HL7("ACKSENDAPP")_%_HL7("ACKSENDFAC")_%_^TMP("HL7",$job,"MSH",2)_%_^TMP("HL7",$job,"MSH",3)_%_$$Date^HL7_%_%_"ADR^A19"_%_$$ControlId^HL7AckNak_%_HL7("PT")_%_HL7("VER")_%_%_%_"AL"_%_"AL"_%_"AUS"_%_"ASCII"_%_"EN"_%
+	.set msamsg="MSA"_%_"AA"_%_^TMP("HL7",$job,"MSH",9)_%_%_%
+	.kill trace set trace=1
+	.write ESC("VT"),mshmsg,ESC("CR") set trace(trace)=mshmsg
+	.write msamsg,ESC("CR"),ESC("FS"),ESC("CR"),! set trace=trace+1,trace(trace)=msamsg
+	.set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  do
+	..write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	.write ESC("FS"),ESC("CR"),!
+	.do trace^HL7Trace("M-->E",$h,"",tracerowid) kill trace
+ 
+	kill ^TMP("HL7-OUT",$job)
+	quit
+
+
+

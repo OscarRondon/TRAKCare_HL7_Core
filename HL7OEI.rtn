@@ -1,0 +1,547 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7OEI^MAC^^^0
+HL7OEI // ML 2/4/01 ; HL7 Order and Result Inquiry
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OEI.rtn#1 $
+	quit
+	
+	// insert order into HL7 transaction queue
+OrderIns(intRegMrn,date,time,intAdmNum,intOrdNum,MedCat,ts,epis,cnt)
+	new (intRegMrn,date,time,intAdmNum,intOrdNum,MedCat,ts,epis,cnt)
+	set intRegMrn=$get(intRegMrn),date=$get(date),time=$get(time),intAdmNum=$get(intAdmNum),intOrdNum=$get(intOrdNum),MedCat=$get(MedCat),ts=$get(ts),epis=$get(epis),cnt=$get(cnt)
+	set fail="" for var="epis","intRegMrn","date","time","intAdmNum","intOrdNum","MedCat","ts" do  quit:fail
+	. if @var="" set fail=1
+	if fail quit 0
+	if cnt="" set cnt=1 if $data(^TEPIi("MEDTRAKi",epis,ts)) set cnt=$order(^TEPIi("MEDTRAKi",epis,ts,""),-1)+1
+	set ^TEPIi("MEDTRAK",intRegMrn,date,time,intAdmNum,intOrdNum,MedCat,ts,cnt,epis)=0
+	set ^TEPIi("MEDTRAKi",epis,ts,cnt)=intRegMrn_"\"_date_"\"_time_"\"_intAdmNum_"\"_intOrdNum_"\"_MedCat
+	quit 0
+	
+	// change lab episode number
+Change(oldepis,epis,ts,intOrdNum)
+	set oldepis=$get(oldepis),epis=$get(epis),ts=$get(ts),intOrdNum=$get(intOrdNum)
+	//ts:testsetcode,intOrdNum:OEORIRowID,epis:LabEpisodeNo.
+	quit:oldepis="" 0
+	quit:ts="" 0
+	// find seq number
+	set (cnt,ok)="" for  set cnt=$order(^TEPIi("MEDTRAKi",oldepis,ts,cnt)) quit:cnt=""  do  quit:ok
+	. if $piece(^(cnt),"\",5)=intOrdNum set ok=1
+	// set indexes if old episode was not found
+	if cnt="" do  quit 0
+	. set intAdmNum=$piece($get(^OEORD(+intOrdNum)),"^") quit:'intAdmNum
+	. set intRegMrn=$piece($get(^PAADM(+intAdmNum)),"^")
+	. set OrderedItem=$piece($get(^OEORD(+intOrdNum,"I",+$piece(intOrdNum,"||",2),1)),"^",2) quit:'OrderedItem
+	. set date=$piece($get(^OEORD(+intOrdNum,"I",+$piece(intOrdNum,"||",2),1)),"^",9)
+	. set time=+$piece($get(^OEORD(+intOrdNum,"I",+$piece(intOrdNum,"||",2),1)),"^",10)
+	. set MedCat=$$Category^HL7Common3(OrderedItem)
+	. set err=$$OrderIns(intRegMrn,date,time,intAdmNum,intOrdNum,MedCat,ts,epis)
+	. kill ^TEPIi("MEDTRAK",intRegMrn,date,time,intAdmNum,intOrdNum,MedCat,ts,1,oldepis),^TEPIi("MEDTRAKi",oldepis,ts,1)
+	set x=^TEPIi("MEDTRAKi",oldepis,ts,cnt)
+	set intRegMrn=$piece(x,"\"),date=$piece(x,"\",2),time=$piece(x,"\",3),intAdmNum=$piece(x,"\",4),OI=$piece(x,"\",5),MedCat=$piece(x,"\",6)
+	kill ^TEPIi("MEDTRAK",intRegMrn,date,time,intAdmNum,OI,MedCat,ts,cnt,oldepis),^TEPIi("MEDTRAKi",oldepis,ts,cnt)
+	set ^TEPIi("MEDTRAK",intRegMrn,date,time,intAdmNum,OI,MedCat,ts,cnt,epis)=0
+	if $data(^TEPIi("MEDTRAKi",epis,ts)) set cnt=$order(^TEPIi("MEDTRAKi",epis,ts,""),-1)+1
+	set ^TEPIi("MEDTRAKi",epis,ts,cnt)=intRegMrn_"\"_date_"\"_time_"\"_intAdmNum_"\"_OI_"\"_MedCat
+	quit 0
+	
+ResQuery(ts,epis,cnt,TestList,filler,OrdItemId)
+	new ord,itm,resdispgrp
+	set ts=$get(ts),epis=$get(epis),cnt=$get(cnt),TestList=$get(TestList),filler=$get(filler),OrdItemId=$get(OrdItemId)
+	kill PLIST,x,TestLay,tmpLay,donetest set x=""
+	set (tc,desc,res,units,RangeL,RangeH,rangeflag,flag,comments,sens,sep)=""
+	// extract episode details
+	if $$Extract(epis) quit
+	// k VISIT m VISIT=PLIST k PLIST
+	// is this order part of a result display group
+	set resdispgrp=""
+	if OrdItemId="" set OrdItemId=##class(web.EPVisitTestSet).GetOrderIDFromVisitTestSetRowID(epis_"||"_ts_"||"_cnt)
+	if OrdItemId do
+	. set arcim=$piece($get(^OEORD(+OrdItemId,"I",$piece(OrdItemId,"||",2),1)),"^",2)
+	. if arcim'="" set resdispgrp=$piece($get(^ARCIM(+arcim,+$piece(arcim,"||",2),9)),"^",24)
+	// if we have NOT been sent list of tests - get it from the layout..
+	set tc="",idx=0
+	if TestList="" do
+	. set (LayoutUsed,j)="" for  set j=$order(^TTAB("TS",ts,0,j)) quit:j=""  do
+	. . set detail=$get(^TTAB("TS",ts,0,j))
+	. . set LayoutUsed=1,tc=$piece(detail,"\",8),reportable=$piece(detail,"\",13)
+	. . if tc'="" set tmpLay(tc)=reportable
+	. set tc="" for  set tc=$order(^TEPI(epis,1,ts,cnt,"DATA",tc)) quit:tc=""  do
+	. . if '$data(tmpLay(tc)),$data(^TTAB("TS",ts,0)) quit
+	. . // Log 55362 - AI - 12-09-2005 : If the result item has been "suppressed" on result entry, do not display.
+	. . set suppress=$piece($get(^TEPI(epis,1,ts,cnt,"DATA",tc)),"\",3)
+	. . if suppress="Y" quit
+	. . if suppress="",$get(tmpLay(tc))="N" quit
+	. . // end Log 55362
+	. . set idx=idx+1
+	. . set TestLay(idx)=tc
+	else  do
+	. for idx=1:1:$length(TestList,"^") do
+	. . set tc=$piece(TestList,"^",idx) quit:tc=""
+	. . set TestLay(idx)=$translate(tc," ","")
+	
+	// extract episode test details
+	set TestDet=$get(^TEPI(epis,1,ts,cnt)),AuthDate=$piece(TestDet,"\",4),status=$piece(TestDet,"\",31)
+	set x(1)=epis_$char(1)_ts_$char(1)_status_$char(1)_$piece(VISIT(12),$char(1))_$char(1)_$select($piece(VISIT(13),$char(1))'="":($piece(VISIT(13),$char(1))*60),1:"")
+	
+	// get a list of LabTestsetRowIDs which are valid for this filler..
+	set FillLabOK=""
+	if filler'="" do
+	. set ep="" for  set ep=$order(^OEORDi(0,"Filler",filler,ep)) quit:ep=""  do
+	. . set ord="" for  set ord=$order(^OEORDi(0,"Filler",filler,ep,ord)) quit:ord=""  do
+	. . . set itm="" for  set itm=$order(^OEORDi(0,"Filler",filler,ep,ord,itm)) quit:itm=""  do
+	. . . . set labepis=$piece($get(^OEORD(ord,"I",itm,3)),"^",35)
+	. . . . set FillLabOK=FillLabOK_$select($length(FillLabOK):"^",1:"")_labepis
+	//
+	set idx="" for  set idx=$order(TestLay(idx)) quit:idx=""  do
+	. // is test item reportable
+	. set tc=TestLay(idx) quit:tc=""
+	. set tsx=ts,cntx=cnt,episx=epis,found=1
+	. // if the required test code is NOT in this test set, or we've already got this test item from this test set - get it..
+	. // this is used for micro studies ("ORG_x", where ORG_1 can be a different test beneath >1 test set..)
+	. if '$data(^TEPI(epis,1,ts,cnt,"DATA",tc))!($data(donetest(ts,tc))) do
+	. . set found=0
+	. . set ts1="" for  set ts1=$order(^TEPI(epis,1,ts1)) quit:ts1=""  quit:found  if '$data(donetest(ts1,tc))  do
+	. . . set cnt1="" for  set cnt1=$order(^TEPI(epis,1,ts1,cnt1)) quit:cnt1=""  do
+	. . . . //check if this lab test set is for this filler
+	. . . . if filler'="",("^"_FillLabOK_"^")'[("^"_epis_"||"_ts1_"||"_cnt1_"^") quit
+	. . . . if $data(^TEPI(epis,1,ts1,cnt1,"DATA",tc)) set found=1,tsx=ts1,cntx=cnt1 quit
+	. // check all other episode number in this Filler, in case this test set is included from a result disp gp.
+	. if '$data(^TEPI(epis,1,ts,cnt,"DATA",tc)),'found,filler'="",resdispgrp do
+	. . set ep="" for  set ep=$order(^OEORDi(0,"Filler",filler,ep)) quit:ep=""  if ep'=epis do
+	. . . set ts1="" for  set ts1=$order(^TEPI(ep,1,ts1)) quit:ts1=""  quit:found  do
+	. . . . set cnt1="" for  set cnt1=$order(^TEPI(ep,1,ts1,cnt1)) quit:cnt1=""  quit:found  do
+	. . . . . if $data(^TEPI(ep,1,ts1,cnt1,"DATA",tc)) set found=1,tsx=ts1,cntx=cnt1,episx=ep
+	. quit:'found
+	. set donetest(tsx,tc)=""
+	. set (desc,rangeflag,flag,res,units,comments,sens,sep,range,rangeL,rangeH,RangeL,RangeH)=""
+	. do Result(episx,tsx,cntx,tc)
+	//s x="" f i=1:1 q:'$d(x(i))  s x=x_$s($l(x):"^",1:"")_x(i)
+	set x="" for i=1:1 quit:'$data(x(i))  set x=x_$select($length(x):$char(3),1:"")_x(i)
+	quit x
+	
+	
+	// get single result
+SingleRes(vtsRowId,OrdItemId)
+	new (vtsRowId,OrdItemId,%session,%request,msg,t)
+	set vtsRowId=$get(vtsRowId),OrdItemId=$get(OrdItemId)
+	kill PLIST
+	set (desc,rangeflag,flag,res,units,range,RangeL,RangeH,comments,sens,sep)=""
+	set epis=$piece(vtsRowId,"||"),ts=$piece(vtsRowId,"||",2),cnt=$piece(vtsRowId,"||",3),tc=$piece(vtsRowId,"||",4)
+	
+	// extract episode details
+	if $$Extract(epis) quit
+	// k VISIT m VISIT=PLIST k PLIST
+	
+	// extract test details
+	set TestDet=$get(^TEPI(epis,1,ts,cnt)),AuthDate=$piece(TestDet,"\",4),status=$piece(TestDet,"\",31)
+	set x(1)=epis_$char(1)_ts_$char(1)_status
+	do Result(epis,ts,cnt,tc)
+	//s x="" f i=1:1 q:'$d(x(i))  s x=x_$s($l(x):"^",1:"")_x(i)
+	set x="" for i=1:1 quit:'$data(x(i))  set x=x_$select($length(x):$char(3),1:"")_x(i)
+	quit x
+	
+	// extract result
+Result(epis,ts,cnt,tc)
+	set epis=$get(epis),ts=$get(ts),cnt=$get(cnt),tc=$get(tc)
+	set detail=$get(^TEPI(epis,1,ts,cnt,"DATA",tc)) if $piece($get(^TEPI(epis,1,ts,cnt,"DATA",tc)),"\",2)="D" quit
+	// exclude Non-reportable items
+	set lpos="" for  set lpos=$order(^TTAB("TS",ts,0,lpos))  quit:lpos=""  quit:$piece($get(^TTAB("TS",ts,0,lpos)),"\",8)=tc
+	// Log 55362 - AI - 12-09-2005 : If the result item has been "suppressed" on result entry, do not display.
+	set suppress=$piece(detail,"\",3)
+	if suppress="Y" quit
+	if suppress="",lpos'="",$piece($get(^TTAB("TS",ts,0,lpos)),"\",13)'="Y" quit
+	// end Log 55362
+	set res=$piece(detail,"\"),resstatus=$piece(detail,"\",2),sigflag=$piece(detail,"\",7),flag=$piece(detail,"\",8),performedAt=$piece(detail,"\",15),InstrumentDate=$piece(detail,"\",16),InstrumentTime=$piece(detail,"\",17)
+	set PerformedAtLab=$piece(detail,"\",20)
+	set res=$$ConvertDelim(res)
+	set tcd=tc
+	if '$data(^TTAB("TC",tc)) set tcd=$piece(tc,"_")
+	set desc=$piece($get(^TTAB("TC",tcd)),"\"),units=$piece($get(^TTAB("TC",tcd)),"\",2),type=$piece($get(^TTAB("TC",tcd)),"\",3)
+	
+	set units=$$ConvertDelim($select(units="""""":"",1:units))
+	// will the QLD test item comments be another type??????????????????????
+	// ?????????????????????????????????????????????????????????????????????
+	if type="S",res'="",'$data(^OEC("TICOM",0,"Code",tc)) set res=res_$char(2)_$$StdComm(tc,res)
+	
+	if type="V",res'="" set res=res_$char(2)_$$Pathogen(res)
+	// 65008 YC - Don't check range for standard comment, Pathogens or Daybook site or free text (66064)
+	if type'="S",type'="V",type'="Z3",type'="X" do
+	. // extract ranges and flag
+	. do CheckRange
+	new CharSep set CharSep=""
+	if $data(%session) do
+	. new GroupID set GroupID=$get(%session.Data("LOGON.GROUPID"))
+	. set GroupID=##class(epr.GroupSettings).GetIdFromGroupId(GroupID) quit:'GroupID
+	. new objGroup set objGroup=##class(epr.GroupSettings).%OpenId(GroupID) quit:'objGroup
+	. set CharSep=objGroup.ResultRangeSep
+	. do objGroup.%Close()
+	//LOG 63891: DMT: changed default separator from ASCII 151 to ASCII 45
+	if CharSep="" set CharSep=$char(45)
+	set sep=" "_CharSep_" " do
+	. if RangeL="",(RangeH)="" set sep="" quit
+	. if RangeL'="",(RangeH)="" set sep="" quit
+	. if RangeL="",(RangeH)'="" set sep="" quit
+	set res=$select($isvalidnum(res):##class(websys.Conversions).FloatLogicalToHtml(res),1:res)
+	set RangeL=$select($isvalidnum(RangeL):##class(websys.Conversions).FloatLogicalToHtml(RangeL),1:RangeL)
+	set RangeH=$select($isvalidnum(RangeH):##class(websys.Conversions).FloatLogicalToHtml(RangeH),1:RangeH)
+	// temporary pull back of histo results - use until we pull back rtf's
+	if tc="T",$data(^TEPI(epis,1,ts,cnt,"DATA",tc,"REM")) set res=$$Comments(epis,cnt,ts,tc,type)
+	// comments
+	set comments=""
+	if tc'="T",$data(^TEPI(epis,1,ts,cnt,"DATA",tc,"REM")) do
+	. if '$data(^OEC("TICOM",0,"Code",##class(%Collation).AlphaUp(tc))) do
+	. . set comments=$$Comments(epis,cnt,ts,tc,type)
+	. . // if text comment, but no value show the comments as the value (log 44443)
+	. . if comments'="",res="" set res=comments,comments=""
+	. else  set res=$char(2,2)_$$Comments(epis,cnt,ts,tc,type)
+	// sensitivities
+	set sens="" if $data(^TEPI(epis,1,ts,cnt,"DATA",tc,"ANT")) set sens=1
+	set i=$order(x(""),-1)+1
+	if type="D",res'="" set res=##class(websys.Conversions).DateLogicalToHtml(res)
+	if type="T",res'="" set res=##class(websys.Conversions).TimeLogicalToHtml(res)
+	if $extract(type)="N",(res'="") do
+	. // if the numeric result is a numeric result comment turn into description - only use the first 200 charcters as long results cause a subscript
+	. if $data(^TTAB("RC",$extract(res,1,200))) set res=$piece($get(^TTAB("RC",$extract(res,1,200))),"\",1) quit
+	. // pad with trailing zeros up to the number of decimal places specified in Labtrak
+	. if $extract(res)="." set res="0"_res
+	. set dp=$extract(type,2,999)
+	. if $isvalidnum($get(dp)),+dp>0,$isvalidnum($get(res)) do
+	. . if res'["." set res=res_"."
+	. . set resdp=$length($piece(res,".",2))
+	. . if resdp<dp for ii=1:1:(dp-resdp) set res=res_"0"
+	. set sigfig=$piece($get(^TTAB("TC",tcd)),"\",28)
+	. if sigfig do
+	. . set res=##class(epr.LabGraphTestSets).ToSignificantFigures(res,sigfig)
+	if type="B2",res'="" do
+	. set res=$piece($get(^TTAB("BB-BG",res)),"\",1)
+	new authDate	// date of authorisation
+	set authDate=$piece($get(^TEPI(epis,1,ts,cnt)),"\",4)
+	set x(i)=tc_$char(1)_desc_$char(1)_res_$char(1)_units_$char(1)_RangeL_sep_RangeH_$char(1)_rangeflag_$char(1)_comments_$char(1)_$select(sens=1:"Y",1:"")_$char(1)_sigflag_$char(1)_epis_"||"_ts_"||"_cnt_"||"_tc_$char(1)_resstatus_$char(1)_flag_$char(1)_performedAt_$char(1)_InstrumentDate_$char(1)_InstrumentTime_$char(1)_authDate_$char(1)_PerformedAtLab
+	quit
+	
+	// THIS IS NOT USED...if it is, ^TEPIi("MEDTRAK" does not get set anymore so need to do this a diff way (65272)
+	// extract cumulative results for patient/test item
+CumQuery(intRegMrn,tc,DateFrom,DateTo,TimeFrom,TimeTo)
+	new (intRegMrn,tc,DateFrom,DateTo,TimeFrom,TimeTo)
+	set intRegMrn=$get(intRegMrn),tc=$get(tc),DateFrom=$get(DateFrom),DateTo=$get(DateTo),TimeFrom=$get(TimeFrom),TimeTo=$get(TimeTo)
+	
+	// if no internal mrn or test item code quit
+	if intRegMrn=""!(tc="") quit ""
+	set date=$select(DateFrom'="":DateFrom-1,1:""),greater=""
+	// get external MRN
+	//s RegMrn=$p($g(^PAPER(intRegMrn,"PAT",1)),"^")
+	// check if non-Labtrak system
+	//s intextMrn=RegMrn i $$LabSystem^HL7Common2()="Y" s intextMrn=intRegMrn
+	//q:intextMrn="" ""
+	// extract units for test item
+	set tcd=$select($piece(tc,"_")="ORG":"ORG",1:tc)
+	set units=$piece($get(^TTAB("TC",tcd)),"\",2),units=$select(units="""""":"",1:units),type=$piece($get(^TTAB("TC",tcd)),"\",3)
+	set units=$$ConvertDelim(units)
+	// ^TEPIi("MEDTRAK",newpat,date,time,ep,intOrdNum,mcat,ts,seq,OrdNum)
+	set x=""
+	for  set date=$order(^TEPIi("MEDTRAK",intRegMrn,date)) quit:date=""  do  quit:greater
+	. if $length(DateTo),date>DateTo set greater=1 quit
+	. set time="" for  set time=$order(^TEPIi("MEDTRAK",intRegMrn,date,time)) quit:time=""  do
+	. . set ep="" for  set ep=$order(^TEPIi("MEDTRAK",intRegMrn,date,time,ep)) quit:ep=""  do
+	. . . set ord="" for  set ord=$order(^TEPIi("MEDTRAK",intRegMrn,date,time,ep,ord)) quit:ord=""  do
+	. . . . set cat="" for  set cat=$order(^TEPIi("MEDTRAK",intRegMrn,date,time,ep,ord,cat)) quit:cat=""  do
+	. . . . . set itm="" for  set itm=$order(^TEPIi("MEDTRAK",intRegMrn,date,time,ep,ord,cat,itm)) quit:itm=""  do
+	. . . . . . set seq="" for  set seq=$order(^TEPIi("MEDTRAK",intRegMrn,date,time,ep,ord,cat,itm,seq)) quit:seq=""  do
+	. . . . . . . set epis="" for  set epis=$order(^TEPIi("MEDTRAK",intRegMrn,date,time,ep,ord,cat,itm,seq,epis)) quit:epis=""  do
+	. . . . . . . . // extract episode details
+	. . . . . . . . if $$Extract(epis) quit
+	. . . . . . . . set colldate=$piece(VISIT(12),$char(1)),colltime=$select($piece(VISIT(13),$char(1))="":"",$piece(VISIT(13),$char(1))=" ":"",1:$piece(VISIT(13),$char(1))*60)
+	. . . . . . . . set recdate=$piece(VISIT(61),$char(1)),rectime=$select($piece(VISIT(62),$char(1))'="":$piece(VISIT(62),$char(1))*60,1:"")
+	. . . . . . . . set ts="" for  set ts=$order(^TEPI(epis,1,ts)) quit:ts=""  do
+	. . . . . . . . . set cnt="" for  set cnt=$order(^TEPI(epis,1,ts,cnt)) quit:cnt=""  do
+	. . . . . . . . . . // is there a result for this test code (or "ORG_" if checking for sensitivities)
+	. . . . . . . . . . set tc="" for  set tc=$order(^TEPI(epis,1,ts,cnt,"DATA",tc)) quit:tc=""  do
+	. . . . . . . . . . . quit:$select($piece(tc,"_")="ORG":"ORG",1:tc)'=tcd
+	. . . . . . . . . . . //q:'$d(^TEPI(epis,1,ts,cnt,"DATA",$p(tc,"_")))
+	. . . . . . . . . . . // quit if I don't have data at top level
+	. . . . . . . . . . . quit:'($data(^TEPI(epis,1,ts,cnt,"DATA",tc))#10)
+	. . . . . . . . . . . // exclude 'D'eleted result
+	. . . . . . . . . . . if $piece($get(^TEPI(epis,1,ts,cnt,"DATA",tc)),"\",2)="D" quit
+	. . . . . . . . . . . // exclude Non-reportable items
+	. . . . . . . . . . . set lpos="" for  set lpos=$order(^TTAB("TS",ts,0,lpos))  quit:lpos=""  quit:$piece($get(^TTAB("TS",ts,0,lpos)),"\",8)=tc
+	. . . . . . . . . . . // Log 55362 - AI - 12-09-2005 : If the result item has been "suppressed" on result entry, do not display.
+	. . . . . . . . . . . set suppress=$piece($get(^TEPI(epis,1,ts,cnt,"DATA",tc)),"\",3)
+	. . . . . . . . . . . if suppress="Y" quit
+	. . . . . . . . . . . if suppress="",lpos'="",$piece($get(^TTAB("TS",ts,0,lpos)),"\",13)'="Y" quit
+	. . . . . . . . . . . // end Log 55362
+	. . . . . . . . . . . // extract test details
+	. . . . . . . . . . . set vtsRowId=epis_"||"_ts_"||"_cnt_"||"_tc
+	. . . . . . . . . . . set TestDet=$get(^TEPI(epis,1,ts,cnt)),AuthDate=$piece(TestDet,"\",4),status=$piece(TestDet,"\",31)
+	. . . . . . . . . . . if date=DateFrom,($length(TimeFrom)),(colltime<TimeFrom) quit
+	. . . . . . . . . . . if date=DateTo,($length(TimeTo)),(colltime>TimeTo) quit
+	. . . . . . . . . . . set detail=$get(^TEPI(epis,1,ts,cnt,"DATA",tc))
+	. . . . . . . . . . . set res=$piece(detail,"\"),resstatus=$piece(detail,"\",2),flag=$piece(detail,"\",8)
+	. . . . . . . . . . . set res=$$ConvertDelim(res)
+	. . . . . . . . . . . // check if sensitivities available
+	. . . . . . . . . . . set sens="" if $data(^TEPI(epis,1,ts,cnt,"DATA",tc,"ANT")) set sens="Y"
+	. . . . . . . . . . . set (rangeflag,range)=""
+	. . . . . . . . . . . // extract ranges and flag
+	. . . . . . . . . . . do CheckRange
+	. . . . . . . . . . . // comments
+	. . . . . . . . . . . set comments="" if tc'="T",$data(^TEPI(epis,1,ts,cnt,"DATA",tc,"REM")) do
+	. . . . . . . . . . . . set comments=$$Comments(epis,cnt,ts,tc,type)
+	. . . . . . . . . . . . if '$data(^OEC("TICOM",0,"Code",##class(%Collation).AlphaUp(tc))),comments'="",res="" set res=comments,comments=""
+	. . . . . . . . . . . set i=$order(x(""),-1)+1
+	. . . . . . . . . . . if type="D",res'="" set res=##class(websys.Conversions).DateLogicalToHtml(res)
+	. . . . . . . . . . . // Log 49974 YC - Pad with trailing zeros up to the number of decimal places specified in Labtrak
+	. . . . . . . . . . . // CT->Test Sets->Test Item Definition (Decimal)
+	. . . . . . . . . . . if $extract(type)="N" do
+	. . . . . . . . . . . . if $extract(res)="." set res="0"_res
+	. . . . . . . . . . . . set dp=$extract(type,2,999)
+	. . . . . . . . . . . . if $isvalidnum($get(dp)),+dp>0,$isvalidnum($get(res)) do
+	. . . . . . . . . . . . . if res'["." set res=res_"."
+	. . . . . . . . . . . . . set resdp=$length($piece(res,".",2))
+	. . . . . . . . . . . . . if resdp<dp for ii=1:1:(dp-resdp) set res=res_"0"
+	. . . . . . . . . . . // END Log 49974
+	. . . . . . . . . . . // send back date, time and result
+	. . . . . . . . . . . set x(i)=colldate_$char(1)_colltime_$char(1)_res_$char(1)_units_$char(1)_rangeflag_$char(1)_vtsRowId_$char(1)_$get(RangeL)_$char(1)_$get(RangeH)_$char(1)_recdate_$char(1)_rectime_$char(1)_resstatus_$char(1)_flag_$char(1)_sens_$char(1)_comments
+	//s x="" f i=1:1 q:'$d(x(i))  s x=x_$s($l(x):"^",1:"")_x(i)
+	set x="" for i=1:1 quit:'$data(x(i))  set x=x_$select($length(x):$char(3),1:"")_x(i)
+	quit x
+	
+	// select episode details
+Extract(epis)
+	set epis=$get(epis) kill PLIST
+	//&SQL(SELECT * INTO :PLIST() FROM lab.EP_VisitNumber WHERE EPVIS_RowID=:epis)
+	set xx=$get(^TEPI(epis))
+	set VISIT(5)=$piece(xx,"\",3),VISIT(12)=$piece(xx,"\",10),VISIT(13)=$piece(xx,"\",11),VISIT(22)=$piece(xx,"\",20)
+	set VISIT(26)=$piece(xx,"\",25),VISIT(61)=$piece(xx,"\",32),VISIT(62)=$piece(xx,"\",33),VISIT(63)=$piece(xx,"\",34)
+	set VISIT(93)=$piece(xx,"\",48)
+	
+	// is location inpatient location
+	if $piece(VISIT(22),$char(1))'="" do
+	. set inpat=$piece($get(^TTAB("RH",$piece(VISIT(22),$char(1)))),"\",16)
+	else  if $get(VISIT(93))'="" do
+	. set inpat=$piece($get(^TTAB("CTPAT",VISIT(93))),"\",2)
+	set ptype=0 if ($piece(VISIT(22),$char(1))'="")||($get(VISIT(93))'="") set ptype=0_$select(inpat="Y":"-IN",1:"")
+	
+	quit 0
+	
+	// extract antibiotic sensitivity results
+AntiSens(epis,ts,tc,cnt,CanViewSens)
+	new (epis,ts,tc,cnt,CanViewSens) set epis=$get(epis),ts=$get(ts),tc=$get(tc),cnt=$get(cnt),CanViewSens=$get(CanViewSens)
+	set AntiB="" for  set AntiB=$order(^TEPI(epis,1,ts,cnt,"DATA",tc,"ANT",AntiB)) quit:AntiB=""  do
+	. if $piece($get(^TEPI(epis,1,ts,cnt,"DATA",tc,"ANT",AntiB)),"\",6)="S",'CanViewSens quit
+	. if $piece($get(^TEPI(epis,1,ts,cnt,"DATA",tc,"ANT",AntiB)),"\",2)="N" quit
+	. set AntiBx=$piece($get(^TTAB("ANT",AntiB)),"\"),(status,statusd)=$piece($get(^TEPI(epis,1,ts,cnt,"DATA",tc,"ANT",AntiB)),"\",1)
+	. if status'="" set statusd=$piece($get(^TTAB("SENS",status)),"\")
+	. if statusd="" set statusd=status
+	. set i=$order(x(""),-1)+1,x(i)=AntiBx_$char(1)_statusd
+	set x="" for i=1:1 quit:'$data(x(i))  set x=x_$select($length(x):"^",1:"")_x(i)
+	quit x
+	
+	// extract pathogen
+Pathogen(xres)
+	new (xres) set xres=$get(xres)
+	if $data(^TTAB("BUG",xres)) quit $piece($get(^TTAB("BUG",xres)),"\")
+	quit ""
+	
+	// check ranges by type,age,sex
+Range(tc,age,spec,pregn,ptype,date,mi,vistestsetrowID)
+	new (tc,age,spec,pregn,ptype,date,epis,vistestsetrowID)
+	set tc=$get(tc),age=$get(age),spec=$get(spec),pregn=$get(pregn),ptype=$get(ptype),date=$get(date),result="",epis=$get(epis),vistestsetrowID=$get(vistestsetrowID)
+	if '$length(date) set date=+$h
+	if '$data(^TTAB("TC",tc,4,date)) set date=$order(^TTAB("TC",tc,4,date),-1)
+	if $length(date) do
+	. set result=$$GetTestItemRanges^CLabLink(tc,age,spec,pregn,ptype,date,"",vistestsetrowID)
+	set rLow=$piece(result,$char(1),1)
+	set rHigh=$piece(result,$char(1),2)
+	set rPanicLow=$piece(result,$char(1),3)
+	set rPanicHigh=$piece(result,$char(1),4)
+	set result=rLow_"\"_rHigh_"\"_rPanicLow_"\"_rPanicHigh
+	quit result
+	
+	// check reference ranges
+CheckRange
+	new ordDets,receivingLoc,UseLabTrak
+	set testsetvisitrowId=epis_"||"_ts_"||"_cnt
+	set (ordDets,receivingLoc)=""
+	set UseLabTrak="Y"
+	if $get(OrdItemId)'="" set ordDets=^OEORD(+OrdItemId,"I",$piece(OrdItemId,"||",2),3)
+	if ordDets'="" set receivingLoc=$piece(ordDets,"^",6)
+	if receivingLoc'="" set UseLabTrak=$$extlab^COEOrdItem14(receivingLoc)
+	
+	set range=$piece($get(^TEPI(epis,1,ts,cnt,"DATA",tc)),"\",4,5),rangeflag=""
+	// strip spaces - caters for healthshare not doing it before they file results
+	set range=$translate(range," ")
+	set rangeL=$piece(range,"\"),rangeH=$piece(range,"\",2)
+	set rangeL=$select(rangeL="""""":"",1:rangeL),rangeH=$select(rangeH="""""":"",1:rangeH)
+	if rangeL="",rangeH="" do
+	. set range=$$Range(tc,$piece(VISIT(26),$char(1)),$piece(VISIT(5),$char(1)),$piece(VISIT(63),$char(1)),ptype,AuthDate,"",testsetvisitrowId)
+	. set rangeL=$piece(range,"\"),rangeH=$piece(range,"\",2)
+	set RangeL=rangeL,RangeH=rangeH,resNum=res
+	for xrange="rangeL","rangeH","resNum" {
+		if @xrange[">" {
+			if @xrange'["=" {
+				set @xrange=$translate(@xrange,">=")+.00000001
+			} else {
+				set @xrange=$translate(@xrange,">=")
+			}
+		} elseif @xrange["<" {
+			if @xrange'["=" {
+				set @xrange=$translate(@xrange,"<=")-.00000001
+			} else {
+				set @xrange=$translate(@xrange,"<=")
+			}
+		}
+	}
+	
+	if UseLabTrak'="Y" {
+		set rangeflag=$$CheckIfPanicAbnormal^CLabOrderLink(epis,ts,cnt,tc,res)
+	} else {
+		// return null range flag if not a number
+		if '$isvalidnum(resNum) quit
+		if RangeL[">",$isvalidnum(rangeL) do  quit
+		. set rangeflag=$select(resNum<rangeL:"L",1:"N")
+		if RangeL["<",$isvalidnum(rangeL) do  quit
+		. set rangeflag=$select(resNum<rangeL:"N",1:"H")
+		if RangeH["<",$isvalidnum(rangeH) do  quit
+		. set rangeflag=$select(resNum>rangeH:"H",1:"N")
+		if RangeH[">",$isvalidnum(rangeH) do  quit
+		. set rangeflag=$select(resNum>rangeH:"N",1:"L")
+		if $isvalidnum(rangeL),$isvalidnum(rangeH) set rangeflag=$select(resNum<rangeL:"L",resNum>rangeH:"H",1:"N")
+	}
+	quit
+	
+	// extract standard comments
+StdComm(tc,xres)
+	new resx,j
+	set tc=$get(tc),xres=$get(xres)
+	if $data(^TTAB("TC",tc,2,xres)) do
+	. set rangeflag=$piece(^TTAB("TC",tc,2,xres),"\",1)
+	. set resx="",j=0
+	. set node5=$order(^TTAB("TC",tc,2,xres,""))
+	. if node5=0 do
+	. . for  set j=$order(^TTAB("TC",tc,2,xres,j)) quit:j=""  do
+	. . . set resx=resx_$char(13,10)_^(j)
+	. if node5'=0 do
+	. . for  set j=$order(^TTAB("TC",tc,2,xres,node5,j)) quit:j=""  do
+	. . . set resx=resx_$char(13,10)_^(j)
+	. set xres=$piece(resx,$char(13,10),2,999)
+	set xres=$$ConvertDelim(xres)
+	quit xres
+	
+	// extract standard and free comments
+Comments(epis,cnt,ts,tc,type)
+	new (epis,cnt,ts,tc,type) set epis=$get(epis),cnt=$get(cnt),ts=$get(ts),tc=$get(tc),type=$get(type),(Type,res)=""
+	
+	kill ^TMP($zname,$job)
+	set order=1 set x=0 for  set x=$order(^TEPI(epis,1,ts,cnt,"DATA",tc,"REM",x)) quit:x=""  do
+	. set xcnt=$order(^TMP($zname,$job,"COM-0",order,""),-1)+1
+	. set ^TMP($zname,$job,"COM-0",order,xcnt)=$get(^TEPI(epis,1,ts,cnt,"DATA",tc,"REM",x))
+	
+	// format comments from ^TMP($zn,$j,"COM-0")
+	set st1="{",st2="}",read="COM-0",write="COM-1" do  set st1="[",st2="]",read="COM-1",write="COM-2" do
+	. set order="" for  set order=$order(^TMP($zname,$job,read,order)) quit:order=""  do
+	. . // only V fields
+	. . if Type="V",type'="V" quit
+	. . // only non V fields
+	. . if Type="N",type="V" quit
+	. . set cnt="" for  set cnt=$order(^TMP($zname,$job,read,order,cnt)) quit:cnt=""  set line=^(cnt) do
+	. . . // retrieve standard comments
+	. . . set start=1
+	. . . // save line if one, but not both delimiters exist in text
+	. . . if line'[st1!(line'[st2) do  quit
+	. . . . set ^TMP($zname,$job,write,order)=tc_"\"_type
+	. . . . set xcnt=$order(^TMP($zname,$job,write,order,""),-1)+start
+	. . . . set ^TMP($zname,$job,write,order,xcnt)=$get(^TMP($zname,$job,write,order,xcnt))_line,start=0
+	. . . for  set l1=$piece(line,st1,1),sc=$piece($piece(line,st1,2),st2,1),l2=$piece(line,st2,2,999) do  set line=l2 if '$length(line) quit
+	. . . . set ^TMP($zname,$job,write,order)=tc_"\"_type
+	. . . . set xcnt=$order(^TMP($zname,$job,write,order,""),-1)+start
+	. . . . set ^TMP($zname,$job,write,order,xcnt)=$get(^TMP($zname,$job,write,order,xcnt))_l1,start=0
+	. . . . if '$length(sc) quit
+	. . . . // standard comment does exist
+	. . . . if type'="V",$data(^TTAB("TC",tc,2,sc)) do  quit
+	. . . . . set comm=""
+	. . . . . set comm=$replace($$StdComm(tc,sc),$char(13,10),"|")
+	. . . . . set ^TMP($zname,$job,write,order,xcnt)=^TMP($zname,$job,write,order,xcnt)_$piece(comm,"|",1)
+	. . . . . for xx2=2:1:$length(comm,"|") do
+	. . . . . . set xcnt=$order(^TMP($zname,$job,write,order,""),-1)+1,^TMP($zname,$job,write,order,xcnt)=$piece(comm,"|",xx2)
+	. . . . if type="V",$data(^TTAB("AN-COMM",sc)) do  quit
+	. . . . . set comm="",x=$get(^TTAB("AN-COMM",sc,"REM","0")) for i=1:1:x set comm=comm_"|"_$get(^TTAB("AN-COMM",sc,"REM",i))
+	. . . . . set ^TMP($zname,$job,write,order,xcnt)=^TMP($zname,$job,write,order,xcnt)_$piece(comm,"|",1)
+	. . . . . for xx2=2:1:$length(comm,"|") do
+	. . . . . . set xcnt=$order(^TMP($zname,$job,write,order,""),-1)+1,^TMP($zname,$job,write,order,xcnt)=$piece(comm,"|",xx2)
+	. . . . // standard comment does not exist
+	. . . . set ^TMP($zname,$job,write,order,xcnt)=^TMP($zname,$job,write,order,xcnt)_st1_sc_st2
+	
+	set x="" for  set x=$order(^TMP($zname,$job,"COM-2",1,x)) quit:x=""  set res=res_$select($length(res):"<BR>",1:"")_^(x)
+	set res=$$ConvertDelim(res)
+	kill ^TMP($zname,$job)
+	quit res
+	
+	// extract test item description
+TestItem(tc)
+	new (tc) set tc=$get(tc)
+	set x="" if $get(^TTAB("TC",tc))'="" set x=tc_$char(1)_$piece($get(^TTAB("TC",tc)),"\")
+	quit x
+	
+	// create list of test items
+TestList(desc)
+	new (desc) set desc=$get(desc),desc=##class(%Collation).AlphaUp(desc)
+	set j="" for  set j=$order(^TTAB("TC",j)) quit:j=""  set name=$piece(^(j),"\") do
+	. if ##class(%Collation).AlphaUp(name)[desc set i=$order(x(""),-1)+1,x(i)=j_$char(1)_name
+	set x="" for i=1:1 quit:'$data(x(i))  set x=x_$select($length(x):"^",1:"")_x(i)
+	quit x
+	
+	// converts internal storage of ^,\ and | from $c(16),$c(17),$c(18)
+	// Log 70473 YC - Added conversion of {}[] from $c(5),$c(6),$c(11),$c(12) - required for std comments
+ConvertDelim(string)
+	set string=$translate(string,$char(16),"^")
+	set string=$translate(string,$char(17),"\")
+	set string=$translate(string,$char(18),"|")
+	set string=$translate(string,$char(5),"{")
+	set string=$translate(string,$char(6),"}")
+	set string=$translate(string,$char(11),"[")
+	set string=$translate(string,$char(12),"]")
+	quit string
+	
+	// merges lab data from old patients epsiode to new patient
+PatientMerge(oldpat,newpat,eps)
+	set oldpat=$get(oldpat),newpat=$get(newpat),eps=$get(eps)
+	new xx,date,time,ep,intOrdNum,mcat,ts,seq,OrdNum
+	quit:oldpat="" 0
+	quit:newpat="" 0
+	quit:eps="" 0
+	quit:'$data(^TEPIi("MEDTRAK",oldpat)) 1
+	// find seq number
+	set date="" for  set date=$order(^TEPIi("MEDTRAK",oldpat,date)) quit:date=""  do
+	. set time="" for  set time=$order(^TEPIi("MEDTRAK",oldpat,date,time)) quit:time=""  do
+	. . for xx=1:1:$length(eps,"^")  do
+	. . . set ep=$piece(eps,"^",xx) quit:ep=""
+	. . . quit:'$data(^TEPIi("MEDTRAK",oldpat,date,time,ep))
+	. . . set intOrdNum="" for  set intOrdNum=$order(^TEPIi("MEDTRAK",oldpat,date,time,ep,intOrdNum)) quit:intOrdNum=""  do
+	. . . . set mcat="" for  set mcat=$order(^TEPIi("MEDTRAK",oldpat,date,time,ep,intOrdNum,mcat)) quit:mcat=""  do
+	. . . . . set ts="" for  set ts=$order(^TEPIi("MEDTRAK",oldpat,date,time,ep,intOrdNum,mcat,ts)) quit:ts=""  do
+	. . . . . . set seq="" for  set seq=$order(^TEPIi("MEDTRAK",oldpat,date,time,ep,intOrdNum,mcat,ts,seq)) quit:seq=""  do
+	. . . . . . . set OrdNum="" for  set OrdNum=$order(^TEPIi("MEDTRAK",oldpat,date,time,ep,intOrdNum,mcat,ts,seq,OrdNum)) quit:OrdNum=""  do
+	. . . . . . . . // remove the old patient node and replace it
+	. . . . . . . . //w !,"MEDTRAK ",newpat," ",date," ",time," ",ep," ",intOrdNum," ",mcat," ",ts," ",seq," ",OrdNum
+	. . . . . . . . //w !,"MEDTRAK ",oldpat," ",date," ",time," ",ep," ",intOrdNum," ",mcat," ",ts," ",seq," ",OrdNum," ",^TEPIi("MEDTRAK",oldpat,date,time,ep,intOrdNum,mcat,ts,seq,OrdNum)
+	. . . . . . . . //w !,"MEDTRAKi ",OrdNum," ",ts," ",seq,"=",newpat_"\"_date_"\"_time_"\"_ep_"\"_intOrdNum_"\"_mcat
+	. . . . . . . . set ^TEPIi("MEDTRAK",newpat,date,time,ep,intOrdNum,mcat,ts,seq,OrdNum)=^TEPIi("MEDTRAK",oldpat,date,time,ep,intOrdNum,mcat,ts,seq,OrdNum)
+	. . . . . . . . kill ^TEPIi("MEDTRAK",oldpat,date,time,ep,intOrdNum,mcat,ts,seq,OrdNum)
+	. . . . . . . . set ^TEPIi("MEDTRAKi",OrdNum,ts,seq)=newpat_"\"_date_"\"_time_"\"_ep_"\"_intOrdNum_"\"_mcat
+	quit 1
+	
+FormatNumber(num,tc)
+	new (num,tc)
+	set num=$get(num),tc=$get(tc)
+	set tcd=$select($piece(tc,"_")="ORG":"ORG",1:tc)
+	set type=$piece($get(^TTAB("TC",tcd)),"\",3)
+	if $extract(type)="N",num'="" do
+	. if $extract(num)="." set num="0"_num
+	. set dp=$extract(type,2,999)
+	. if $isvalidnum($get(dp)),+dp>0,$isvalidnum($get(num)) do
+	. . if num'["." set num=num_"."
+	. . set numdp=$length($piece(num,".",2))
+	. . if numdp<dp for ii=1:1:(dp-numdp) set num=num_"0"
+	quit num
+
+
+

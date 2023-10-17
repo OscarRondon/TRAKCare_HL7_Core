@@ -1,0 +1,71 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Adapter^MAC^^^0
+HL7Adapter	// ML 05/07/2010 ; HL7 interface - HL7 Ensemble Adapter
+	quit
+	// called from Ensemble
+Start(link,message) new (link,message)
+	set link=$get(link)
+	if '$$Init^HL7() quit
+	// record msg in trace
+	merge trace=message
+	if $data(trace) do trace^HL7Trace("E-->M",$h,"","","Y")
+	set HL7("ENS_ADAPTER")="Y",Replay=""
+	// build segment data
+	set (cnt1,cnt2,cnt3,cnt4,cnt5,plevel,previd)="" kill cnt
+	kill tracecopy merge tracecopy=trace
+	set j="" for  set j=$order(trace(j)) quit:j=""  set seg=trace(j) do Data^HL7Data
+ 
+	kill trace
+	// count number of messages received
+	if $increment(^SSHL7(link,"COUNT"))
+ 
+	// reset message timeout
+	set msgtimeout=""
+ 
+	// merge DATA array in ^TMP("HL7",$j)
+	kill ^TMP("HL7",$job) merge ^TMP("HL7",$job)=DATA kill DATA
+	if Replay set ^TMP("HL7-REPLAY",$job)=1
+ 
+	// check for MSH segment
+	if '$data(^TMP("HL7",$job,"MSH")) do AckNak^HL7AckNak("AR","No MSH segment received in message - unable to process message","MSH^^",100) quit
+ 
+	// check for version match
+	set version("MSH")=$piece($get(^TMP("HL7",$job,"MSH",11)),"^")
+	if version("MSH")'=HL7("VER") do AckNak^HL7AckNak("AR","Version received "_version("MSH")_" does not match interface version "_HL7("VER"),"MSH^"_version("MSH")_"^12",203) quit
+ 
+	// check for control id
+	if $get(^TMP("HL7",$job,"MSH",9))="" do AckNak^HL7AckNak("AR","Blank message control id received","MSH^^10",203) quit
+ 
+	// if not production mode, no updates
+	if ^TMP("HL7",$job,"MSH",10)'="P" do AckNak^HL7AckNak("AA") quit
+ 
+	// extract event type - ignore if acknowledgment
+	set event=$piece($get(^TMP("HL7",$job,"MSH",8)),"^",1,2),ok=""
+	if event="" do AckNak^HL7AckNak("AR","No event type received in MSH segment","MSH^"_version("MSH")_"^9",203) quit
+	if event["ACK" quit
+ 
+	set (forward,forwardnum)=""
+	// process message received
+	set ok=$$MsgProcess^HL7Inbound(event)
+	kill tracecopy
+	
+	// if ok is null, ACK already sent
+	if ok'="" {
+ 		// send response if needed
+		if $piece(ok,"\")'="SKIP",$piece(ok,"\")'="AA",ok'="" do AckNak^HL7AckNak("AR",$piece(ok,"\",2),$piece(ok,"\",3),$piece(ok,"\",4))
+		// acknowledgement required
+		if $piece(ok,"\")="AA" do AckNak^HL7AckNak("AA")
+	}
+ 
+	// check if need to forward message
+	set fwdcnt="" for  set fwdcnt=$order(forwardnum(fwdcnt)) quit:fwdcnt=""  do
+	.set num="" for  set num=$order(forwardnum(fwdcnt,num)) quit:num=""  do
+	..set table=forwardnum(fwdcnt,num)
+	..if $piece(num,"||")'="" do MsgForward^HL7(link,event,num)
+	kill forward,forwardnum,old set (forward,forwardtable)=""
+ 
+	quit
+
+
+

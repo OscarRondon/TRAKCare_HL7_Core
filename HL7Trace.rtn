@@ -1,0 +1,74 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Trace^MAC^^^0
+HL7Trace // ML 10/03/2003 ; HL7 interface - trace file
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Trace.rtn#1 $
+	quit
+ 
+	// direction : M-->E - Medtrak to external system
+	//             E-->M - External system to Medtrak
+	//             ***** - System message
+	// flag      : Y - tracerowid required
+	//             N - not required
+	// type	    : INF - information message
+	//			  ERR - error message
+	//
+trace(direction,datetime,message,rowid,flag,type) new (link,HL7,trace,direction,datetime,message,rowid,flag,type,tracerowid)
+	set link=$get(link),direction=$get(direction),datetime=$get(datetime),message=$get(message),rowid=$get(rowid),flag=$get(flag),type=$get(type)
+	set HL7("TRACEDAYS")=$get(HL7("TRACEDAYS"))
+ 
+ 	if '$data(trace),message="" quit
+ 
+	if '$data(trace) set trace(1)=message
+.
+	// if error, clear out trace and store error
+	if type="ERR" {
+		kill trace
+		set trace(1)=message
+	}
+.
+	// ack/nak for message previously sent/received
+	if $length(rowid) do  quit
+	.set i="" for  set i=$order(trace(i)) quit:i=""  do
+	..set seq=$increment(^SSHL7($piece(rowid,"||"),"TRACE",$piece(rowid,"||",2),$piece(rowid,"||",3),"ACK",0))
+	..set ^SSHL7($piece(rowid,"||"),"TRACE",$piece(rowid,"||",2),$piece(rowid,"||",3),"ACK",seq)=trace(i)
+	. // check for site specific code
+	.set routine="HL7Site"_HL7("INCODE")_"Trace",LineRoutine="Check^"_routine if $length($text(@LineRoutine),";;")=2 do
+	..xecute "s ok=$$"_"PostTrace^"_routine_"("""_rowid_""")"
+ 
+	set row=$increment(^SSHL7(link,"TRACE",+datetime))
+	set ^SSHL7(link,"TRACE",+datetime,row)=$piece(datetime,",",2)_"^"_direction_"^"_type
+	set i="" for  set i=$order(trace(i)) quit:i=""  do
+	.set seq=$increment(^SSHL7(link,"TRACE",+datetime,row,"MSG",0))
+	.set ^SSHL7(link,"TRACE",+datetime,row,"MSG",seq)=trace(i)
+	if message'="" kill trace
+ 
+	if flag="Y" set tracerowid=link_"||"_+datetime_"||"_row
+ 
+	// set error flag
+	if type="ERR" do
+	.set interface=$$Interface^HL7(link)
+	.set ^SST("INT",interface,"LATEST","ERR")=$get(%ROWID)
+ 
+	// update most recent message date/time
+	if direction'="*****" do
+	.set $piece(^SSHL7(link,"DATES"),"^",5)=+datetime,$piece(^SSHL7(link,"DATES"),"^",6)=$piece(datetime,",",2)
+ 
+	// purge trace file - default to 6 months
+	set purge=$select($length(HL7("TRACEDAYS")):HL7("TRACEDAYS"),1:180)
+	set day="" for  set day=$order(^SSHL7(link,"TRACE",day)) quit:day=""  quit:+$h-purge<day  do
+	.kill ^SSHL7(link,"TRACE",day)
+ 
+	quit
+ 
+	// file rejection rowid against message
+reject(tracerowid,rejrowid) new (tracerowid,rejrowid) set tracerowid=$get(tracerowid),rejrowid=$get(rejrowid)
+	set rowid=tracerowid_"||"_rejrowid
+	&SQL(SELECT * INTO :PLIST() FROM SS_HL7TraceRejections WHERE HL7TR_RowId = :rowid)
+	if SQLCODE=0 quit
+	kill PLIST(1) set PLIST(0)=tracerowid,PLIST(2)=rejrowid
+	&SQL(INSERT INTO SS_HL7TraceRejections VALUES :PLIST())
+	quit
+
+
+

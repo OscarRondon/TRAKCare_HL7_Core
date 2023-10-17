@@ -1,0 +1,146 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SendInstant^MAC^^^0
+HL7SendInstant // ML 03/01/2006 ; HL7 Interface - send outbound messages immediately
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SendInstant.rtn#1 $
+	quit
+	
+	// for each message to be sent
+Send(headdetail,keepresp) set headdetail=$get(headdetail),keepresp=$get(keepresp),(failack,failtimeout,action)=""
+	
+	// check for created segments
+	if '$data(queue) quit
+	
+	lock +^SSHL7(link,"LOCK"):2 if $test do  quit
+	. do trace^HL7Trace("*****",$h,"Interface is not running","","","INF")
+	. // Option #I: Immediate unlock: Immediately releases a lock, rather than waiting until the end of a transaction
+	. lock -^SSHL7(link,"LOCK")#"I"
+	. // setup screen notification
+	. set ^TMP("HL7-ERR",$job,"MSG")="1^Interface "_link_" is not running.  Unable to send to external source",^TMP("HL7-ERR-LINK",link,$job)=""
+	
+	// find next available port for use
+	set newport="" for newport=HL7("PORT-LOW"):1:HL7("PORT-HIGH") lock +^SSHL7(link,"LOCK-PORT",newport):1 if $test quit
+	if '$test set ^TMP("HL7-ERR",$job,"MSG")="1^All available connections to external system in use, unable to open connection to external system.",^TMP("HL7-ERR-LINK",link,$job)="" quit
+	
+	set port="|TCP|"_newport
+	
+	do trace^HL7Trace("*****",$h,"Starting new thread as job "_$job_".  Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP")),"","","INF")
+	
+	// open device - if ip is not "", we are the client
+	if $$CheckStop^HL7(link) do trace^HL7Trace("*****",$h,"Flag Stopped","","","INF") do Shutdown^HL7(1) quit
+	do trace^HL7Trace("*****",$h,"Attempting to open Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP")),"","","INF")
+	open port:(INT("IP"):INT("DEV"):$select(INT("IP")="":"A",1:"")_"S":$char(13)):TIMEOUT("PORT-CON") else  do  quit
+	. set ^TMP("HL7-ERR",$job,"MSG")="1^Unable to open Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP")),^TMP("HL7-ERR-LINK",link,$job)=""
+	. do trace^HL7Trace("*****",$h,"Unable to open Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP")),"","","INF")
+	
+	do trace^HL7Trace("*****",$h,"Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address - "_INT("IP"))_" opened","","","INF")
+	
+	use port
+	
+	// check for character set
+	if INT("CS")'="" do SetIO^%NLS(INT("CS")) do trace^HL7Trace("*****",$h,"Using character set "_INT("CS"),"","","INF")
+	
+	set readcount=""
+	
+	set (failack,failtimeout,action,controlId)=""
+	kill trace,tracerowid
+	
+	// build and send 'msh' record
+	set headdetail=$get(headdetail)
+	set record=$$SendHead^HL7Send(headdetail)
+	write ESC("VT"),record,ESC("CR") set trace=1,trace(1)=record
+	
+	do
+	. set x1="" for  set x1=$order(queue(x1)) quit:x1=""  do  if action'="" quit
+	. . set record=$get(queue(x1)) write record,ESC("CR") set trace=$get(trace)+1,trace(trace)=record
+	. write ESC("FS"),ESC("CR"),!
+	. do trace^HL7Trace("M-->E",$h,"","","Y")
+	. set actionmessage="" do Response(.actionmessage)
+	
+	. // check response action
+	. set actiontype=""
+	. if pass="Fail-1" do
+	. . set failtimeout=failtimeout+1,failack=""
+	. . set actiontype=$select(failtimeout=MaxNum("noresp"):ActionMax("noresp"),1:Action("noresp"))
+	. . set actionmessage=$select(failtimeout=MaxNum("noresp"):MaxNum("noresp")_" consecutive timeouts have occurred.",1:actionmessage)
+	. if pass="Fail-2" do
+	. . set failack=failack+1,failtimeout=""
+	. . set actiontype=$select(failack=MaxNum("nak"):ActionMax("nak"),1:Action("nak"))
+	. . set actionmessage=$select(failack=MaxNum("nak"):MaxNum("nak")_" consecutive rejections have occurred.",1:actionmessage)
+	. if actiontype'="" do  quit
+	. . set action=$$Action^HL7(actiontype,actionmessage)
+	. . if actiontype="SH"!(actiontype="SE")!(actiontype="RT") quit
+	. . if actiontype="RM"!(actiontype="SK") set (failack,failtimeout)=""
+	. . if action'="" xecute action set (action,actiontype)=""
+	
+	. // count number of messages sent
+	. if $increment(^SSHL7(link,"COUNT"))
+	
+	// close connection
+	close port do trace^HL7Trace("*****","Closing thread started as job "_$job_".  Device - "_INT("DEV")_", Socket - "_port_$select(INT("IP")="":"",1:", IP Address "_INT("IP")),"","","INF")
+	// Option #I: Immediate unlock: Immediately releases a lock, rather than waiting until the end of a transaction
+	lock -^SSHL7(link,"LOCK-PORT",newport)#"I"
+	
+	quit
+	
+	// read response
+Response(reject) set reject="" kill trace,tracecopy
+	
+	set pass=$$Read^HL7("Y",TIMEOUT("RESPONSE")) do
+	. // check for response
+	. if '$data(trace)!(pass="")!(pass="RDERR") set reject="No response received.",pass="Fail-1" quit
+	. // build segment data
+	. if $data(trace) do
+	. . set j="" for  set j=$order(trace(j)) quit:j=""  set seg=trace(j) do Data^HL7Data set previd=$piece(seg,%,1)
+	. . if $data(trace)>1 do trace^HL7Trace("E-->M",$h,"",tracerowid)
+	. . if 'T set reject="Timeout receiving next segment, continuing."
+	
+	. set readcount=""
+	. // check if acknowledged
+	. set check=$get(DATA("MSA",1)) if ",AA,AE,AR,CA,CE,CR,"'[(","_check_",") do  quit
+	. . set reject="NAK - Message Failed with unknown MSA-2 code "_check_", MSA-3 description "_$get(DATA("MSA",3)),pass="Fail-2"
+	. . set ^TMP("HL7-ERR",$job,"MSG")="1^External Interface Notification: "_$get(DATA("MSA-3")),^TMP("HL7-ERR-LINK",link,$job)=""
+	. // check if rejected
+	. if check'="AA",check'="CA" do  quit
+	. . set reject=$get(DATA("MSA",1))_" - "_$get(DATA("MSA",3))_".",pass="Fail-2"
+	. . set ErrMsg=$get(DATA("MSA",3)) if $get(DATA("MSA",1))="CE",ErrMsg="" set ErrMsg="No response received from external source"
+	. . // setup screen notification
+	. . set ^TMP("HL7-ERR",$job,"MSG")="1^External Interface Notification: "_ErrMsg,^TMP("HL7-ERR-LINK",link,$job)=""
+	. // message id match
+	. if $get(DATA("MSA",2))'=controlId,reject'="" set reject="Control Id received in MSA "_$get(DATA("MSA",2))_" does not match Id "_controlId_" sent.",pass="Fail-2"
+	
+	// keep response for use back in calling routine
+	if keepresp="Y" do
+	. set keepresponse("PASSFAIL")=pass_$char(1)_reject
+	. merge keepresponse("TRACE")=trace
+	
+	// kill trace before returning
+	kill trace
+	
+	// setup rejections for outbound messages
+	if pass="Fail-2" do
+	. kill PLIST for i=1:1:24 set PLIST(i)=""
+	. kill PLIST(1) set PLIST(2)=link,PLIST(9)=+$h,PLIST(10)=$piece($h,",",2),PLIST(14)=reject,PLIST(19)=$translate($piece(headdetail,"\"),"^","_")
+	. set PLIST(24)=$get(tracerowid),PLIST(27)="R"
+	. set x1=0 for  set x1=$order(queue(x1)) quit:x1=""  do
+	. . set segment=queue(x1)
+	. . // setup required patient details
+	. . if $piece(segment,"|")="PID" do
+	. . . // extract patient number
+	. . . set PLIST(3)="" do NumTypeDetail^HL7Common2(PatNum("REG"),"",.field,"","","","",.usetype,.usecode)
+	. . . set numbers=$piece(segment,"|",field+1) quit:'$length($translate(numbers,"^~"))
+	. . . for i=1:1:$length(numbers,"~") set number=$piece(numbers,"~",i) do  quit:PLIST(3)'=""  quit:reject'=""
+	. . . . if $piece($piece(number,"^",usetype),"&")'=usecode!($piece(number,"^")="") quit
+	. . . . set PLIST(3)=$piece(number,"^")
+	. . . set PLIST(5)=$translate($piece(segment,"|",6),"^","_"),PLIST(6)=$select($piece($piece(segment,"|",8),"^")'?8N:"",1:$zdateh($extract($piece($piece(segment,"|",8),"^"),1,8),8))
+	. . . set PLIST(7)=$piece(segment,"|",9)
+	. . if $piece(segment,"|")="OBR" do
+	. . . set PLIST(4)=$piece($piece(segment,"|",3),"^"),PLIST(8)=$translate($piece($piece(segment,"|",5),"~"),"^","_"),PLIST(15)=$piece($piece(segment,"|",4),"^")
+	. &SQL(INSERT INTO OE_HL7Messages VALUES :PLIST())
+	. set rejrowid=%ROWID
+	. do reject^HL7Trace(tracerowid,rejrowid)
+	
+	quit
+
+
+

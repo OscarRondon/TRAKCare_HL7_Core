@@ -1,0 +1,61 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract12^MAC^^^0
+HL7OutExtract12 // ML 09/05/2006 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract12.rtn#1 $
+	quit
+ 
+	// extract drug form
+DrugForm(intDrgFrm,DrugForm) new (intDrgFrm,DrugForm) set intDrgFrm=$get(intDrgFrm)
+	&SQL(SELECT * INTO :DrugForm() FROM PHC_DrgForm WHERE PHCDF_RowId = :intDrgFrm)
+	quit SQLCODE
+ 
+	// extract manufacture order
+ManufactureOrder(intManOrd,ManufactOrd) new (intManOrd,ManufactOrd) set intManOrd=$get(intManOrd)
+	&SQL(SELECT * INTO :ManufactOrd() FROM IN_Manufacture_Order WHERE INMAN_RowId = :intManOrd)
+	quit SQLCODE
+ 
+	// extract manufacture item
+ManufactureItem(intManItm,ManufactItm) new (intManItm,ManufactItm) set intManItm=$get(intManItm)
+	&SQL(SELECT * INTO :ManufactItm() FROM IN_Manufacture_OrderINCI WHERE INCI_RowId = :intManItm)
+	quit SQLCODE
+ 
+	// extract code table settings
+CodeTable(mtable) set (code,desc,type,other)=""
+ 
+	if mtable="PHC_DrgForm" do
+	.set i=2 if $get(DrugForm(i))'="" do  set DrugForm(i)=$select($get(DrugForm(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=DrugForm(i) quit:value=""""""
+	..if i=2 do
+	... &SQL(SELECT PHCF_Code, PHCF_Desc INTO :code, :desc FROM PHC_Form WHERE PHCF_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(DrugForm(""),-1) if $data(DrugForm(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",1,2,"[(","_i_",") quit
+	..set DrugForm(i)=$$TextConversion^HL7Common12(DrugForm(i),"O")
+ 
+	if mtable="IN_Manufacture_OrderINCI" do
+	.set i=3 if $get(ManufactItm(i))'="" do  set ManufactItm(i)=$select($get(ManufactItm(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=ManufactItm(i) quit:value=""""""
+	..if i=3 do
+	... &SQL(SELECT INCI_Code, INCI_Desc INTO :code, :desc FROM INC_Itm WHERE INCI_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(ManufactItm(""),-1) if $data(ManufactItm(i)) do
+	.. // exclude rowid, code table entries and list build fields
+	..if ",1,3,"[(","_i_",") quit
+	..set ManufactItm(i)=$$TextConversion^HL7Common12(ManufactItm(i),"O")
+ 
+	if mtable="PHC_DrgForm"!(mtable="IN_Manufacture_OrderINCI") do
+	.for variable="DrugForm:21","ManufactItm:6" do
+	..set val1=$piece(variable,":"),val2=$piece(variable,":",2) if $get(@val1@(val2))'="" do  set @val1@(val2)=$select($get(@val1@(val2))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	...set value=@val1@(val2) quit:value=""""""
+	... &SQL(SELECT CTUOM_Code, CTUOM_Desc INTO :code, :desc FROM CT_UOM WHERE CTUOM_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+ 
+	quit
+
+
+

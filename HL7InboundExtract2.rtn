@@ -1,0 +1,236 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7InboundExtract2^MAC^^^0
+HL7InboundExtract2	// ML 22/03/2011 : extract data from segments
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundExtract2.rtn#1 $
+	quit
+	// extract data from DG1 segment
+DG1
+	set seg="DG1" for  {
+		set seg=$order(^TMP("HL7",$job,cnt1,cnt2,seg)) if seg'["DG1" quit
+		// icd code, edition
+		set detail=$get(^TMP("HL7",$job,cnt1,cnt2,seg,3)),code=$piece(detail,"^"),desc=$piece(detail,"^",2),edition=$piece(detail,"^",3)
+		// extract icd code based on code, desc and edition
+		&SQL(SELECT MRCID_RowId INTO :rowid FROM MRC_ICDDx, MRC_ICDDxEdition, MRC_ICDEdition
+			WHERE MRCID_Code = :code AND ((MRCID_Desc = :desc) OR (:desc IS NULL)) AND ((ICDED_Code = :edition) OR (:edition IS NULL))
+			AND ED_Edition_DR = ICDED_RowId AND ED_ParRef = MRCID_RowId)
+		if 'SQLCODE {
+			set j=$increment(DIAG)
+			// icd code, diagnosis type
+			set DIAG(j,"MRDIAICDCodeID")=rowid,DIAG(j,"MRDiagType")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,seg,6)),"^")
+		}
+		if SQLCODE {
+			// reject diagnosis
+			set reject="Primary diagnosis received "_code_$select($length(desc):" ("_desc_")",1:"")_", edition "_edition_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+			do Reject^HL7Reject(reject,"N")
+			set (reject,SQLCODE)=""
+		}
+	}
+	// extract data from IN1 segment
+IN1
+	if $data(^TMP("HL7",$job,cnt1,cnt2,"IN1")) {
+		if ",A01,A08,"[(","_$piece(msgtype,"^",2)_",") {
+			// admission insurance details - plan, insurer and policy number
+			set PAADMINS("AUXITDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"IN1",2)),"^"),PAADMINS("INSTDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"IN1",4)),"^")
+			set PAADMINS("INSCardNo")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"IN1",36)),"^")
+			for var="AUXITDesc","INSTDesc" set PAADMINS(var)=##class(%Collation).AlphaUp(PAADMINS(var))
+			set PAADMINS("INSTRowID")=##class(web.ARCInsuranceType).GetIdFromCodeOrDescription(PAADMINS("INSTDesc"))
+			// insurance dva number
+			set PAADMINS("INSDVAnumber")=$select($get(number("DVA"))="""""":"""",1:$get(number("DVA")))
+		}
+		if ",A28,A31,"[(","_$piece(msgtype,"^",2)_",") {
+			// patient insurance details - plan, insurer and policy number
+			set PERSON("AUXITDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"IN1",2)),"^"),PERSON("INSTDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"IN1",4)),"^")
+			set PERSON("HealthCardNo")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"IN1",36)),"^")
+			for var="AUXITDesc","INSTDesc" set PERSON(var)=##class(%Collation).AlphaUp(PERSON(var))
+			set PAADMINS("INSTRowID")=##class(web.ARCInsuranceType).GetIdFromCodeOrDescription(PERSON("INSTDesc"))
+		}
+	}
+	quit
+	
+	// extract data from PV1 segment
+PV1
+	// patient class
+	set PAADM("PAADMType")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",2)),"^")
+	
+	// location details - ward, room, bed, hospital
+	set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",3))
+	set PAADM("WARDDesc")=$piece(detail,"^"),PAADM("ROOMDesc")=$piece(detail,"^",2),PAADM("BEDCode")=$piece(detail,"^",3)
+	
+	// extract only for new admission/update admission/patient transfer/cancel transfer
+	if ",A01,A02,A05,A08,A12,"[(","_$piece(msgtype,"^",2)_",") {
+		for rowText="PACWardID","PACWardAPIID","WARD-DESC","ROOMId","ROOM-DESC","BedID","BedAPIID" set PAADM(rowText)=""
+		
+		// rowids - ward, room, bed
+		if PAADM("WARDDesc")'="" {
+			set (PAADM("PACWardID"),PAADM("PACWardAPIID"))=##class(web.PACWard).GetIdFromCodeOrDescription(PAADM("WARDDesc"))
+			set PAADM("WARD-DESC")=##class(web.PACWard).GetCodeDescriptionFromId(PAADM("PACWardID"))
+			if $listvalid(PAADM("WARD-DESC")) set PAADM("WARD-DESC")=$list(PAADM("WARD-DESC"))
+		}
+		if PAADM("ROOMDesc")'="" {
+			set PAADM("ROOMId")=##class(web.PACRoom).GetIdFromCodeOrDescription(PAADM("ROOMDesc"))
+			set PAADM("ROOM-DESC")=##class(web.PACRoom).GetCodeDescriptionFromId(PAADM("ROOMId"))
+			if $listvalid(PAADM("ROOM-DESC")) set PAADM("ROOM-DESC")=$list(PAADM("ROOM-DESC"))
+		}
+		if PAADM("BEDCode")'="" set (PAADM("BedID"),PAADM("BedAPIID"))=##class(web.PACBed).GetIdFromBedAndWard(PAADM("BEDCode"),PAADM("PACWardID"),PAADM("ROOMId"))
+		
+		if ",A02,A08,A12,"[(","_$piece(msgtype,"^",2)_",") {
+			set PAADM("TRANSWardDR")=PAADM("WARD-DESC")
+			set PAADM("TRANSBedDR")=PAADM("BEDCode")
+			set PAADM("TRANSWardRoomDR")=PAADM("ROOM-DESC")
+			if PAADM("ROOMId")'="",PAADM("PACWardID")'="" set PAADM("WardRoomDR")=PAADM("PACWardID")_"||"_$order(^PAWARD(PAADM("PACWardID"),"ROOM",0,"Room",PAADM("ROOMId"),""))
+		}
+		
+		if $piece(msgtype,"^",2)="A12" {
+			for rowText="HOSPId","PACWardID","ROOMId","BedID" set CANCEL(rowText)=""
+			// previous location details - ward, room, bed, hospital
+			set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",6))
+			set CANCEL("WARDDesc")=$piece(detail,"^"),CANCEL("ROOMDesc")=$piece(detail,"^",2),CANCEL("BEDCode")=$piece(detail,"^",3)
+			set CANCEL("HOSPDesc")=$piece(detail,"^",4)
+			if CANCEL("HOSPDesc")'="" set CANCEL("HOSPId")=##class(web.CTHospital).GetIdFromCodeOrDescription(CANCEL("HOSPDesc"))
+			if CANCEL("WARDDesc")'="" set CANCEL("PACWardID")=##class(web.PACWard).GetWardIDFromCodeDescHosp(CANCEL("WARDDesc"),CANCEL("HOSPId"))
+			set CANCEL("PACWardID")=$piece(CANCEL("PACWardID"),"|")
+			if CANCEL("ROOMDesc")'="" set CANCEL("ROOMId")=##class(web.PACRoom).GetIdFromCodeOrDescription(CANCEL("ROOMDesc"))
+			if CANCEL("BEDCode")'="" set CANCEL("BedID")=##class(web.PACBed).GetIdFromBedAndWard(CANCEL("BEDCode"),CANCEL("PACWardID"),CANCEL("ROOMId"))
+		}
+	}
+	
+	// admission category
+	set PAADM("ADMCATDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",4)),"^")
+	
+	// pre-admission number
+	set SQL("76-PreAdmNum")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",5)),"^")
+	
+	// attending, referring and consulting dr
+	for fld=7,8,9 {
+		set drfound="" kill rejected
+		set j="" while drfound=""  {
+			set drfound=""
+			set j=$order(^TMP("HL7",$job,cnt1,cnt2,"PV1",fld,j)) if j="" quit
+			set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",fld,j))
+			if $piece(detail,"^")'="" {
+				set doctor=$piece(detail,"^"),system=$piece(detail,"^",9)
+				set drtype=$select(fld=8:"R",1:"C")
+				set drfound=$$Provider^HL7Common5(doctor,system,"","",drtype,"I")
+				if drfound {
+					if fld=7 {
+						set (PAADM("CTPCPDesc"),PAADM("CTPCPCode"))=$piece(drfound,$char(1),3)
+						set (PAADM("CTPCPID"),PAADM("CTPCPAPIID"))=$piece(drfound,$char(1))
+						if ",A01,A08,"[$piece(msgtype,"^",2) set PAADM("CTPCPDesc")=##class(web.CTCareProv).GetCareProvSSUserName($piece(drfound,$char(1)))
+					}
+					if fld=8 set (PAADM("PACRefDoctorID"),PAADM("PACRefDoctorAPIID"))=$piece(drfound,$char(1)),PAADM("REFDCode")=$piece(drfound,$char(1),3)
+					if fld=9 set (PAADM("PAADMTreatingDrID"),PAADM("PAADMTreatingDrAPIID"))=$piece(drfound,$char(1)),PAADM("PAADMTreatingDr")=$piece(drfound,$char(1),3)
+					kill rejected
+				}
+				// build rejection list for field in case all repeats fail
+				if 'drfound,$piece(detail,"^")'="" set rejected("DR",$piece(detail,"^"))=$piece(detail,"^",3)
+			}
+		}
+		if $data(rejected) {
+			set reject=""
+			set drcode="" for  set drcode=$order(rejected("DR",drcode)) quit:drcode=""  set reject=reject_$select(reject="":"",1:", ")_rejected("DR",drcode)_"("_$get(rejected("DR",drcode))_")"
+			set drtxt=$select(fld="7":"Attending",fld="8":"Referring",1:"Consulting")
+			set reject=drtxt_" provider "_$get(reject)_" received for admission episode "_$get(visit)_", Registration number "_$get(RegMrn)_" does not exist in the "_$select(fld=8:"Referring Dr",1:"Care Provider")_" code table in TrakCare"
+			do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+			kill rejected
+		}
+	}
+	
+	// current location, source, admission number
+	set PAADM("CTLOCDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",10)),"^"),PAADM("ADSOUDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",14)),"^"),PAADM("PAADMADMNo")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV1",19)),"^")
+	set (PAADM("CTLocID"),PAADM("CTLocAPIID"))=##class(web.CTLoc).GetIdFromCodeOrDescription(PAADM("CTLOCDesc"))
+	
+	// extract location type
+	set loctype=""
+	&SQL(SELECT CTLOC_Type INTO :loctype FROM CT_Loc WHERE CTLOC_RowId = :PAADM('CTLocID'))
+	set PAADM("locType")=loctype
+	
+	// admission date and time
+	set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",44)),PAADM("PAADMAdmDate")=$extract(datetime,1,8),PAADM("PAADMAdmTime")=$extract(datetime,9,12)
+	
+	// discharge date and time
+	set (PAADM("PAADMDischgDate"),PAADM("PAADMDischgTime"))=""
+	if ",A03,A08,"[(","_$piece(msgtype,"^",2)_",") {
+		set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",45)),PAADM("PAADMDischgDate")=$extract(datetime,1,8),PAADM("PAADMDischgTime")=$extract(datetime,9,12)
+	}
+	
+	for var="PAADMAdmDate","PAADMDischgDate" {
+		if PAADM(var)'="",PAADM(var)'="""""" {
+			set date=$$DateConv^HL7Common2(.reject,"EI",PAADM(var),"",var)
+			if reject'="" {
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+				set date=""
+			}
+			set PAADM(var)=date
+		}
+	}
+	for var="PAADMAdmTime","PAADMDischgTime" {
+		if PAADM(var)'="",PAADM(var)'="""""" {
+			set time=$$TimeConv^HL7Common2("EI",$extract(PAADM(var),1,2)_":"_$extract(PAADM(var),3,4))
+			if time="ERROR!" {
+				set reject="Time received "_PAADM(var)_" for "_var_" is invalid"
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+				set time=""
+			}
+			set PAADM(var)=time
+		}
+	}
+	
+	// set visit satus - if A08 keep current admission status
+	if $piece(msgtype,"^",2)="A01" set PAADM("PAADMVisitStatus")="A"
+	if $piece(msgtype,"^",2)="A03" set PAADM("PAADMVisitStatus")="D"
+	if $piece(msgtype,"^",2)="A05" set PAADM("PAADMVisitStatus")="P"
+	if ",A11,A38,"[(","_$piece(msgtype,"^",2)_",") set PAADM("Status")="C"
+	
+	// update date and time, user and hosp
+	set PAADM("PAADMUpdateDate")=$get(EVNupdate("DATE")),PAADM("PAADMUpdateTime")=$get(EVNupdate("TIME"))
+	set PAADM($select(PAADM("PAADMType")="E":"SSUSRName",1:"PAADMUserUpdate"))=$get(EVNupdate("USER")),PAADM("PAADMUpdateUserHospitalDR")=$get(EVNupdate("HOSP"))
+	if $piece(msgtype,"^",2)="A03" {
+		// required for TC.api.PAADMDischarge.Edit
+		kill PAADM("SSUSRName") set PAADM("PAADMUserUpdate")=$get(EVNupdate("USER"))
+	}
+	
+	quit
+	
+	// extract data from PV2 segment
+PV2
+	if $data(^TMP("HL7",$job,cnt1,cnt2,"PV2")) {
+		// expected admission date, expected discharge date and time
+		set SQL("14-ExpAdmDate")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV2",8)),"^")
+		set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,"PV2",9)),PAADM("PAADMEstimDischargeDate")=$extract(datetime,1,8),PAADM("PAADMEstimDischargeTime")=$extract(datetime,9,13)
+		// triage category
+		if $get(PAADM("PAADMType"))="E" set PAADM("CTACUDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PV2",25)),"^")
+		// expected date and time of return from leave of absence
+		set (PAADM("ADMLExpectedDateReturn"),PAADM("ADMLExpectedTimeReturn"))=""
+		if ",A21,"[(","_$piece(msgtype,"^",2)_",") {
+			set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,"PV2",47)),PAADM("ADMLExpectedDateReturn")=$extract(datetime,1,8),PAADM("ADMLExpectedTimeReturn")=$extract(datetime,9,12)
+		}
+		if SQL("14-ExpAdmDate")'="",SQL("14-ExpAdmDate")'="""""" {
+			set SQL("14-ExpAdmDate")=$$DateConv^HL7Common2(.reject,"EI",SQL("14-ExpAdmDate"),"","Expected Admission Date")
+		}
+		for var="PAADMEstimDischargeDate","ADMLExpectedDateReturn" {
+			if PAADM(var)'="",PAADM(var)'="""""" {
+				set date=$$DateConv^HL7Common2(.reject,"EI",PAADM(var),"",var)
+				if reject'="" {
+					do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+					set date=""
+				}
+				set PAADM(var)=date
+			}
+		}
+		for var="PAADMEstimDischargeTime","ADMLExpectedTimeReturn" {
+			if PAADM(var)'="",PAADM(var)'="""""" {
+				set time=$$TimeConv^HL7Common2("EI",$extract(PAADM(var),1,2)_":"_$extract(PAADM(var),3,4))
+				if time="ERROR!" {
+					set reject="Time received "_PAADM(var)_" for "_var_" is invalid"
+					do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+					set time=""
+				}
+				set PAADM(var)=time
+			}
+		}
+	}
+	quit
+
+
+

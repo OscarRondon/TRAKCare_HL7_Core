@@ -1,0 +1,27 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Scheduling^MAC^^^0
+HL7Scheduling // ML 30/11/2005 ; HL7 interface : scheduling
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Scheduling.rtn#1 $
+	quit
+ 
+	// decide what SRM processing needs to occur
+Check(event) new (event,link,INT,HL7,EB,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,version,PatNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum,token,%session)
+	set event=$get(event),(forward,forwardnum,forwardtable,ok,reject,reject("Detail"))="" kill forwardnum,old
+ 
+	// check for site specific code
+	set found="",routine="HL7Site"_HL7("INCODE")_"Scheduling"_$piece(event,"^",2),LineRoutine="Check"_$piece(event,"^",2)_"^"_routine if $length($text(@LineRoutine),";;")=2 do
+	.xecute "s ok=$$"_$piece(event,"^",2)_"^"_routine_"()" set found=1
+ 
+	if 'found do
+	. // SRM^S01 - request appointment booking new
+	.if event="SRM^S01" set ok=$$S01^HL7SchedulingS01() quit
+	. // SRM^S04 - request appointment cancellation
+	.if event="SRM^S04" set ok=$$S04^HL7SchedulingS04() quit
+	. // SQM^S25 - request available slots
+	.if event="SQM^S25" set ok=$$S25^HL7SchedulingS25() quit
+ 
+ 	quit ok
+
+
+

@@ -1,0 +1,269 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7SchedulingS25^MAC^^^0
+HL7SchedulingS25 // ab 17.03.08 - choose and book
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SchedulingS25.rtn#1 $
+	quit
+	
+	// S25 - request available slots
+S25() 	set (msgtype,reject)=""
+	kill queue,^TMP("HL7-OUT",$job)
+	
+	set queryid=$get(^TMP("HL7",$job,"QRD",4)) quit:queryid=""
+	set max=$piece($get(^TMP("HL7",$job,"QRD",7)),"^") if 'max set max=40
+	
+	// search types - SBK : request patient schedule
+	//				 SOF : request first available slot
+	//				 SOP : request open slots
+	set searchtype=$get(^TMP("HL7",$job,"QRD",9)) // q:searchtype=""
+	if (","_searchtype_",")'[",SBK,SOF,SOP," // q "Unsupported search type"
+	// check for continue flag
+	set continue=$get(^TMP("HL7",$job,"DSC",1))
+	// extract search criteria
+	set (intRegMrn,RegMrn,Payor,Plan,datefrom,timefrom,dateto,timeto,error,msgUBRN,ConsecSlots,STAT,SERV,PAYP,HOSP,CITY,PROV)=""
+	kill External
+	// extract status
+	if searchtype="SBK" do
+	. set detail=$get(^TMP("HL7",$job,"QRF",5))
+	. for i=1:1:$length(detail,"~") if $piece($piece(detail,"~",i),"^",2)="STAT" set STAT=STAT_$select($length(STAT):"^",1:"")_$piece($piece(detail,"~",i),"^")
+	// get SYSTEM default payor/plan
+	set detail=$get(^CF("RB",1)),DEFPAYOR=$piece(detail,"^",13),DEFPLAN=$piece(detail,"^",18)
+	set PAYPLAN=""
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  if reject'="" quit
+	. if '$data(^TMP("HL7",$job,cnt1,"ARQ")) quit
+	. set datetime=$piece($get(^TMP("HL7",$job,cnt1,"ARQ",11)),"^"),datefrom=$extract(datetime,1,8),timefrom=$extract(datetime,9,10)_":"_$extract(datetime,11,12)
+	. set datetime=$piece($get(^TMP("HL7",$job,cnt1,"ARQ",11)),"^",2),dateto=$extract(datetime,1,8),timeto=$extract(datetime,9,10)_":"_$extract(datetime,11,12)
+	. // extract patient number
+	. if searchtype="SBK" do  if reject'="" quit
+	. . // extract patient number
+	. . if $data(^TMP("HL7",$job,cnt1,"PID")) do  if reject'="" quit
+	. . . set numbers=$$RegNum^HL7Common2(.reject) if reject'="" quit
+	. . . set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+	. . // check for UBRN
+	. . set msgUBRN=$get(^TMP("HL7",$job,cnt1,"ARQ",1))
+	. // check for consecutive slots request
+	. if searchtype'="SBK",$data(^TMP("HL7",$job,cnt1,"APR")) do
+	. . if $get(^TMP("HL7",$job,cnt1,"APR",4))="CON" set ConsecSlots="Y"
+	. set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do
+	. . // extract service and payor/plan
+	. . if $data(^TMP("HL7",$job,cnt1,cnt2,"AIS")) do
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"AIS",3)) if $piece(detail,"^")="" quit
+	. . . set SERV=SERV_$select($length(SERV):"^",1:"")_$piece(detail,"^"),External($piece(detail,"^"))=detail
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"AIS",11))
+	. . . set (Payor,Plan)="" for i=1:1:$length(detail,"~") do
+	. . . . if $piece($piece(detail,"~",i),"^",3)="PAYOR" set Payor=$piece($piece(detail,"~",i),"^")
+	. . . . if $piece($piece(detail,"~",i),"^",3)="PLAN" set Plan=$piece($piece(detail,"~",i),"^")
+	. . . set PAYPLAN=PAYPLAN_$select(PAYPLAN="":"",1:"^")_$select(Payor="":DEFPAYOR_"|"_DEFPLAN,1:Payor_"|"_Plan)
+	. . // extract hospital, city, province
+	. . if $data(^TMP("HL7",$job,cnt1,cnt2,"AIL")) do
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"AIL",3)) if $piece(detail,"^")="" quit
+	. . . if $piece(detail,"^",6)="HOSP" set HOSP=HOSP_$select($length(HOSP):"^",1:"")_$piece(detail,"^")
+	. . . if $piece(detail,"^",6)="CITY" set CITY=CITY_$select($length(CITY):"^",1:"")_$piece(detail,"^")
+	. . . if $piece(detail,"^",6)="PRV" set PROV=PROV_$select($length(PROV):"^",1:"")_$piece(detail,"^")
+	
+	if reject="" do
+	. // check validatity of payor|plan combos
+	. for j=1:1:$length(PAYPLAN,"^") do
+	. . set detail=$piece(PAYPLAN,"^",j),Payor=$piece(detail,"|"),Plan=$piece(detail,"|",2)
+	. . if Payor'="" do
+	. . . set Payor=$order(^ARC("INST",0,"Code",$zconvert(Payor,"U"),""))
+	. . . if Payor'="" do
+	. . . . set pldesc=$order(^ARC("ALIAS",0,"InsType",Payor,$zconvert(Plan,"U"),""))
+	. . . . if pldesc'="" do
+	. . . . . set Plan=$order(^ARC("ALIAS",0,"InsType",Payor,$zconvert(Plan,"U"),pldesc,""))
+	. . . . else  do
+	. . . . . // find the default plan
+	. . . . . set Plan=$piece($get(^ARC("INST",Payor)),"^",9)
+	. . . else  do
+	. . . . set Plan=""
+	
+	. . set PAYP=PAYP_$select(PAYP="":"",1:"^")_Payor_"|"_Plan
+	
+	. // convert date/time
+	. set datefrom=$$DateConv^HL7Common2(.reject,"EI",datefrom)
+	. set timefrom=$$TimeConv^HL7Common2("EI",timefrom)
+	. set dateto=$$DateConv^HL7Common2(.reject,"EI",dateto)
+	. set timeto=$$TimeConv^HL7Common2("EI",timeto)
+	
+	. // new query
+	. kill ^TMP("EBOOK-SLOTS",queryid)
+	
+	. // request patient schedule
+	. if searchtype="SBK" do
+	. . set xx=##class(web.RBAppointment).FindPatSched(intRegMrn,SERV,datefrom,dateto,timefrom,timeto,max,"",queryid,STAT,PAYP,"",$$TextConversion^HL7Common12(msgUBRN,"O"))
+	
+	. // request first available slot/open slots
+	. if searchtype'="SBK" do
+	. . // default search date/time if null
+	. . set datetime=$h
+	. . if datefrom="" set datefrom=+datetime,timefrom=$piece(datetime,",",2)
+	. . if timefrom="" set timefrom=0
+	. . if dateto="" set dateto=datefrom+EB("DAYSTOSEND")
+	. . if timeto="" set timeto=86399
+	
+	. . set returnonly=$select(searchtype="SOF":1,1:""),error=""
+	. . set continue=$translate(continue,"_","|")
+	. . set continue=##class(web.RBApptSchedule).GetSched("","",SERV,datefrom,timefrom,dateto,timeto,"",max,continue,queryid,HOSP,CITY,PROV,returnonly,PAYP,EB("SENDALL"),ConsecSlots,.error)
+	. . set continue=$translate(continue,"|","_")
+	. . set reject=$select(error="NOSERV":"Service not known to TrakCare",1:"")
+	
+	// build reply
+	set ^TMP("HL7-OUT",$job,"MSA",1)=$select(reject="":"AA",1:"AR")
+	set ^TMP("HL7-OUT",$job,"MSA",2)=$get(^TMP("HL7",$job,"MSH",9))
+	if reject'="" set ^TMP("HL7-OUT",$job,"MSA",3)=reject
+	do Build^HL7Queue("MSA",12)
+	kill ^TMP("HL7-OUT",$job)
+	do Validate
+	
+	set cntQAK="" set seq=0 for  set seq=$order(^TMP("EBOOK-SLOTS",queryid,seq)) quit:seq=""  if $increment(cntQAK)
+	set ^TMP("HL7-OUT",$job,"QAK",5)=+cntQAK
+	do Build^HL7Queue("QAK",$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","QAK"),2))
+	kill ^TMP("HL7-OUT",$job)
+	
+	set datenow=+$h
+	
+	set (seq,rowcnt)=0 for  set seq=$order(^TMP("EBOOK-SLOTS",queryid,seq)) quit:seq=""  do
+	. set row=$get(^TMP("EBOOK-SLOTS",queryid,seq))
+	. set rowcnt=$increment(rowcnt)
+	. set (DoNotSendResourceEBook,SendSlotResourceEBook)=""
+	. if searchtype="SBK" do
+	. . set service=$piece($listget(row,1),$char(1)),USRN=$listget(row,2),datestart=$listget(row,3),timestart=$listget(row,4),dateend=$listget(row,5),timeend=$listget(row,6)
+	. . set priority=$listget(row,7),doc=$listget(row,8),UBRN=$listget(row,9),price=$listget(row,10),apptstatus=$listget(row,11),location=$listget(row,12),ExternalCode=$listget(row,16)
+	. if searchtype'="SBK" do
+	. . set service=$piece($listget(row,1),$char(1)),USRN=$listget(row,2),datestart=$listget(row,3),timestart=$listget(row,4),dateend=$listget(row,5),timeend=$listget(row,6)
+	. . set priority=$listget(row,7),doc=$listget(row,8),UBRN=$listget(row,9),price=$listget(row,10),apptstatus=$listget(row,11),location=$listget(row,12),ExternalCode=$listget(row,13)
+	. . set DoNotSendResourceEBook=$listget(row,15),SendSlotResourceEBook=$listget(row,16)
+	. // check USRN format
+	. set newUSRN=$$USRNFormat^HL7Common13(USRN,"IE")
+	. set newUSRN=$$TextConversion^HL7Common12(newUSRN,"O"),UBRN=$$TextConversion^HL7Common12(UBRN,"O")
+	. // calculate duration
+	. set detail=$$CalculateDuration^HL7Common12(datestart,timestart,dateend,timeend)
+	. set duration=$piece(detail,"^"),durationunits=$piece(detail,"^",2)
+	
+	. // service
+	. set ServiceItem=$piece($get(^RBC("SER",service)),"^")
+	. set detail=$get(^ARCIM($piece(ServiceItem,"||"),$piece(ServiceItem,"||",2),1)),code=$piece(detail,"^"),desc=$piece(detail,"^",2)
+	. set service=code_"^"_desc
+	. // extract location detail
+	. kill locat
+	. set locat("CODE")=$listget(location),locat("DESC")=$listget(location,2),locat("PH")=$listget(location,3),locat("ADD")=$listget(location,4),locat("CTY")=$listget(location,5)
+	. set locat("PRV")=$select($listget(location,6)'="":$listget(location,6),1:$listget(location,7)),locat("ZIP")=$listget(location,8),locat("HOSP")=$listget(location,9)
+	. set locatRowId=##class(web.CTLoc).GetIdFromCodeOrDescription(locat("CODE"))
+	. set datestart=$translate($$DateConv^HL7Common2(.reject,"IE",datestart,"B"),"/","")
+	. set timestart=$translate($$TimeConv^HL7Common2("IE",timestart),":","")
+	
+	. // extract care provider
+	. set (doctor,roleprofile,rolecode,linkdoc)=""
+	. &SQL(SELECT CTPCP_LinkDoctor_DR INTO :linkdoc FROM CT_CareProv WHERE CTPCP_RowId = :doc)
+.
+	. set linkdoc=$select(linkdoc="":doc,1:linkdoc)
+	. set (docuser,firstuser,founduser)=""
+	. if linkdoc'="" do
+	. . for  set docuser=$order(^SSU("SSUSR",0,"CTPCP",linkdoc,docuser)) quit:docuser=""  do  quit:founduser'=""
+	. . . set detail=$get(^SSU("SSUSR",docuser))
+	. . . set roleprofile=$piece(detail,"^",109) if roleprofile="" quit
+	. . . set mainuser=$piece(detail,"^",146) if mainuser="Y" set founduser=docuser quit
+	. . . if firstuser="" set firstuser=docuser
+	. . if founduser="" set founduser=firstuser
+.
+	. set drcode=$$Provider^HL7Common5(doc,"","","","C","O")
+	. for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	. . set drcodetype=$piece(dr,$char(2),7)
+	. . set doctor=doctor_$select($length(doctor):"~",1:"")_$piece(dr,$char(2),1)_"^"_$piece(dr,$char(2),2)_"^"_$piece(dr,$char(2),3)_"^^^^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	. if doc'="",$translate(doctor,"~^ ")'="" do
+	. . // extract role code and role profile
+	. . &SQL(SELECT SSUSR_ExternalUserIdentifier INTO :roleprofile FROM SS_User WHERE SSUSR_RowID = :founduser)
+	. . if roleprofile'="" set doctor=doctor_$select($length(doctor):"~",1:"")_roleprofile_"^^^^^^^TRAKCARE_ROLE_PROFILE"
+	. . &SQL(SELECT RES_CPLocationNo INTO :rolecode FROM RB_Resource WHERE RES_CTPCP_DR = :doc AND RES_CTLOC_DR = :locatRowId)
+	. . if rolecode'="" set doctor=doctor_$select($length(doctor):"~",1:"")_rolecode_"^^^^^^^TRAKCARE_ROLE_CODE"
+	
+	. // extract notes
+	. kill NOTES
+	. set x="" for  set x=$order(^TMP("EBOOK-SLOTS",queryid,seq,"NTE",x)) quit:x=""  do
+	. . set detail=$get(^TMP("EBOOK-SLOTS",queryid,seq,"NTE",x))
+	. . set notetype=$listget(detail),note=$listget(detail,2)
+	. . set notetext="" for i=1:1:$listlength(note) set notetext=notetext_$select($length(notetext):"~",1:"")_$listget(note,i)
+	. . set NOTES(notetype)=notetext
+	
+	. kill DATA
+	
+	. // build SCH segment
+	. set DATA("SCH",1)=UBRN,DATA("SCH",2)=newUSRN,DATA("SCH",11)="^^^^^"_priority,DATA("SCH",17)=locat("PH")
+	. set DATA("SCH",18)=locat("ADD")_"^^"_locat("CTY")_"^"_locat("PRV")_"^"_locat("ZIP"),DATA("SCH",19)=locat("CODE")_"^^^"_locat("HOSP")_"^^^^^"_locat("DESC")
+	. set DATA("SCH",25)=apptstatus_"^^TRAKCARE"
+	. do Build("SCH")
+	
+	. // build NTE segment
+	. set notetype="" for  set notetype=$order(NOTES(notetype)) quit:notetype=""  do
+	. . set DATA("NTE",3)=$get(NOTES(notetype)),DATA("NTE",4)=notetype_"^^TRAKCARE"
+	. . do Build("NTE")
+	
+	. // build RGS segment
+	. set DATA("RGS",1)=rowcnt
+	. do Build("RGS")
+	
+	. // build AIS segment
+	. if $get(ExternalCode)'="",$data(External(ExternalCode)) set ExternalCode=$get(External(ExternalCode))
+	. set DATA("AIS",1)=rowcnt,DATA("AIS",3)=$select($piece($get(ExternalCode),"^")'="":ExternalCode,1:service),DATA("AIS",4)=datestart_timestart,DATA("AIS",7)=duration,DATA("AIS",8)=durationunits
+	. set DATA("AIS",12)=price_"^^TRAKCARE_TARIFF"
+	. do Build("AIS")
+	
+	. // build AIP segment
+	. if DoNotSendResourceEBook'="Y",SendSlotResourceEBook'="N" do
+	. . set DATA("AIP",1)=rowcnt
+	. . set DATA("AIP",3)=doctor
+	. . do Build("AIP")
+	
+	. // build AIL segment
+	. set DATA("AIL",1)=rowcnt
+	. set DATA("AIL",3)=locat("CODE")_"^^^"_locat("HOSP")_"^^^^^"_locat("DESC")
+	. do Build("AIL")
+	
+	if continue'="" do
+	. set DATA("DSC",1)=continue
+	. do Build("DSC")
+	
+	// send response
+	set trace=1,(trace(1),record)=$$SendHead^HL7Send("SQR^S25\"_$get(^TMP("HL7",$job,"MSH",2))_"\"_$get(^TMP("HL7",$job,"MSH",3))_"\TRAKCARE")
+	write ESC("VT"),record,ESC("CR")
+	set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  do
+	. write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	write ESC("FS"),ESC("CR"),!
+	do trace^HL7Trace("M-->E",$h,"",tracerowid) kill trace,queue
+	
+	kill ^TMP("EBOOK-SLOTS",queryid)
+	
+	quit ""
+	
+	// compile segment
+Build(seg) set seg=$get(seg)
+	
+	// compile queue
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	do Build^HL7Queue(seg,$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment",seg),2))
+	kill ^TMP("HL7-OUT",$job)
+	
+	quit
+	// validate queue before processing
+Validate
+	set seq=0 for  set seq=$order(^TMP("EBOOK-SLOTS",queryid,seq)) quit:seq=""  do
+	. set row=$get(^TMP("EBOOK-SLOTS",queryid,seq))
+	. if '$listlength(row)!(row="") kill ^TMP("EBOOK-SLOTS",queryid,seq) quit
+	
+	. set service=$piece($listget(row,1),$char(1)),USRN=$listget(row,2),UBRN=$listget(row,9)
+	. if service="" kill ^TMP("EBOOK-SLOTS",queryid,seq) quit
+	. // check USRN format
+	. set newUSRN=$$USRNFormat^HL7Common13(USRN,"IE")
+	. set newUSRN=$$TextConversion^HL7Common12(newUSRN,"O"),UBRN=$$TextConversion^HL7Common12(UBRN,"O")
+	. // if patient booking search only return slots for requested UBRN (if available)
+	. // 75440 - do these checks in SQL select
+	. //i searchtype="SBK",msgUBRN'="",msgUBRN'=UBRN k ^TMP("EBOOK-SLOTS",queryid,seq) q
+	
+	. // service
+	. if '$data(^RBC("SER",service)) kill ^TMP("EBOOK-SLOTS",queryid,seq) quit
+	. set ServiceItem=$piece($get(^RBC("SER",service)),"^") if ServiceItem="" kill ^TMP("EBOOK-SLOTS",queryid,seq) quit
+	
+	quit
+
+
+

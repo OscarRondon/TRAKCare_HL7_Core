@@ -1,0 +1,25 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Pharmacy^MAC^^^0
+HL7Pharmacy // ML 16/10/2006 ; HL7 interface : pharmacy
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Pharmacy.rtn#1 $
+	quit
+ 
+	// decide what RDS/OMP processing needs to occur
+Check(event) new (event,link,INT,HL7,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,version,PatNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum)
+	set event=$get(event),(forward,forwardnum,forwardtable,ok,reject,reject("Detail"))="" kill forwardnum,old
+ 
+	// check for site specific code
+	set found="",routine="HL7Site"_HL7("INCODE")_"Pharmacy"_$piece(event,"^",2),LineRoutine="Check"_$piece(event,"^",2)_"^"_routine if $length($text(@LineRoutine),";;")=2 do
+	.xecute "s ok=$$"_$piece(event,"^",2)_"^"_routine_"()" set found=1
+ 
+	if 'found do
+	. // RDS^O01 - pharmacy/treatment dispense
+	.if event="RDS^O01" set ok=$$O01^HL7PharmacyO01() quit
+	. // OMP^O09 - pharmacy/treatment order
+	.if event="OMP^O09" set ok=$$O09^HL7PharmacyO09() quit
+ 
+ 	quit ok
+
+
+

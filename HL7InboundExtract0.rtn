@@ -1,0 +1,27 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundExtract0^MAC^^^0
+HL7InboundExtract0	// ML 18/06/2010 : extract data from segments
+	quit
+	// extract data from EVN segment
+EVN
+	kill EVNupdate
+	set (date,time)=""
+	// updating user and location
+	set EVNupdate("USER")=$piece($get(^TMP("HL7",$job,"EVN",5)),"^"),EVNupdate("HOSP")=$piece($get(^TMP("HL7",$job,"EVN",7)),"^")
+	// update date and time
+	set datefield=$select($get(RULES(10))="EVN2":2,$get(RULES(10))="EVN6":6,1:"")
+	if datefield'="" set datetime=$get(^TMP("HL7",$job,"EVN",datefield)),date=$extract(datetime,1,8),time=$extract(datetime,9,12)
+	set EVNupdate("DATE")=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	set EVNupdate("TIME")=$select(time?4N:$$TimeConv^HL7Common2("EI",$extract(time,1,2)_":"_$extract(time,3,4)),1:"")
+	// event date and time
+	set datetime=$get(^TMP("HL7",$job,"EVN",6)),date=$extract(datetime,1,8),time=$extract(datetime,9,12)
+	set EVNupdate("EVENT-DATE")=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	set EVNupdate("EVENT-TIME")=$select(time?4N:$$TimeConv^HL7Common2("EI",$extract(time,1,2)_":"_$extract(time,3,4)),1:"")
+	// set default date and time if blank
+	set datetime=$h
+	if EVNupdate("DATE")="" set EVNupdate("DATE")=+$h,EVNupdate("TIME")=$piece($h,",",2)
+	quit
+
+
+

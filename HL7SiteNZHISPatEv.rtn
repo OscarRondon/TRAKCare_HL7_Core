@@ -1,0 +1,75 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteNZHISPatEv^MAC^^^0
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteNZHISPatEv.rtn#1 $
+CheckA60 ;;
+AdverseReaction(reject,adttype)
+	if adttype="A60" do
+	.set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	..if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	..do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	.. // add/update/delete adverse reactions
+	..if '$data(AdverseReact) quit
+	..do AdverseReaction2
+ 
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+ 
+AdverseReaction2
+	
+	// add/update/delete adverse reaction/allergy
+	set HL7Flag="Y"
+	
+	// ab 6.04.06 58688
+	// set string of all existing allergies that we wont set TBC
+	set ExistingAllergies=""
+	if intRegMrn do
+	. set algind=0 for  set algind=$order(^PAPER(intRegMrn,"ALG",algind)) quit:algind=""  do
+	. . //if existing is TBC, dont override
+	. . if $piece($get(^PAPER(intRegMrn,"ALG",algind)),"^",8)'="C" set ExistingAllergies=$get(ExistingAllergies)_$select($get(ExistingAllergies)'="":"^",1:"")_$piece($get(^PAPER(intRegMrn,"ALG",algind)),"^",30)
+	//s ^zab($zn,"alg",$j,$o(^zab($zn,"alg",$j,""),-1)+1)=intRegMrn_"$$"_ExistingAllergies
+	
+	set segid="" for  set segid=$order(AdverseReact(segid)) quit:segid=""  do
+	.kill ALLERGY merge ALLERGY=AdverseReact(segid) kill ALLERGY("Action")
+	.do CodeTable^HL7PatEv4("PA_Allergy")
+	.set ALLERGY(22)="N" if ALLERGY(11)="I" set ALLERGY(22)="Y"
+	.set ALLERGY(13)=$$DateConv^HL7Common2(.reject,"EI",AdverseReact(segid,13))
+	. //ab 6.04.06 58688
+	.if ("^"_ExistingAllergies_"^")'[("^"_ALLERGY(34)_"^") set ALLERGY(11)="C"
+	. // updating user and location
+	.do UpdateUser^HL7PatEv1("CT")
+	.set ALLERGY(19)=upduser,ALLERGY(26)=upddate,ALLERGY(27)=updtime
+ 
+	. // remove all allergies and add new
+	.if AdverseReact(segid,"Action")="X" do  quit
+	.. &SQL(DELETE FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn)
+	.. // add new addition
+	..set ALLERGY(0)=intRegMrn
+	.. &SQL(INSERT INTO PA_Allergy VALUES :ALLERGY())
+ 
+	. // add new adverse reaction/allergy
+	.if AdverseReact(segid,"Action")="A" do  quit
+	.. &SQL(SELECT ALG_RowId INTO :intAlgNum FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn AND ALG_ExternalID = :ALLERGY(34))
+	.. // ignore new additions if number exists
+	..if 'SQLCODE quit
+	..set ALLERGY(0)=intRegMrn
+	.. &SQL(INSERT INTO PA_Allergy VALUES :ALLERGY())
+ 
+	. // update existing reaction/allergy
+	.if AdverseReact(segid,"Action")="U" do  quit
+	.. &SQL(SELECT ALG_RowId INTO :intAlgNum FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn AND ALG_ExternalID = :ALLERGY(34))
+	..if 'SQLCODE do  quit
+	... &SQL(UPDATE PA_Allergy VALUES :ALLERGY() WHERE ALG_RowId = :intAlgNum)
+	..if SQLCODE do
+	...set ALLERGY(0)=intRegMrn
+	... &SQL(INSERT INTO PA_Allergy VALUES :ALLERGY())
+ 
+	. // delete existing reaction/allergy
+	.if AdverseReact(segid,"Action")="D" do  quit
+	.. &SQL(SELECT ALG_RowId INTO :intAlgNum FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn AND ALG_ExternalID = :ALLERGY(34))
+	..if SQLCODE quit
+	.. &SQL(DELETE FROM PA_Allergy WHERE ALG_RowId = :intAlgNum)
+	quit
+
+
+

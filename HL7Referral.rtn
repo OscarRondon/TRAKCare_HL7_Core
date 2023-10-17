@@ -1,0 +1,27 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Referral^MAC^^^0
+HL7Referral	// ML 06/05/2008 ; HL7 interface : referral
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Referral.rtn#1 $
+	quit
+	
+	// decide what REF processing needs to occur
+Check(event)	new (event,link,INT,HL7,EB,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,version,PatNum,RefNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum)
+	set event=$get(event),(forward,forwardnum,forwardtable,ok,reject,reject("Detail"))="" kill forwardnum,old
+  
+	// check for site specific code
+	set found="",routine="HL7Site"_HL7("INCODE")_"Referral"_$piece(event,"^",2),LineRoutine="Check"_$piece(event,"^",2)_"^"_routine if $length($text(@LineRoutine),";;")=2 do
+	.xecute "s ok=$$"_$piece(event,"^",2)_"^"_routine_"()" set found=1
+	
+	if 'found do
+	. // REF^I12 - patient referral
+	.if event="REF^I12" set ok=$$I12^HL7ReferralI12() quit
+	. // REF^I13 - update patient referral
+	.if event="REF^I13" set ok=$$I13^HL7ReferralI13() quit
+	. // REF^I14 - cancel patient referral
+	.if event="REF^I14" set ok=$$I14^HL7ReferralI14() quit
+	
+	quit ok
+
+
+

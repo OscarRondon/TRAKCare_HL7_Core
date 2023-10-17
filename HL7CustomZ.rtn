@@ -1,0 +1,127 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7CustomZ^MAC^^^0
+HL7CustomZ	// ML 22/12/2008 ; HL7 interface : TC custom 'z'
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7CustomZ.rtn#1 $
+	quit
+	// decide what 'Z' processing needs to occur
+Check(event)	new (event,link,INT,HL7,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,tracecopy,version,PatNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum)
+	set event=$get(event),(forward,forwardnum,forwardtable,ok,reject,reject("Detail"))="" kill forwardnum,old,EB
+	// ZTC^CBA - Choose & Book Acknowledgement
+	if event="ZTC^CBA" set ok=$$CBA() quit ok
+	// ZTC^PBD - PDS Baby Duplicates
+	if event="ZTC^PBD" set ok=$$PBD() quit ok
+	quit ok
+	// CBA - Choose & Book Acknowledgement
+CBA()
+	// extract ack/nak
+	set acknak=$get(^TMP("HL7",$job,"MSA",1))
+	// extract message id of our original 'ack' to SRM^S01
+	set ControlId=$get(^TMP("HL7",$job,"MSA",2))
+	if ControlId'="",$data(^TMP("EBOOK-APPT",ControlId)) {
+		set detail=$get(^TMP("EBOOK-APPT",ControlId))
+		set type=$list(detail),intApptNum=$list(detail,3)
+		// request accepted
+		if acknak="AA" {
+			// check if 'hold and book' or 'hold and cancel' performed
+			if type="S01" job ConfirmAppt^HL7SchedulingS01(ControlId,HL7("USER"))
+			if type="S04" job ConfirmCancel^HL7SchedulingS04(ControlId,HL7("USER"))
+		}
+		// request rejected
+		if acknak="AE" {
+			// if 'hold and cancel' and -ve ack - set appointment back to a status of booked
+			if type="S04" {
+				do BookHoldCancel^HL7SchedulingS04(ControlId,HL7("USER"))
+			}
+			// if 'hold and book' delete e-referral and booking
+			if type="S01",intApptNum'="" {
+				// supress any outbound 'SIU' messages
+				set HL7Flag="Y"
+				// extract USRN, UBRN
+				set USRN=$listget(detail,2),UBRN=$list(detail,4)
+				// clear appointment from schedule
+				if ##class(web.RBAppointment).ReleaseSlots(intApptNum)
+				// delete on hold booking
+				&SQL(DELETE FROM RB_Appointment WHERE APPT_RowId = :intApptNum)
+				// do not delete e-referral.  keep e-referral/waiting list entry for use if UBRN is received again
+				// only remove link between e-referral and appointment
+				set intRefNum=$order(^RBRFi("UBRN",UBRN,""))
+				if intRefNum'="" {
+					set rbref=##class(User.RBReferral).%OpenId(intRefNum)
+					if rbref {
+						// only unlink if the USRNs match as the UBRN may have been reused with a different USRN
+						if rbref.REFUSRN=USRN {
+							do rbref.REFAppointDRSetObjectId("")
+							set rbref.REFUSRN=""
+							set ok=rbref.%Save(0)
+						}
+						kill rbref
+					}
+				}
+				kill ^TMP("EBOOK-APPT",ControlId),HL7Flag
+			}
+		}
+	}
+	quit "AA"
+.
+	// PBD - PDS Baby Duplicates
+PBD()
+	kill cntPID
+	set intRegMrn=""
+	set cnt1=0 for  {
+		if reject'="" quit
+		set cnt1=$order(^TMP("HL7",$job,cnt1)) if cnt1="" quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		// keep track of PID count
+		if $increment(cntPID)
+		new zidPAPERReasonForAttention,ziddata
+		set (ziddata,zidPAPERReasonForAttention)=""
+		// set the Reason for attention from the error codes sent by PDS
+		if $data(^TMP("HL7",$job,cnt1,"ZID")) {
+			set ziddata="Y"
+			// PAPERReasonForAttention should be set to the value received in ZID:27 in PBD message
+			set zidPAPERReasonForAttention=$piece($get(^TMP("HL7",$job,cnt1,"ZID",27)),"^")
+		}
+		// mark original patient with 'reason for attention' - possible duplicate record
+		if cntPID=1 {
+			// check if pre-existing patient
+			set numbers=$$RegNum^HL7Common2(.reject)
+			set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+			if reject'="" set rejecthere="Y" quit
+			
+			kill obj
+			set obj=##class(User.PAPerson).%OpenId(intRegMrn) quit:'obj
+			set HL7Flag="Y"
+			if (ziddata="Y")&&(zidPAPERReasonForAttention'="") {
+				set obj.PAPERReasonForAttention=zidPAPERReasonForAttention
+			} else {
+				set obj.PAPERReasonForAttention="01"
+			}
+			set obj.PAPERPDSSerialNumber="0"
+			set save=obj.%Save(0)
+			set obj=""
+		}
+	}
+	// merge trace into TMP global for front end to use in a different process
+	if intRegMrn'="",cntPID>1 {
+		kill ^TMP("HL7-QUERY",intRegMrn)
+		set pat=""
+		set j="" for  {
+			set j=$order(tracecopy(j)) if j="" quit
+			set seg=$get(tracecopy(j))
+			
+			if $piece(seg,"|")="PID" set pat=$increment(^TMP("HL7-QUERY",intRegMrn,"RESULT",1,"PAT"))
+			// do not use first PID - this belongs to patient already entered - only display duplicates returned
+			if pat>1 {
+				set num=$order(^TMP("HL7-QUERY",intRegMrn,"RESULT",1,"PAT",pat,""),-1)+1
+				set ^TMP("HL7-QUERY",intRegMrn,"RESULT",1,"PAT",pat,num)=seg
+			}
+		}
+		// set link so that extraction routine knows which interface to look at to get patient number extraction details from
+		if $data(^TMP("HL7-QUERY",intRegMrn)) set ^TMP("HL7-QUERY",intRegMrn,"LINK")=link
+	}
+	quit "AA"
+
+
+

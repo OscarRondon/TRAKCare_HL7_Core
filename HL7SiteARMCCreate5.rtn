@@ -1,0 +1,209 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteARMCCreate5^MAC^^^0
+HL7SiteARMCCreate5 // ML 24/03/2010 ; HL7 interface : create transmission packets - Austin and Repatriation Medical Centre
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteARMCCreate5.rtn#1 $
+	quit
+ 
+CheckAIL ;; build data array - AIL
+AIL()	set intApptNum=$get(intApptNum) kill DATA
+ 
+	// extract appointment details
+	kill Appointment if $$Appointment^HL7OutExtract11(intApptNum,.Appointment)
+ 
+	// extract appt schedule rowid
+	set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+ 
+	// extract appointment schedule
+	kill ApptSch if $$ApptSchedule^HL7OutExtract11(intApptSch,.ApptSch)
+ 
+	// extract resource location
+	set intResource=$get(ApptSch(0))
+	kill Resource if $$Resource^HL7OutExtract11(intResource,.Resource)
+ 
+	// extract effective date session
+	set intEffDate=$get(ApptSch(18))
+	kill EffDateSess if $$EffDateSess^HL7OutExtract11(intEffDate,.EffDateSess)
+ 
+	set value=$get(Resource(3)),(code,desc,type)=""
+	&SQL(SELECT CTLOC_RespUnit_DR -> RU_Code, CTLOC_RespUnit_DR -> RU_Desc, CTLOC_Type INTO :code, :desc, :type FROM CT_Loc, CT_ResponsibleUnit WHERE CTLOC_RowId = :value)
+	set locgroup=code_"^"_desc_"^"_type
+ 
+	// extract code table detail
+	for mtable="RB_Appointment","RB_Resource" do CodeTable^HL7OutExtract11(mtable)
+ 
+ 	set apptstatus=$get(Appointment(5)),dur("MIN")=$get(Appointment(26))
+ 
+	set HospNationalCode="" if $get(EffDateSess(21))'="" set HospNationalCode=$$NationalCode^HL7SiteARMCCreateZ($get(EffDateSess(21)),"LOC")
+ 
+ 	// calculate start and end date/time
+	kill datetime set datetime("START")=$$DateTime^HL7Common2($get(ApptSch(3)),$get(ApptSch(5)),"Y")
+ 
+	set location=$get(Resource(3))
+ 
+	set DATA("AIL",1)=1,DATA("AIL",2)=$select(msgtype["S12":"A",1:"U"),DATA("AIL",3)=$piece(location,"^")_"^^^"_HospNationalCode_"^^^^^"_$piece(location,"^",2),DATA("AIL",4)=location,DATA("AIL",5)=locgroup
+	set DATA("AIL",6)=$get(datetime("START")),DATA("AIL",9)=$get(dur("MIN")),DATA("AIL",10)="min",DATA("AIL",12)=apptstatus
+ 
+	kill Appointment,ApptSch,Resource,EffDateSess
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckAIP ;; build data array - AIP
+AIP()	set intApptNum=$get(intApptNum) kill DATA
+ 
+	// extract appointment details
+	kill Appointment if $$Appointment^HL7OutExtract11(intApptNum,.Appointment)
+ 
+	// extract appt schedule rowid
+	set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+ 
+	// extract appointment schedule
+	kill ApptSch set SQLCODE=$$ApptSchedule^HL7OutExtract11(intApptSch,.ApptSch)
+ 
+	set intResource=$get(ApptSch(0))
+	kill Resource set SQLCODE=$$Resource^HL7OutExtract11(intResource,.Resource)
+ 
+	set intCareProv=$get(Resource(4))
+	kill CareProv set SQLCODE=$$CareProvider^HL7OutExtract10(intCareProv,.CareProv)
+ 
+	set mtable="RB_Appointment" do CodeTable^HL7OutExtract11(mtable)
+	set mtable="CT_CareProv" do CodeTable^HL7OutExtract10(mtable)
+ 
+	// extract doctors
+	kill doctor set (drcode,doctor("RESOURCE"))=""
+	set i=4 if $get(Resource(i))'="" do
+	.if Resource(i)=""""!(Resource(i)="""""") quit
+	.set drcode=$$Provider^HL7Common5($get(Resource(i)),"","","","C","O")
+	. // doesnt call $$BuildDoctor^HL7Common5 as alternative title for careproviders required
+	.set str=""
+	.for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	..set drcodetype=$piece(dr,$char(2),7)
+	..set (nameL,nameG,nameO,nameT,nameTdr)="" set nameL=$piece(dr,$char(2),2),nameG=$piece(dr,$char(2),3) if $piece(dr,$char(2),9)'="" do
+	...set nameL=$piece($piece(dr,$char(2),9),"~"),nameG=$piece($piece(dr,$char(2),9),"~",2),nameO=$piece($piece(dr,$char(2),9),"~",3),nameT=$piece($piece(dr,$char(2),9),"~",4),nameTdr=$piece($piece(dr,$char(2),9),"~",5)
+	.. // use code table derived title if available
+	..if nameTdr'="" set nameT=nameTdr
+	..set str=str_$select($length(str):"~",1:"")_$piece(dr,$char(2),1)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	.. // include SMC number
+	..if $piece(dr,$char(2),8)'="" do
+	...set str=str_$select($length(str):"~",1:"")_$piece(dr,$char(2),8)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^AUSHIC^^^^PVN"
+	.set doctor("RESOURCE")=str
+  
+ 	set apptstatus=$get(Appointment(5)),dur("MIN")=$get(Appointment(26)),resourcerole=$get(CareProv(16)),resourcegroup=$get(CareProv(45))
+ 
+ 	// calculate start and end date/time
+	kill datetime set datetime("START")=$$DateTime^HL7Common2($get(ApptSch(3)),$get(ApptSch(5)),"Y")
+ 
+	set DATA("AIP",1)=1,DATA("AIP",2)=$select(msgtype["S12":"A",1:"U"),DATA("AIP",3)=$get(doctor("RESOURCE")),DATA("AIP",4)=$select($translate(resourcerole,"^")="":"CP^Care Provider",1:resourcerole)
+	set DATA("AIP",5)=resourcegroup,DATA("AIP",6)=$get(datetime("START")),DATA("AIP",9)=$get(dur("MIN")),DATA("AIP",10)="min",DATA("AIP",12)=apptstatus
+ 
+	kill ApptSch,Resource,CareProv,doctor
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckSCH ;; build data array - SCH
+SCH()	set intApptNum=$get(intApptNum) kill DATA
+ 
+	// appointment data only available if not SIU^S23
+	if msgtype'["S23" do
+	. // extract patient details
+	.kill Appointment if $$Appointment^HL7OutExtract11(intApptNum,.Appointment)
+	
+	. // extract appointment schedule
+	.set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+	.kill ApptSch if $$ApptSchedule^HL7OutExtract11(intApptSch,.ApptSch)
+ 
+	. // extract resource
+	.set intResource=$get(ApptSch(0))
+	.kill Resource set SQLCODE=$$Resource^HL7OutExtract11(intResource,.Resource)
+ 
+	. // extract effective date session
+	.set intEffDate=$get(ApptSch(18))
+	.kill EffDateSess set SQLCODE=$$EffDateSess^HL7OutExtract11(intEffDate,.EffDateSess)
+	.set ParPlacerApptId=$$TextConversion^HL7Common12(intEffDate,"O")
+ 	.set USRN=$get(Appointment(82))
+	.if USRN="" set USRN=$piece($$USRN^CRBAppointment4(intApptSch,$get(Appointment(18))),"~")
+	. // check USRN format
+	.set newUSRN=$$USRNFormat^HL7Common13(USRN,"IE")
+	. // USRN requires '|' chars excaping
+	.set newUSRN=$$TextConversion^HL7Common12(newUSRN,"O")
+	.set HospNationalCode="" if $get(EffDateSess(21))'="" set HospNationalCode=$$NationalCode^HL7SiteARMCCreateZ($get(EffDateSess(21)),"LOC")
+	. // extract code table detail
+	.for mtable="RB_Appointment","RB_ResEffDateSession" do CodeTable^HL7OutExtract11(mtable)
+ 
+	. // transfer appointment rowid
+ 	.set intApptTransf=$get(Appointment(10))
+ 
+	. // extract group number
+	.set intOrdNum=$$ApptOrder^HL7OutExtract11(intApptNum)
+	.if intOrdNum="" set intOrdNum=$get(Appointment(24))
+	.if intOrdNum="" set intOrdNum=$$ApptOrder^HL7OutExtract11(intApptTransf)
+	.if intOrdNum="" do
+	.. &SQL(SELECT APPT_OEORI_DR INTO :intOrdNum FROM RB_Appointment WHERE APPT_RowId = :intApptTransf)
+	.set GroupNum=$translate(intOrdNum,"||")
+ 
+	.set apptstatus=$get(Appointment(5)),TransactionUser=$get(Appointment(14)),dur("MIN")=$get(Appointment(26)),dur("SEC")=dur("MIN")*60
+	.set EnteredBy=$get(Appointment(14)),CancelReason=$get(Appointment(31)),ReasonNotShow=$get(Appointment(32))
+	.set UBRN=$get(Appointment(83)),UBRN=$$TextConversion^HL7Common12(UBRN,"O")
+ 	.set appttype=$get(EffDateSess(11))
+	. // extract comments
+	.set comm=$get(Appointment(6)),(comment,comment("APPT"))="" if $listlength(comm) do
+	..for j=1:1:$listlength(comm) set comment=$get(comment)_$select($length(comment):HL7("LINEBK"),1:"")_$$TextConversion^HL7Common12($list(comm,j),"O")
+	..for j=1:1:$length(comment,$char(13,10)) set comment("APPT")=$get(comment("APPT"))_$select($length(comment("APPT")):HL7("LINEBK"),1:"")_$piece(comment,$char(13,10),j)
+	. // extract doctors
+	.kill doctor set doctor("PLACER")=""
+	.if $get(Resource(4))'="" do
+	..if Resource(4)=""""!(Resource(4)="""""") quit
+	..set drid=Resource(4)
+	..set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	.. // doesnt call $$BuildDoctor^HL7Common5 as alternative title for careproviders required
+	..set str=""
+	..for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	...set drcodetype=$piece(dr,$char(2),7)
+	...set (nameL,nameG,nameO,nameT,nameTdr)="" set nameL=$piece(dr,$char(2),2),nameG=$piece(dr,$char(2),3) if $piece(dr,$char(2),9)'="" do
+	....set nameL=$piece($piece(dr,$char(2),9),"~"),nameG=$piece($piece(dr,$char(2),9),"~",2),nameO=$piece($piece(dr,$char(2),9),"~",3),nameT=$piece($piece(dr,$char(2),9),"~",4),nameTdr=$piece($piece(dr,$char(2),9),"~",5)
+	... // use code table derived title if available
+	...if nameTdr'="" set nameT=nameTdr
+	...set str=str_$select($length(str):"~",1:"")_$piece(dr,$char(2),1)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^"_HospNationalCode_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	... // include SMC number
+	...if $piece(dr,$char(2),8)'="" do
+	....set str=str_$select($length(str):"~",1:"")_$piece(dr,$char(2),8)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^AUSHIC^^^^PVN"
+	..set doctor("PLACER")=str
+ 
+	. // calculate start and end date/time
+	.kill date,datetime set date("START")=$get(ApptSch(3)),time("START")=$get(ApptSch(5))
+	.set date("END")=date("START")+((time("START")+dur("SEC"))\86400),time("END")=((time("START")+dur("SEC"))-(86400*((time("START")+dur("SEC"))\86400)))
+	.set datetime("START")=$$DateTime^HL7Common2(date("START"),time("START"),"Y"),datetime("FINISH")=$$DateTime^HL7Common2(date("END"),time("END"),"Y")
+ 
+	if msgtype["S23" set EnteredBy=LogonUser
+ 
+ 	// entered by
+	if EnteredBy'="" do
+	.set (login,surname,given,title,titleDR,usertype,hospital)=""
+	. &SQL(SELECT SSUSR_Initials, SSUSR_Surname, SSUSR_GivenName, SSUSR_Title, SSUSR_Title_DR -> TTL_Code, SSUSR_StaffType_DR -> STAFF_Code INTO :login, :surname, :given, :title, :titleDR, :usertype FROM SS_User, CT_StaffType WHERE SSUSR_RowId = :TransactionUser)
+	.if $get(Appointment(68))'="" do
+	.. &SQL(SELECT HOSP_Code INTO :hospital FROM CT_Hospital WHERE HOSP_RowId = :Appointment(68))
+	. // convert escape characters
+	.for var="login","surname","given","title","titleDR","usertype","hospital" set @var=$$TextConversion^HL7Common12($get(@var),"O")
+	.if titleDR'="" set title=titleDR
+	.set EnteredBy=login_"^"_surname_"^"_given_"^^^"_title_"^^^TRAKCARE^^^^"_usertype_"^"_hospital
+ 
+	// do not populate if SIU^S23 as not all data available
+	if msgtype'["S23" do
+	.set DATA("SCH",1)=UBRN,DATA("SCH",2)=newUSRN_"^OAM",DATA("SCH",3)="^^^^^^^^"_HospNationalCode,DATA("SCH",4)=$select(GroupNum'="":GroupNum_"^REF",1:""),DATA("SCH",5)=$select(appttype'="":appttype_"^OAM",1:"")
+	.set DATA("SCH",7)=$select($get(comment("APPT"))'="":"CMNT^"_$extract(comment("APPT"),1,250)_"^TRAKCARE",1:""),DATA("SCH",8)=$select(appttype'="":appttype_"^TRAKCARE",1:""),DATA("SCH",9)=dur("MIN"),DATA("SCH",10)="min"
+	.set DATA("SCH",11)="^^^"_datetime("START")_"^"_datetime("FINISH")_"^^^^",DATA("SCH",12)=doctor("PLACER")
+	.set (DATA("SCH",16),DATA("SCH",20))=EnteredBy,DATA("SCH",23)=ParPlacerApptId,DATA("SCH",25)=apptstatus_"^TRAKCARE"
+ 
+	if msgtype["S23" set DATA("SCH",20)=EnteredBy
+ 
+	if msgtype["S12" set DATA("SCH",6)="NWA^New Appointment^TRAKCARE"
+	if msgtype["S13" set DATA("SCH",6)="RSA^Rescheduled Appointment^TRAKCARE"
+	if msgtype["S14" set DATA("SCH",6)="MDA^Modified Appointment^TRAKCARE"
+	if msgtype["S15" set DATA("SCH",6)=CancelReason_"^TRAKCARE"
+	if msgtype["S23" set DATA("SCH",6)="CSL^Cancelled Slot^TRAKCARE"
+	if msgtype["S26" set DATA("SCH",7)=ReasonNotShow_"^TRAKCARE"
+ 
+	kill Appointment,ApptSch,EffDateSess,Resource,AdmDetail,AdmDetailx,datetime,date,doctor
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

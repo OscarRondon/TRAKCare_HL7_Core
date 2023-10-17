@@ -1,0 +1,74 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundADTA21^MAC^^^0
+HL7InboundADTA21	// ML 22/03/2011 ;  HL7 interface : patient event ADT_A21
+	quit
+	// A21 - patient goes on a 'leave of absence'
+A21()
+	set HL7Flag="Y"
+	set (reject,rejecthere)=""
+	// check if message forwarding required
+	set forward=$$MsgForward^HL7Inbound(msgtype)
+	set cnt1=0 for  {
+		if reject'="" quit
+		set cnt1=$order(^TMP("HL7",$job,cnt1)) if cnt1="" quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		// check if pre-existing patient
+		set numbers=$$RegNum^HL7Common2(.reject,"A21")
+		set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+		if reject'="" set rejecthere="Y" quit
+		// check if patient details received match those in system
+		if $$PatCheck^HL7Common3(intRegMrn) quit
+		// extract EVN information
+		do EVN^HL7InboundExtract0
+		// no event date and time
+		if $get(EVNupdate("EVENT-DATE"))="" set reject="Date/time of leave not received in field EVN.6",reject("Detail")="EVN^^6~100",rejecthere="Y" quit
+		kill PERSON
+		// extract PID information
+		do PID^HL7InboundExtract1 if reject'="" quit
+		set foundPV1=""
+		set cnt2=0 for  {
+			if reject'="" quit
+			set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) if cnt2="" quit
+			kill PAADM,SQL
+			
+			set reject=""
+			// ignore segment codes in cnt2
+			if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+			if foundPV1,$extract(cnt2,1,2)?1.2A quit
+			if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~100",rejecthere="Y" quit
+			kill PLIST
+			// extract PV1 information
+			do PV1^HL7InboundExtract2
+			if PAADM("PAADMADMNo")="" set reject="No admission number received, unable to cancel admission",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~205",rejecthere="Y" quit
+			// check if admission exists on patient
+			set intAdmNum=$$intAdmNum^HL7Common2(PAADM("PAADMADMNo"),intRegMrn,HL7("INT-ADM-NUM"))
+			if intAdmNum="" set reject=$select(HL7("INT-ADM-NUM")="Y":"Internal admission number ",1:"Admission number ")_PAADM("PAADMADMNo")_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~205",rejecthere="Y" quit
+			if HL7("INT-ADM-NUM")="Y" set PAADM("PAADMADMNo")=""
+			// extract PV2 information
+			do PV2^HL7InboundExtract2
+			set reject=""
+			set PAADM("EpisodeID")=intAdmNum
+			set PAADM("ADMLGoingOutDate")=$get(EVNupdate("EVENT-DATE")),PAADM("ADMLGoingOutTime")=$get(EVNupdate("EVENT-TIME"))
+			// check for existing leave of absence to update
+			set (intAdmLeave,seq,detail)=""
+			set seq=$order(^PAADM(intAdmNum,"LEA",seq),-1,detail)
+			if seq'="",seq'="0" {
+				set intAdmLeave=intAdmNum_"||"_seq,datereturn=""
+				// check if returned from leave. if patient returned, new leave required
+				if $piece(detail,"^",9)'="" set intAdmLeave=""
+			}
+			// add/update leave information
+			do LEAVE^HL7InboundUpdate2
+			// check if message forwarding required
+			if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmLeave)="PAADMLEAVE"
+		}
+		kill PERSON,PAADM,SQL
+	}
+	kill PERSON,PAADM,SQL
+	if rejecthere="Y" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

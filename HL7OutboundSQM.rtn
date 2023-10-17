@@ -1,0 +1,115 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7OutboundSQM^MAC^^^0
+HL7OutboundSQM	// ML 17/02/2008 ; HL7 interface - Outbound SQM message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutboundSQM.rtn#1 $
+	quit
+	
+	// external system query - query type			: SBK - request patient schedule
+	//												  SOF - request first available slot
+	//												  SOP - request open slots
+	//												  SSA - check slot availability [CUP]
+	//						- services				: 1 - service id
+	//												  2 - payor id
+	//												  3 - plan id
+	//												  4 - group number
+	//						- datefrom				: date from
+	//						- timefrom				: time from
+	//						- locations				: 1 - location type
+	//												  2 - location code
+	//						- intRegMrn				: patient rowid
+	//						- requestrows			: number of rows to request
+	//						- dateto				: date to
+	//						- timeto				: time to
+	//						- careprovider			: care provider
+	//						- UBRN					: ubrn
+	//						- extprescriptionnum	: external prescription number
+	//						- ExtraFieldText		: extra text fields up to 10 pieces.
+	//
+QueryString(querytype,services,datefrom,timefrom,locations,intRegMrn,RequestRows,dateto,timeto,careprovider,UBRN,ExtPrescriptionNum,ExtraFieldText)
+	new (querytype,services,datefrom,timefrom,locations,intRegMrn,RequestRows,dateto,timeto,careprovider,UBRN,ExtPrescriptionNum,ExtraFieldText,%session)
+	set querytype=$get(querytype),services=$get(services),datefrom=$get(datefrom),timefrom=$get(timefrom),locations=$get(locations),intRegMrn=$get(intRegMrn),RequestRows=$get(RequestRows)
+	set dateto=$get(dateto),timeto=$get(timeto),careprovider=$get(careprovider),UBRN=$get(UBRN),ExtPrescriptionNum=$get(ExtPrescriptionNum),ExtraFieldText=$get(ExtraFieldText)
+	
+	set uniqueid="" kill QueryInt
+	
+	if querytype="SBK",intRegMrn="" quit "^Unable to perform requested patient schedule look up, no patient id received"
+	
+	set link="" for  set link=$order(^SSHL7(link)) quit:link=""  do
+	. // check if query interface
+	. if $piece($get(^SSHL7(link)),"^",35)'="Y" quit
+	. set queue="0" for cnt=1:1 set queue=$order(^SSHL7(link,"QUEUE",queue)) quit:queue=""
+	. set QueryInt(cnt,link)=""
+	
+	if '$data(QueryInt) quit "^No HL7 query interfaces defined to perform search"
+	
+	// check number of messages queued for each interface
+	set (found,cnt)="" for  do  quit:cnt=""  quit:found
+	. set cnt=$order(QueryInt(cnt)) quit:cnt=""  do  quit:found
+	. . set link="" for  set link=$order(QueryInt(cnt,link)) quit:link=""  do  quit:found
+	. . . if ("*"_$piece($get(^SSHL7(link,"QUERY",1)),"^")_"*")[("*"_querytype_"*") set found=1
+	
+	if $get(link)="" quit "^No HL7 interfaces defined to perform requested "_$select(querytype="SBK":"patient schedule",querytype="SOF":"first available slot",querytype="SOP":"open slots",1:"check availability")_" look up"
+	
+	set intLink=$$Interface^HL7(link)
+	// set unique query id
+	lock +^SSHL7(link,"QUERY",1,"QUERY-CNT")
+	set ok="" for  do  quit:ok
+	. set uniqueid=intLink_"-"_$increment(^SSHL7(link,"QUERY",1,"QUERY-CNT")) if $length(uniqueid)<11 set ok=1 quit
+	. // max length of query id is 10 - reset counter
+	. set ^SSHL7(link,"QUERY",1,"QUERY-CNT")=0
+	lock -^SSHL7(link,"QUERY",1,"QUERY-CNT")
+	
+	set msgtype="SQM_S25"
+	
+	set LogonUser=$select($data(%session):$get(%session.Data("LOGON.USERID")),1:"")
+	
+	// message creation
+	job Query(link,msgtype,uniqueid,LogonUser,querytype,services,datefrom,timefrom,locations,intRegMrn,RequestRows,dateto,timeto,careprovider,UBRN,ExtPrescriptionNum,ExtraFieldText)
+	
+	// set query trace
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"SERVICE")=services,^SSHL7(link,"QUERY-DETAIL",uniqueid,"DATETIME-FROM")=datefrom_"^"_timefrom
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"DATETIME-TO")=dateto_"^"_timeto,^SSHL7(link,"QUERY-DETAIL",uniqueid,"QUERY-TYPE")=querytype
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"LOCATION")=locations,^SSHL7(link,"QUERY-DETAIL",uniqueid,"LOGONUSER")=LogonUser
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"PAT-ROWID")=intRegMrn,^SSHL7(link,"QUERY-DETAIL",uniqueid,"REQUEST-ROWS")=RequestRows
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"CAREPROVIDER")=careprovider,^SSHL7(link,"QUERY-DETAIL",uniqueid,"UBRN")=UBRN
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"EXTPRESCRIPTIONNUM")=ExtPrescriptionNum
+	set ^SSHL7(link,"QUERY-DETAIL",uniqueid,"EXTRAFIELDTEXT")=ExtraFieldText
+	
+	quit uniqueid
+	
+Query(link,msgtype,uniqueid,LogonUser,querytype,services,datefrom,timefrom,locations,intRegMrn,RequestRows,dateto,timeto,careprovider,UBRN,ExtPrescriptionNum,ExtraFieldText)
+	set link=$get(link),msgtype=$get(msgtype),uniqueid=$get(uniqueid),LogonUser=$get(LogonUser),querytype=$get(querytype),services=$get(services)
+	set date("QUERY-FROM")=$get(datefrom),time("QUERY-FROM")=$get(timefrom),locations=$get(locations),intRegMrn=$get(intRegMrn),RequestRows=$get(RequestRows)
+	set date("QUERY-TO")=dateto,time("QUERY-TO")=$get(timeto),careprovider=$get(careprovider),UBRN=$get(UBRN),ExtPrescriptionNum=$get(ExtPrescriptionNum)
+	set ExtraFieldText=$get(ExtraFieldText)
+	set trigger=""
+	
+	// remove error messages for job
+	if $data(^TMP("HL7-ERR-LINK",link,$job)) do
+	. kill ^TMP("HL7-ERR",$job),^TMP("HL7-ERR-LINK",link,$job)
+	
+	// check link status
+	if '$$Init^HL7Create quit
+	
+	if HL7("QUERY")'="Y" quit
+	
+	// extract segments required
+	kill SEG if '$$Segment^HL7Create(msgtype)
+	if $order(SEG(""))="" quit
+	set msgtype=$translate(msgtype,"_","^")
+	
+	// build segment information
+	do BuildSegment^HL7Create if fail kill ^TMP("HL7-OUT",$job) quit
+	
+	// setup TMP global to track uniqueid by $job
+	set ^TMP("HL7-OUT-QUERY",$job,"ID")=uniqueid
+	
+	// do not add to interface queue - instant connection on job by job basis to Ensemble/external system
+	if $data(queue) do Send^HL7SendQuery(msgtype)
+	
+	kill queue,^TMP("HL7-OUT",$job),^TMP("HL7-OUT-QUERY",$job)
+	quit
+
+
+

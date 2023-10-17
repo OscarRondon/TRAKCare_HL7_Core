@@ -1,0 +1,126 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7OutboundSRM^MAC^^^0
+HL7OutboundSRM // ML 17/02/2008 ; HL7 Interface - Outbound SRM message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutboundSRM.rtn#1 $
+	quit
+	
+	// create 'request booking of appointment'
+RequestBookAppt(USRNz,UBRNz,intRegMrn,payorz,planz,servicez,datez,timez,GroupNumz,locationz,careproviderz,ReasonId,ExtPrescriptionNumz)
+	new (USRNz,UBRNz,intRegMrn,payorz,planz,servicez,datez,timez,GroupNumz,locationz,careproviderz,ReasonId,ExtPrescriptionNumz,%session)
+	
+	set type="S01" do Check
+	
+	quit
+	
+	// create 'request cancellation of appointment'
+RequestCancelAppt(USRNz,UBRNz,intRegMrn,payorz,planz,servicez,datez,timez,GroupNumz,locationz,careproviderz,ReasonId)
+	new (USRNz,UBRNz,intRegMrn,payorz,planz,servicez,datez,timez,GroupNumz,locationz,careproviderz,ReasonId,%session)
+	
+	set type="S04" do Check
+	
+	quit
+	
+	// check if message should be sent
+Check set USRNz=$get(USRNz),UBRNz=$get(UBRNz),intRegMrn=$get(intRegMrn),payorz=$get(payorz),planz=$get(planz),servicez=$get(servicez),datez=$get(datez),timez=$get(timez),GroupNumz=$get(GroupNumz)
+	set locationz=$get(locationz),careproviderz=$get(careproviderz),ReasonId=$get(ReasonId),ExtPrescriptionNumz=$get(ExtPrescriptionNumz)
+.
+	if intRegMrn="" quit
+	
+	set msgtype="SRM_"_type
+	
+	// find correct interface to send on
+	set (found,link)="" for  set link=$order(^SSHL7(link)) quit:link=""  do  quit:found
+	. // check if appt request/cancel interface
+	. if '$data(^SSHL7(link,"MSG-TYPE",msgtype)) quit
+	. set found=1
+	
+	if 'found quit
+	
+	set LogonUser=$select($data(%session):$get(%session.Data("LOGON.USERID")),1:"")
+	
+	// loop thru and create msg for each USRN/UBRN combo
+	for cntz=1:1:$length(USRNz,"*") if $piece(USRNz,"*",cntz)'="" do
+	. set USRN=$piece(USRNz,"*",cntz),UBRN=$piece(UBRNz,"*",cntz),payor=$piece(payorz,"*",cntz),plan=$piece(planz,"*",cntz),service=$piece(servicez,"*",cntz),date=$piece(datez,"*",cntz),time=$piece(timez,"*",cntz)
+	. set GroupNum=$piece(GroupNumz,"*",cntz),location=$piece(locationz,"*",cntz),careprovider=$piece(careproviderz,"*",cntz),ExtPrescriptionNum=$piece(ExtPrescriptionNumz,"*",cntz)
+	. // message creation
+	. job Request($job,link,msgtype,LogonUser,USRN,UBRN,intRegMrn,payor,plan,service,date,time,GroupNum,location,careprovider,ReasonId,ExtPrescriptionNum,cntz)
+	
+	kill old,curr,array
+	quit
+	
+	// build segments and message
+Request(job,link,msgtype,LogonUser,USRN,UBRN,intRegMrn,payor,plan,service,date,time,GroupNum,location,careprovider,ReasonId,ExtPrescriptionNum,cntz)
+	set job=$get(job),link=$get(link),msgtype=$get(msgtype),LogonUser=$get(LogonUser),USRN=$get(USRN),UBRN=$get(UBRN),intRegMrn=$get(intRegMrn),payor=$get(payor),plan=$get(plan)
+	set service=$get(service),date("APPT")=$get(date),time("APPT")=$get(time),GroupNum=$get(GroupNum),location=$get(location),careprovider=$get(careprovider),ReasonId=$get(ReasonId)
+	set ExtPrescriptionNum=$get(ExtPrescriptionNum),cntz=$get(cntz)
+	set (ExtraFieldText,trigger)=""
+	
+	kill queue,keepresponse
+	
+	for jj=1:1:10 {
+		set ExtraFieldText=ExtraFieldText_$select(ExtraFieldText'="":"|",1:"")_$piece($get(^TMP("HL7-APPTREQUEST-EXTRA",job,"ExtraFieldText"_jj)),"*",cntz)
+	}
+	
+	// remove error messages for job
+	if $data(^TMP("HL7-ERR-LINK",link,$job)) do
+	. kill ^TMP("HL7-ERR",$job),^TMP("HL7-ERR-LINK",link,$job)
+.
+	// check link status
+	if '$$Init^HL7Create quit
+	
+	// extract segments required
+	kill SEG if '$$Segment^HL7Create(msgtype)
+	if $order(SEG(""))="" quit
+	set msgtype=$translate(msgtype,"_","^")
+.
+	// build segment information
+	do BuildSegment^HL7Create
+.
+	if fail kill ^TMP("HL7-OUT",$job) quit
+	
+	// do not add to interface queue - instant connection/send on job by job basis to Ensemble/external system
+	if $get(HL7("SEND-NOW"))="Y",$data(queue) do Send^HL7SendInstant(msgtype,"Y")
+	
+	// setup message response globals
+	set pass=$piece($get(keepresponse("PASSFAIL")),$char(1))
+	
+	if pass["Fail" {
+		// no response
+		if pass="Fail-1" set ^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"NO-RESP")=""
+		// booking request/cancel rejected
+		if pass="Fail-2" {
+			set ^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"REJ")=""
+			set ^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"REJ-DESC")=$piece($get(keepresponse("PASSFAIL")),$char(1),2)
+			merge ^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"REJ-MSG")=keepresponse("TRACE")
+			set ^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"EXT-PRESC-NUM")=ExtPrescriptionNum
+		}
+	}
+	if pass'["Fail" {
+		merge ^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"MSG")=keepresponse("TRACE")
+	}
+	
+	kill queue,keepresponse,^TMP("HL7-OUT",$job)
+	quit
+	
+	// check result
+Result(job,USRN,UBRN) new (job,USRN,UBRN) set job=$get(job),USRN=$get(USRN),UBRN=$get(UBRN)
+	
+	// no USRN/UBRN
+	if USRN=""!(UBRN="") quit 200
+	
+	// no response within timeout limits
+	if $data(^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"NO-RESP")) do  quit 100
+	. kill ^TMP("HL7-APPTREQUEST",job,USRN,UBRN)
+	
+	// rejection of message
+	if $data(^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"REJ")) do  quit 101
+	. kill ^TMP("HL7-APPTREQUEST",job,USRN,UBRN)
+	
+	// no response yet
+	if '$data(^TMP("HL7-APPTREQUEST",job,USRN,UBRN,"MSG")) quit 1
+	
+	quit 0
+
+
+

@@ -1,0 +1,261 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteARMCCreateZ^MAC^^^0
+HL7SiteARMCCreateZ // ML 21/12/2004 ; HL7 interface : create 'Z' transmission packets - Austin and Repatriation Medical Centre
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteARMCCreateZ.rtn#1 $
+	quit
+CheckZBA ;; build DATA array - ZBA : Admitting Medical Officer History
+ZBA() set intAdmNum=$get(intAdmNum),count="" kill DATA,Repeat
+	set seq=0 for  set seq=$order(^PAADM(intAdmNum,"TRANS",seq)) quit:seq=""  do  if count,repeat'="Y" quit
+	. set intAdmTrans=intAdmNum_"||"_seq
+	. kill AdmTransaction
+	. // extract transaction detail
+	. if $$AdmTransaction^HL7OutExtract2(intAdmTrans,.AdmTransaction) quit
+	. // check if doctor
+	. set drid=$get(AdmTransaction(7)) if drid="" quit
+	. // extract hospital national code
+	. set NationalCode=$$NationalCode($get(AdmTransaction(8)),"LOC")
+	. // extract code table detail
+	. do CodeTable^HL7OutExtract2A("PA_AdmTransaction")
+	. // ignore booked transactions
+	. if $piece($get(AdmTransaction(23)),"^")="B" quit
+	. // ignore rejected transactions
+	. if $piece($get(AdmTransaction(14)),"^")="J" quit
+	. // extract doctor details
+	. kill CareProv
+	. if $$CareProvider^HL7OutExtract10(drid,.CareProv) quit
+	. // extract code table detail
+	. do CodeTable^HL7OutExtract10("CT_CareProv")
+	. set speciality=$piece($get(AdmTransaction(8)),"^")
+	. kill datetime
+	. set date=$get(AdmTransaction(3)),time=$get(AdmTransaction(4))
+	. set datetime("START-TRANS")="" if date'="" set datetime("START-TRANS")=$$Date^HL7(date_","_time)
+	. set date=$get(AdmTransaction(5)),time=$get(AdmTransaction(6))
+	. set datetime("END-TRANS")="" if date'="" set datetime("END-TRANS")=$$Date^HL7(date_","_time)
+	. set ProvNumber=$get(CareProv(6)),given=$get(CareProv(72)),title=$piece($get(CareProv(74)),"^"),surname=$get(CareProv(75))
+	. set DoctorStr=datetime("START-TRANS")_"^"_datetime("END-TRANS")_"^"_ProvNumber_"^"_title_"^"_surname_"^"_given_"^"_speciality_"^"_NationalCode
+	. set count=count+1
+	. if count=1 do
+	. . set DATA("ZBA",1)=count,DATA("ZBA",2)=DoctorStr
+	. if count>1,repeat="Y" do
+	. . set Repeat("ZBA",count,1)=count,Repeat("ZBA",count,2)=DoctorStr
+	kill AdmTransaction,CareProv,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZBF ;; build DATA array - ZBF : Financial Class History
+ZBF() set intAdmNum=$get(intAdmNum),count="" kill DATA,Repeat
+	set seq=0 for  set seq=$order(^PAADM(intAdmNum,"INS",seq)) quit:seq=""  do  if count,repeat'="Y" quit
+	. set intAdmIns=intAdmNum_"||"_seq
+	. kill AdmInsurance
+	. // extract admission detail
+	. if $$AdmInsurance^HL7OutExtract2(intAdmIns,.AdmInsurance) quit
+	. // extract code table detail
+	. do CodeTable^HL7OutExtract2A("PA_AdmInsurance")
+	. kill date
+	. set date("INS-FROM")="" if $get(AdmInsurance(5))'="" set date("INS-FROM")=$$DateConv^HL7Common2(.reject,"IE",AdmInsurance(5),"B")
+	. set date("INS-TO")="" if $get(AdmInsurance(6))'="" set date("INS-TO")=$$DateConv^HL7Common2(.reject,"IE",AdmInsurance(6),"B")
+	. set InsType=$piece($get(AdmInsurance(3)),"^")
+	. set InsuranceStr=date("INS-FROM")_"^"_date("INS-TO")_"^"_InsType
+	. set count=count+1
+	. if count=1 do
+	. . set DATA("ZBF",1)=count,DATA("ZBF",2)=InsuranceStr
+	. if count>1,repeat="Y" do
+	. . set Repeat("ZBF",count,1)=count,Repeat("ZBF",count,2)=InsuranceStr
+	kill AdmInsurance,date
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZBL ;; build DATA array - ZBL : Leave History
+ZBL() set intAdmNum=$get(intAdmNum),count="" kill DATA,Repeat
+	set seq=0 for  set seq=$order(^PAADM(intAdmNum,"LEA",seq)) quit:seq=""  do  if count,repeat'="Y" quit
+	. set intLeave=intAdmNum_"||"_seq
+	. kill AdmLeave
+	. // extract leave detail
+	. if $$AdmLeave^HL7OutExtract2(intLeave,.AdmLeave) quit
+	. kill datetime
+	. set datetime("GOING-OUT")="" if $get(AdmLeave(4)) set datetime("GOING-OUT")=$$Date^HL7($get(AdmLeave(4))_","_$get(AdmLeave(5)))
+	. set datetime("ACTUAL-RETURN")="" if $get(AdmLeave(11))'="" set datetime("ACTUAL-RETURN")=$$Date^HL7($get(AdmLeave(11))_","_$get(AdmLeave(12)))
+	. set LeaveStr=$get(datetime("GOING-OUT"))_"^"_$get(datetime("ACTUAL-RETURN"))
+	. set count=count+1
+	. if count=1 do
+	. . set DATA("ZBL",1)=count,DATA("ZBL",2)=LeaveStr
+	. if count>1,repeat="Y" do
+	. . set Repeat("ZBL",count,1)=count,Repeat("ZBL",count,2)=LeaveStr
+	kill AdmLeave,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZBT ;; build DATA array - ZBT : Transfer History
+ZBT() set intAdmNum=$get(intAdmNum),count="" kill DATA,Repeat
+	set seq=0 for  set seq=$order(^PAADM(intAdmNum,"TRANS",seq)) quit:seq=""  do  if count,repeat'="Y" quit
+	. set intAdmTrans=intAdmNum_"||"_seq
+	. kill AdmTransaction
+	. // extract transaction detail
+	. if $$AdmTransaction^HL7OutExtract2(intAdmTrans,.AdmTransaction) quit
+	. // check if ward/bed
+	. if $get(AdmTransaction(10))="",$get(AdmTransaction(11))="" quit
+	. set room=$get(AdmTransaction(9)),roomtype="" if room'="" do
+	. . &SQL(SELECT ROOM_RoomType_DR -> ROOMT_Desc INTO :roomtype FROM PAC_Room WHERE ROOM_RowId = :room)
+	. set singleroom=$select(##class(%Collation).AlphaUp(roomtype)="SINGLE":"Y",1:"N")
+	. // extract hospital national code
+	. set NationalCode=$$NationalCode($get(AdmTransaction(10)),"WARD")
+	. // extract code table detail
+	. do CodeTable^HL7OutExtract2A("PA_AdmTransaction")
+	. // ignore booked transactions
+	. if $piece($get(AdmTransaction(23)),"^")="B" quit
+	. // ignore rejected transactions
+	. if $piece($get(AdmTransaction(14)),"^")="J" quit
+	. kill datetime
+	. set date=$get(AdmTransaction(3)),time=$get(AdmTransaction(4))
+	. set datetime("START-TRANS")="" if date'="" set datetime("START-TRANS")=$$Date^HL7(date_","_time)
+	. set date=$get(AdmTransaction(5)),time=$get(AdmTransaction(6))
+	. set datetime("END-TRANS")="" if date'="" set datetime("END-TRANS")=$$Date^HL7(date_","_time)
+	. set ward=$get(AdmTransaction(10)),bed=$get(AdmTransaction(11))
+	. set TransferStr=datetime("START-TRANS")_"^"_datetime("END-TRANS")_"^"_bed_"^"_ward_"^"_singleroom_"^"_NationalCode
+	. set count=count+1
+	. if count=1 do
+	. . set DATA("ZBT",1)=count,DATA("ZBT",2)=TransferStr
+	. if count>1,repeat="Y" do
+	. . set Repeat("ZBT",count,1)=count,Repeat("ZBT",count,2)=TransferStr
+	kill AdmTransaction,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZID ;; build DATA array - ZID : Other Patient Demographics
+ZID()	set intRegMrn=$get(intRegMrn) kill DATA
+	// extract patient detail
+	kill PatDetail,PatDetailx set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	if SQLCODE quit SQLCODE
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+	// extract patient number detail
+	kill number set SQLCODE=$$PatNum^HL7OutExtract1(intRegMrn,intAdmNum,.number)
+	// extract doctors
+	kill doctor
+	if $get(PatDetail(67))'="" do
+	. if PatDetail(67)=""""!(PatDetail(67)="""""") quit
+	. set drcode=$$Provider^HL7Common5(PatDetail(67),"","","","R","O")
+	. set doctor("FAMILY")=$$BuildDoctor^HL7Common5(drcode)
+	set interpreter=$get(PatDetail(168)),MediSuffix=$get(PatDetailx(105))
+	set comm=$get(PatDetail(73)),comment("REM")="" if $listlength(comm) do
+	. for i=1:1:$listlength(comm) set comment("REM")=$get(comment("REM"))_$select($length(comment("REM")):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12($list(comm,i),"O"),$char(13,10),HL7("LINEBK"))
+	set DATA("ZID",1)=$piece(MediSuffix,"^"),DATA("ZID",3)=$select(interpreter="Y":"Y",interpreter="N":"N",1:""),DATA("ZID",4)=comment("REM")
+	set DATA("ZID",5)=$get(doctor("FAMILY"))
+	kill PatDetail,PatDetailx
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZPH ;; build DATA array - ZPH : Billing
+ZPH() set intAdmNum=$get(intAdmNum) kill DATA
+	
+	kill date,PatDetail,AdmDetail,AdmInsurance,Accident
+	
+	// extract patient details
+	kill PatDetail if $$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx) quit 0
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+	
+	if msgtype'["A31",msgtype'["A28" do
+	. // extract admission detail
+	. kill AdmDetail if $$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail) quit
+	. // extract code table detail
+	. do CodeTable^HL7OutExtract2A("PA_Adm")
+	
+	. // admission insurance detail
+	. kill AdmInsurance
+	. if table="PAADMINSURANCE" set intAdmIns=$get(intNum)
+	. else  set intAdmIns=intAdmNum_"||"_$order(^PAADM(intAdmNum,"INS",""),-1)
+	. if $piece(intAdmIns,"||",2)'="" do
+	. . kill AdmInsurance if $$AdmInsurance^HL7OutExtract2(intAdmIns,.AdmInsurance) quit
+	. . do CodeTable^HL7OutExtract2A("PA_AdmInsurance")
+	
+	. set intTrafNum=$get(AdmDetail(28)),intMRAdm=$get(AdmDetail(152))
+	
+	. kill MRAdm if intMRAdm'="" do
+	. . if $$MRAdmDetail^HL7OutExtract4(intMRAdm,.MRAdm) quit
+	. . // extract code table detail
+	. . do CodeTable^HL7OutExtract4("MR_Adm")
+	
+	. kill Accident if intTrafNum'="" do
+	. . // extract accident detail
+	. . if $$TrafAccident^HL7OutExtract6(intTrafNum,.Accident)
+	
+	. set date("REFST")=""
+	. // extract earliest appt 'booked date'
+	. set resource="" for  set resource=$order(^RBAS("PAADM_DR",intAdmNum,resource)) quit:resource=""  do
+	. . set schedule="" for  set schedule=$order(^RBAS("PAADM_DR",intAdmNum,resource,schedule)) quit:schedule=""  do
+	. . . set schedseq="" for  set schedseq=$order(^RBAS("PAADM_DR",intAdmNum,resource,schedule,schedseq)) quit:schedseq=""  do
+	. . . . set rowid=resource_"||"_schedule,date=""
+	. . . . &SQL(SELECT AS_Date INTO :date FROM RB_ApptSchedule WHERE AS_RowId = :rowid)
+	. . . . if SQLCODE quit
+	. . . . if date("REFST")="" set date("REFST")=date quit
+	. . . . if date<date("REFST") set date("REFST")=date
+	
+	set PatientInsurer=$get(PatDetail(31)),PatientPlan=$get(PatDetailx(132))
+	
+	if $get(date("REFST"))'="" set date("REFST")=$$DateConv^HL7Common2(.reject,"IE",date("REFST"),"B")
+	set date("REFEXP")=$get(AdmDetail(137)) if $get(AdmDetail(137))'="""""",$get(AdmDetail(137))'="" set date("REFEXP")=$$DateConv^HL7Common2(.reject,"IE",AdmDetail(137),"B")
+	set date("REF-LETTER")=$get(AdmDetail(254)) if $get(AdmDetail(254))'="""""",$get(AdmDetail(254))'="" set date("REF-LETTER")=$$DateConv^HL7Common2(.reject,"IE",AdmDetail(254),"B")
+	set Related=$get(AdmDetail(276)),DaysCarriedFwd=$get(AdmDetail(342))
+	
+	set AdmissionInsurer=$get(AdmInsurance(3))
+	
+	set CareType=$get(MRAdm(63)),TransferSource=$get(MRAdm(100))
+	
+	set VehPolicyNum=$get(Accident(8))
+	
+	set DATA("ZPH",1)=VehPolicyNum,DATA("ZPH",2)=CareType,DATA("ZPH",3)=TransferSource,DATA("ZPH",4)=DaysCarriedFwd,DATA("ZPH",5)=$get(date("REFST"))
+	set DATA("ZPH",6)=date("REFEXP"),DATA("ZPH",7)=Related,DATA("ZPH",8)=PatientInsurer,DATA("ZPH",9)=PatientPlan,DATA("ZPH",10)=AdmissionInsurer
+	set DATA("ZPH",11)=date("REF-LETTER")
+	
+	kill PatDetail,PatDetailx,AdmDetail,AdmInsurance,MRAdm,Accident,date
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZPV ;; build DATA array - ZPV : Extended Patient Information (follows PV1/PV2)
+ZPV()	set intRegMrn=$get(intRegMrn),intAdmNum=$get(intAdmNum) kill DATA
+	kill PatDetail,PatDetailx,AdmDetail,MRAdm,DRGDetail
+	set version=""
+	// extract patient detail
+	kill PatDetail,PatDetailx if $$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	if intAdmNum'="" do
+	. // extract admission detail
+	. kill AdmDetail if $$AdmDetail^HL7OutExtract2(intAdmNum,.AdmDetail) quit
+	. set intMRAdm=AdmDetail(152) if intMRAdm="" quit
+	. // med record admission detail
+	. kill MRAdm if $$MRAdmDetail^HL7OutExtract4(intMRAdm,.MRAdm) quit
+	. set dischdate=$get(AdmDetail(22))
+	
+	. set intDRGNum=$get(MRAdm(46)) if intDRGNum="" quit
+	. // DRG detail
+	. kill DRGDetail if $$DRGDetail^HL7OutExtract4(intDRGNum,.DRGDetail) quit
+	
+	. if intDRGNum'="",dischdate'="" do
+	. . set date=dischdate
+	. . if '$data(^BLC("DRGTAR",0,"DRG",intDRGNum,date)) set date=$order(^BLC("DRGTAR",0,"DRG",intDRGNum,date),-1)
+	. . if date'="" do
+	. . . set tariff=0 for  set tariff=$order(^BLC("DRGTAR",0,"DRG",intDRGNum,date,tariff)) quit:tariff=""  do  if version'="" quit
+	. . . . set ver=$piece($get(^BLC("DRGTAR",tariff)),"^",18)
+	. . . . if ver'="" set version=$piece($get(^MRC("DRGVER",ver)),"^",2)
+	. // extract code table detail
+	. for mtable="MR_Adm","MRC_DRGCodes" do CodeTable^HL7OutExtract4(mtable)
+	set interpreter=$get(PatDetail(168)),FeedbackConsent=$select($get(PatDetail(179))="Y":"Y",1:"N")
+	set DRGType=$get(DRGDetail(4))
+	set gpconsent="" if $data(MRAdm) set gpconsent=$select($get(MRAdm(87))="Y":"Y",$get(MRAdm(87))="M":"M",1:"N")
+	set DATA("ZPV",1)=interpreter,DATA("ZPV",2)=gpconsent,DATA("ZPV",3)=$piece(DRGType,"^"),DATA("ZPV",4)=version
+	set DATA("ZPV",6)=FeedbackConsent
+	kill PatDetail,PatDetailx,AdmDetail,MRAdm,DRGDetail
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	// extract national code for hospital
+NationalCode(intRowId,type) new (intRowId,type) set intRowId=$get(intRowId),type=$get(type),NationalCode=""
+	// if hospital
+	if type="HOSP" do
+	. &SQL(SELECT HOSP_NationalCode INTO :NationalCode FROM CT_Hospital WHERE HOSP_RowId = :intRowId)
+	
+	// if location
+	if type="LOC" do
+	. &SQL(SELECT CTLOC_Hospital_DR -> HOSP_NationalCode INTO :NationalCode FROM CT_Loc WHERE CTLOC_RowId = :intRowId)
+	
+	// if ward
+	if type="WARD" do
+	. &SQL(SELECT WARD_LocationDR -> CTLOC_Hospital_DR -> HOSP_NationalCode INTO :NationalCode FROM PAC_Ward WHERE WARD_RowId = :intRowId)
+	quit NationalCode
+
+
+

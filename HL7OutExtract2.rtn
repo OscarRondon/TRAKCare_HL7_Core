@@ -1,0 +1,94 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract2^MAC^^^0
+HL7OutExtract2 // ML 13/05/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract2.rtn#1 $
+	quit
+	
+	// extract patient rowid
+AdmPatNum(intAdmNum) new (intAdmNum) set intAdmNum=$get(intAdmNum),intRegMrn=""
+	&SQL(SELECT PAADM_PAPMI_DR INTO :intRegMrn FROM PA_Adm WHERE PAADM_RowID = :intAdmNum)
+	quit intRegMrn
+	
+	// extract admission detail
+AdmDetail(intAdmNum,AdmDetail,AdmDetailx) new (intAdmNum,AdmDetail,AdmDetailx) set intAdmNum=$get(intAdmNum)
+	&SQL(SELECT * INTO :AdmDetail() FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+	if SQLCODE quit SQLCODE
+	&SQL(SELECT * INTO :AdmDetailx() FROM PA_Adm2 WHERE PAADM2_RowId = :intAdmNum)
+	quit 0
+	
+	// extract insurance detail
+AdmInsurance(intAdmIns,AdmInsurance) new (intAdmIns,AdmInsurance) set intAdmIns=$get(intAdmIns)
+	&SQL(SELECT * INTO :AdmInsurance() FROM PA_AdmInsurance WHERE INS_RowId = :intAdmIns)
+	quit SQLCODE
+	// extract insurance association detail
+InsAssociation(intInsAss,InsAssociation) new (intInsAss,InsAssociation) set intInsAss=$get(intInsAss)
+	&SQL(SELECT * INTO :InsAssociation() FROM ARC_InsurAssociation WHERE INSAS_RowId = :intInsAss)
+	quit SQLCODE
+	// extract admission transaction detail
+AdmTransaction(intNum,AdmTransaction) new (intNum,AdmTransaction) set intNum=$get(intNum)
+	&SQL(SELECT * INTO :AdmTransaction() FROM PA_AdmTransaction WHERE TRANS_RowId = :intNum)
+	quit SQLCODE
+	// extract admission leave of absence detail
+AdmLeave(intLeave,AdmLeave) new (intLeave,AdmLeave) set intLeave=$get(intLeave)
+	&SQL(SELECT * INTO :AdmLeave() FROM PA_AdmLeave WHERE ADML_RowId = :intLeave)
+	quit SQLCODE
+	// extract ward, room, bed detail
+WardRoomBed(ward,room,bed) set ward=$get(ward),room=$get(room),bed=$get(bed),(wardcode,roomcode,bedcode,hospcode,campuscode)=""
+	if ward'="" do
+	. &SQL(SELECT WARD_Code INTO :wardcode FROM PAC_Ward WHERE WARD_RowId = :ward)
+	if room'="" do
+	. &SQL(SELECT ROOM_Code INTO :roomcode FROM PAC_Room WHERE ROOM_RowId = :room)
+	if bed'="" do
+	. &SQL(SELECT BED_Code INTO :bedcode FROM PAC_Bed WHERE BED_RowId = :bed)
+	if ward'="" do
+	. &SQL(SELECT WARD_LocationDR -> CTLOC_Hospital_DR -> HOSP_Code, WARD_LocationDR -> CTLOC_SignifFacility_DR -> SIGNF_Code INTO :hospcode, :campuscode FROM PAC_Ward WHERE WARD_RowId = :ward)
+	
+	// convert escape characters
+	for var="hospcode","campuscode","wardcode","roomcode","bedcode" set @var=$$TextConversion^HL7Common12(@var,"O")
+	
+	quit
+	// extract room, bed type
+RoomBedType(intRoomBed,type) new (intRoomBed,type) set intRoomBed=$get(intRoomBed),type=$get(type)
+	set roombedtype=""
+	
+	// extract room type
+	if type="ROOM" do
+	. &SQL(SELECT ROOM_RoomType_DR -> ROOMT_Desc INTO :roombedtype FROM PAC_Room, PAC_RoomType WHERE ROOM_RowId = :intRoomBed)
+	
+	// extract bed type
+	if type="BED" do
+	. &SQL(SELECT BED_BedType_DR -> BEDTP_Code INTO :roombedtype FROM PAC_Bed WHERE BED_RowId = :intRoomBed)
+	
+	quit roombedtype
+	// extract admission dates and times
+AdmDates(intAdmNum,admdate,admtime,dischdate,dischtime,estdischdate,estdischtime,admdatetime,dischdatetime,estdischdatetime)
+	new (intAdmNum,admdate,admtime,dischdate,dischtime,estdischdate,estdischtime,admdatetime,dischdatetime,estdischdatetime)
+	set intAdmNum=$get(intAdmNum),admdate=$get(admdate),admtime=$get(admtime),dischdate=$get(dischdate),dischtime=$get(dischtime)
+	set estdischdate=$get(estdischdate),estdischtime=$get(estdischtime)
+	
+	if admdate'="" set admdatetime=$select(admdate="""""":"""""",1:$$Date^HL7(admdate_","_admtime))
+	if dischdate'="" set dischdatetime=$select(dischdate="""""":"""""",1:$$Date^HL7(dischdate_","_dischtime))
+	if estdischdate'="" set estdischdatetime=$select(estdischdate="""""":"""""",1:$$Date^HL7(estdischdate_","_estdischtime))
+	
+	quit 0
+	
+	// extract 'leave of absence' detail
+LeaveOfAbsence(intAdmNum,expLOAretdatetime) new (intAdmNum,expLOAretdatetime,old,curr) set intAdmNum=$get(intAdmNum)
+	set (seq,found,expLOAretdate,expLOArettime)=""
+	set seq=$order(^PAADM(intAdmNum,"LEA",""),-1) if seq=""!(seq=0) quit 0
+	if $data(old("PAADMLEAVE")),'$data(curr("PAADMLEAVE")) quit 0
+	if $data(curr("PAADMLEAVE")) set leave=$get(curr("PAADMLEAVE",1))
+	else  set leave=intAdmNum_"||"_seq
+	&SQL(SELECT ADML_ExpectedDateReturn, ADML_ExpectedTimeReturn INTO :expLOAretdate, :expLOArettime FROM PA_AdmLeave WHERE ADML_RowId = :leave)
+	
+	if expLOAretdate'="" set expLOAretdatetime=$$Date^HL7(expLOAretdate_","_expLOArettime)
+	
+	quit 0
+	// extract separation referral detail
+SepReferral(intSepRef,SepReferral) new (intSepRef,SepReferral) set intSepRef=$get(intSepRef)
+	&SQL(SELECT * INTO :SepReferral() FROM PA_AdmSepRef WHERE SEPREF_RowId = :intSepRef)
+	quit SQLCODE
+
+
+

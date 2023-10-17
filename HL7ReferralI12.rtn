@@ -1,0 +1,115 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7ReferralI12^MAC^^^0
+HL7ReferralI12	// ML 06/05/2008 ;  HL7 interface : referral
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7ReferralI12.rtn#1 $
+	quit
+	
+	// I12 - patient referral
+I12()
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	. if '$data(^TMP("HL7",$job,cnt1,"RF1")) set reject="Required segment RF1 not received in message",reject("Detail")="RF1^^^~"_100 quit
+	. kill doctor,date
+	. if $data(^TMP("HL7",$job,cnt1,"RF1")) do  quit:reject'=""
+	. . set status=$piece($get(^TMP("HL7",$job,cnt1,"RF1",1)),"^"),priority=$get(^TMP("HL7",$job,cnt1,"RF1",2)),WaitListType=$get(^TMP("HL7",$job,cnt1,"RF1",3)),source=$get(^TMP("HL7",$job,cnt1,"RF1",5))
+	. . set date("EFFECTIVE")=$extract($get(^TMP("HL7",$job,cnt1,"RF1",7)),1,8) if date("EFFECTIVE")'="" set date("EFFECTIVE")=$$DateConv^HL7Common2(.reject,"EI",date("EFFECTIVE"))
+	. . set date("REFER")=$extract($get(^TMP("HL7",$job,cnt1,"RF1",9)),1,8) if date("REFER")'="" set date("REFER")=$$DateConv^HL7Common2(.reject,"EI",date("REFER"))
+	. . set RefReason=$get(^TMP("HL7",$job,cnt1,"RF1",10))
+	. . if $translate(WaitListType,"^")="" set reject="Mandatory field RF1.3 'Referral Type' not received in RF1.3",reject("Detail")="RF1^3^^~"_100
+	. set segid="PRD" for  set segid=$order(^TMP("HL7",$job,cnt1,segid)) quit:segid=""  quit:segid'["PRD"  do
+	. . set drtype=$piece($get(^TMP("HL7",$job,cnt1,segid,1)),"^"),drtype=$select(drtype="PP":"GP",1:"REFER")
+	. . set doctor(drtype)=$get(^TMP("HL7",$job,cnt1,segid,7)),doctor(drtype_"-DET")=$get(^TMP("HL7",$job,cnt1,segid,2))_"~"
+	. . // extract clinic name
+	. . if $piece($get(^TMP("HL7",$job,cnt1,segid,4)),"^",9)'="" set doctor(drtype_"-DET")=doctor(drtype_"-DET")_$piece($get(^TMP("HL7",$job,cnt1,segid,4)),"^",9)
+	. . set doctor(drtype_"-ADDRESS")=$get(^TMP("HL7",$job,cnt1,segid,3))
+	. . // extract referring doctor contact detail
+	. . for i=1:1:$length($get(^TMP("HL7",$job,cnt1,segid,5)),"~") set phone=$piece($get(^TMP("HL7",$job,cnt1,segid,5)),"~",i) do
+	. . . if $piece(phone,"^")="",($piece(phone,"^",2)'="NET")!($piece(phone,"^")="""""") quit
+	. . . if $piece(phone,"^",2)="NET",$piece(phone,"^",3)="Internet" set doctor(drtype_"-EMAIL")=$piece(phone,"^",4) quit
+	. . . if $piece(phone,"^",2)="PRN",$piece(phone,"^",3)="PH" set doctor(drtype_"-PHONEH")=$piece(phone,"^") quit
+	. . . if $piece(phone,"^",2)="ORN",$piece(phone,"^",3)="CP" set doctor(drtype_"-PHONEM")=$piece(phone,"^")
+	. // extract referral numbers
+	. kill RefNumber for type="REF","GRP","CSINT","CSNUM" set RefNumber(type)="" if $data(RefNum(type)) do
+	. . set RefNumber(type)=$$ExtractNumber^HL7Common2("R",type)
+	. // extract patient number
+	. if EB("PATNUMBER")="" set reject="No patient number type defined against E-Booking" quit
+	. set PatNumber=$$ExtractNumber^HL7Common2("P",EB("PATNUMBER"))
+	
+	. // extract patient details
+	. set name=$get(^TMP("HL7",$job,cnt1,"PID",5)),dob=$get(^TMP("HL7",$job,cnt1,"PID",7)) if dob'="" set dob=$$DateConv^HL7Common2(.reject,"EI",dob)
+	. set sex=$get(^TMP("HL7",$job,cnt1,"PID",8)),address=$get(^TMP("HL7",$job,cnt1,"PID",11))
+	. // extract patient contact detail
+	. set (PhoneH,PhoneW,PhoneM,email)=""
+	. if HL7("VER")'="2.3.1",(HL7("VER")'="2.4"),(HL7("VER")'="2.5") do
+	. . set PhoneH=$piece($get(^TMP("HL7",$job,cnt1,"PID",13)),"^",1)
+	. . set email=$piece($get(^TMP("HL7",$job,cnt1,"PID",13)),"^",4) set:email="" email=$piece($get(^TMP("HL7",$job,cnt1,"PID",14)),"^",4)
+	. if HL7("VER")="2.3.1"!(HL7("VER")="2.4")!(HL7("VER")="2.5") do
+	. . for i=1:1:$length($get(^TMP("HL7",$job,cnt1,"PID",13)),"~") set phone=$piece($get(^TMP("HL7",$job,cnt1,"PID",13)),"~",i) do
+	. . . if $piece(phone,"^")="",($piece(phone,"^",2)'="NET")!($piece(phone,"^")="""""") quit
+	. . . if $piece(phone,"^",2)="NET",$piece(phone,"^",3)="Internet" set email=$piece(phone,"^",4) quit
+	. . . if $piece(phone,"^",2)="PRN",$piece(phone,"^",3)="PH" set PhoneH=$piece(phone,"^") quit
+	. . . if $piece(phone,"^",2)="ORN",$piece(phone,"^",3)="CP" set PhoneM=$piece(phone,"^")
+	. set PhoneW=$piece($get(^TMP("HL7",$job,cnt1,"PID",14)),"^")
+	. set language=$piece($get(^TMP("HL7",$job,cnt1,"PID",15)),"^",2)
+	. // check for diagnosis
+	. set Diagnosis=""
+	. set segid="DG1" for  set segid=$order(^TMP("HL7",$job,cnt1,segid)) quit:segid=""  quit:segid'["DG1"  do  if Diagnosis'="" quit
+	. . if $translate($get(^TMP("HL7",$job,cnt1,segid,3)),"^")="" quit
+	. . set Diagnosis=$get(^TMP("HL7",$job,cnt1,segid,3))
+	. set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do
+	. . if cnt2'?.N quit
+	. . // extract admission details
+	. . if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) do
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",42))
+	. . . set location=$piece(detail,"^",8,9),hospital=$piece(detail,"^",3,4)
+	. . // check for diagnosis with admission if no diagnosis found previously
+	. . if Diagnosis="" do
+	. . . set segid="DG1" for  set segid=$order(^TMP("HL7",$job,cnt1,cnt2,segid)) quit:segid=""  quit:segid'["DG1"  do  if Diagnosis'="" quit
+	. . . . if $translate($get(^TMP("HL7",$job,cnt1,cnt2,segid,3)),"^")="" quit
+	. . . . set Diagnosis=$get(^TMP("HL7",$job,cnt1,cnt2,segid,3))
+	. . // extract admission comments
+	. . if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1-NTE")) do
+	. . . set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,"PV1-NTE",3,i)) quit:i=""  do
+	. . . . set comments=$get(comments)_$listbuild($get(^TMP("HL7",$job,cnt1,cnt2,"PV1-NTE",3,i)))
+	. . set cnt3=0 for  set cnt3=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3)) quit:cnt3=""  do
+	. . . if cnt3'?.N quit
+	. . . // extract request item (free-text order item) - not mapped to Trakcare codes - just for display
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR")) do
+	. . . . set RequestItem=$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",4)),"^",2)
+	. . . // extract request comments
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR-NTE")) do
+	. . . . set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR-NTE",3,i)) quit:i=""  do
+	. . . . . set RequestReason=$get(RequestReason)_$listbuild($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR-NTE",3,i)))
+	. . // extract document details
+	. . set segid="ZFA" for  set segid=$order(^TMP("HL7",$job,cnt1,cnt2,segid)) quit:segid=""  quit:segid'["ZFA"  do
+	. . . set documents=$get(documents)_$listbuild($get(^TMP("HL7",$job,cnt1,cnt2,segid,2)))
+	. . // define global to place XML source
+	. . set SourceText=$name(^TMP("HL7-SRC",$job_"^"_$get(^TMP("HL7",$job,cnt1,"MSH",9)),"ZXL"))
+	. . set StyleSheet=""
+	. . // extract XML source
+	. . set segid="ZXL" for  set segid=$order(^TMP("HL7",$job,cnt1,cnt2,segid)) quit:segid=""  quit:segid'["ZXL"  do
+	. . . set line=$piece(segid,"-",2) quit:'line
+	. . . set @SourceText@(line)=$get(^TMP("HL7",$job,cnt1,cnt2,segid,2))
+	. . . if StyleSheet="",$translate($get(^TMP("HL7",$job,cnt1,cnt2,segid,3))," ")'="" set StyleSheet=$get(^TMP("HL7",$job,cnt1,cnt2,segid,3))
+	. . // convert any escaped characters for style sheet path
+	. . if StyleSheet'="" set StyleSheet=$$TextConversion^HL7Common12(StyleSheet,"I")
+	. // additional referral details
+	. set (PrefCareProvGender,SensoryImpair,WrittenCommFormat,InterpreterReq,OtherInfo)=""
+	. if $data(^TMP("HL7",$job,cnt1,"ZRF")) do
+	. . set PrefCareProvGender=$get(^TMP("HL7",$job,cnt1,"ZRF",3))
+	. . set SensoryImpair=$get(^TMP("HL7",$job,cnt1,"ZRF",4))
+	. . set WrittenCommFormat=$get(^TMP("HL7",$job,cnt1,"ZRF",5))
+	. . set InterpreterReq=$get(^TMP("HL7",$job,cnt1,"ZRF",6))
+	. . set othertext=$get(^TMP("HL7",$job,cnt1,"ZRF",7))
+	. . for i=1:1:$length(othertext,HL7("LINEBK")) set OtherInfo=$get(OtherInfo)_$listbuild($piece(othertext,HL7("LINEBK"),i))
+.
+	. set csRowId=$get(RefNumber("CSINT"))
+	. if ($get(RefNumber("CSNUM"))'="")||(csRowId'="") do
+	. . if csRowId="" set csRowId=$order(^PA("DISSUM",0,"RefID",$get(RefNumber("CSNUM")),csRowId))
+	. do ##class(web.RBReferral).CreateRefDesc(HL7("USER"),$get(priority),$get(PatNumber),$get(doctor("REFER")),$get(date("REFER")),$get(RefReason),$get(WaitListType),$get(source),$get(location),$get(hospital),$get(name),$get(dob),$get(address),$get(PhoneH),$get(sex),$get(documents),$get(comments),$get(SourceText),$get(RefNumber("REF")),$get(doctor("REFER-DET")),$get(EB("PATNUMBER")),$get(PhoneW),$get(PhoneM),$get(email),$get(doctor("REFER-PHONEH")),$get(doctor("REFER-PHONEM")),$get(doctor("REFER-ADDRESS")),$get(doctor("REFER-EMAIL")),$piece($get(Diagnosis),"^"),$piece($get(Diagnosis),"^",2),$get(RefNumber("GRP")),$get(StyleSheet),csRowId,$get(RefNumber("CSNUM")),$get(status),$get(RequestItem),$get(RequestReason),$get(date("EFFECTIVE")),$get(doctor("GP")),$get(doctor("GP-DET")),$get(doctor("GP-PHONEH")),$get(doctor("GP-PHONEM")),$get(doctor("GP-ADDRESS")),$get(doctor("GP-EMAIL")),PrefCareProvGender,SensoryImpair,WrittenCommFormat,InterpreterReq,OtherInfo,language)
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

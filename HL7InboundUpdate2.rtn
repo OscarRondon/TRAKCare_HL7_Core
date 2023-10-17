@@ -1,0 +1,792 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7InboundUpdate2^MAC^^^0
+HL7InboundUpdate2	// ML 04/04/2011 ;  HL7 interface : update records using api's
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundUpdate2.rtn#1 $
+	quit
+	// cancel admission
+CANCELADM
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdm.ChangeStatus||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdm.ChangeStatus||"_var)
+			if property="" kill PAADM(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		if PAADM(var)="" kill PAADM(var)
+		else  if PAADM(var)=""""!(PAADM(var)="""""") set PAADM(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// change admission status
+		if intAdmNum'="" {
+			kill params set params=##class(TC.api.PAAdm.ChangeStatus).%New()
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Open(token,intAdmNum)
+			if $piece(return,"^")=1 {
+				set var="" for  {
+					set var=$order(PAADM(var)) if var="" quit
+					set $property(params,var)=PAADM(var)
+				}
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+			}
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAAdm.ChangeStatus",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PAADM(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// cancel discharge
+CANCELDISCH
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.MRAdm.ReverseDischargeEdit||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.MRAdm.ReverseDischargeEdit||"_var)
+			if property="" kill PAADM(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		if PAADM(var)="" kill PAADM(var)
+		else  if PAADM(var)=""""!(PAADM(var)="""""") set PAADM(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// cancel discharge
+		if intMRAdm'="" {
+			kill params set params=##class(TC.api.MRAdm.ReverseDischargeEdit).%New()
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Open(token,intMRAdm)
+			if $piece(return,"^")=1 {
+				set var="" for  {
+					set var=$order(PAADM(var)) if var="" quit
+					set $property(params,var)=PAADM(var)
+				}
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+			}
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.MRAdm.ReverseDischargeEdit",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PAADM(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// cancel transfer
+CANCELTRANSFER
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(CANCEL(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdmTransaction.ChangeStatus||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdmTransaction.ChangeStatus||"_var)
+			if property="" kill CANCEL(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(CANCEL(var)) if var="" quit
+		if CANCEL(var)="" kill CANCEL(var)
+		else  if CANCEL(var)=""""!(CANCEL(var)="""""") set CANCEL(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// update transaction status
+		if intAdmTrans'="" {
+			kill params set params=##class(TC.api.PAAdmTransaction.ChangeStatus).%New()
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Open(token,intAdmTrans)
+			if $piece(return,"^")=1 {
+				set var="" for  {
+					set var=$order(CANCEL(var)) if var="" quit
+					set $property(params,var)=CANCEL(var)
+				}
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+			}
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAAdmTransaction.ChangeStatus",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill CANCEL(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// diagnosis information
+DIAGNOSIS
+	kill params,ErrorLog,msg
+	// remove invalid fields
+	set j="" for  {
+		set j=$order(DIAG(j)) if j="" quit
+		set var="" for  {
+			set var=$order(DIAG(j,var)) if var="" quit
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.MRDiagnos.Edit||"_var)
+			if property="" {
+				// check hidden fields
+				kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.MRDiagnos.Edit||"_var)
+				if property="" kill DIAG(j,var)
+			}
+		}
+	}
+	kill property
+	// remove existing diagnosis and rebuild
+	if $data(DIAG) {
+		kill ^MR(intMRAdm,"DIA")
+		// remove empty fields and check for active nulls
+		set j="" for  {
+			set j=$order(DIAG(j)) if j="" quit
+			set var="" for  {
+				set var=$order(DIAG(j,var)) if var="" quit
+				if DIAG(j,var)="" kill DIAG(j,var)
+				else  if DIAG(j,var)=""""!(DIAG(j,var)="""""") set DIAG(j,var)=""
+			}
+			set (success,return)=""
+			for  {
+				// succesful update
+				if success=1 quit
+				// unsuccessful update
+				if reject'="" quit
+				// insert new diagnosis
+				kill params set params=##class(TC.api.MRDiagnos.Edit).%New()
+				set params.PARREF=intMRAdm
+				set var="" for  {
+					set var=$order(DIAG(j,var)) if var="" quit
+					set $property(params,var)=DIAG(j,var)
+				}
+				set jHL7=j
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+				// successful update
+				if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+				// unsuccessful update
+				if 'success {
+					do apiReject^HL7Reject(.APIerror,"TC.api.MRDiagnos.Edit",$piece(return,"^",2))
+					// remove fields with invalid values
+					set var="" for  {
+						set var=$order(APIerror(var)) if var="" quit
+						kill DIAG(jHL7,var)
+					}
+				}
+				kill APIerror
+				set j=jHL7 kill params
+			}
+		}
+	}
+	kill params,ErrorLog,msg
+	quit
+	// admission discharge
+DISCHARGE
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdmDischarge.Edit||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdmDischarge.Edit||"_var)
+			if property="" kill PAADM(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		if PAADM(var)="" kill PAADM(var)
+		else  if PAADM(var)=""""!(PAADM(var)="""""") set PAADM(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// update emergency admission information
+		if intAdmNum'="" {
+			kill params set params=##class(TC.api.PAAdmDischarge.Edit).%New()
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Open(token,intAdmNum)
+			if $piece(return,"^")=1 {
+				set var="" for  {
+					set var=$order(PAADM(var)) if var="" quit
+					set $property(params,var)=PAADM(var)
+				}
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+			}
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAAdmDischarge.Edit",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PAADM(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// admission insurance information
+INSURANCE
+	kill params,ErrorLog,msg
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADMINS(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdmInsurance.Edit||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdmInsurance.Edit||"_var)
+			if property="" kill PAADMINS(var)
+		}
+	}
+	kill property
+	// remove existing admission insurance and rebuild
+	if $data(PAADMINS) {
+		kill ^PAADM(intAdmNum,"INS")
+		// remove empty fields and check for active nulls
+		set var="" for  {
+			set var=$order(PAADMINS(var)) if var="" quit
+			if PAADMINS(var)="" kill PAADMINS(var)
+			else  if PAADMINS(var)=""""!(PAADMINS(var)="""""") set PAADMINS(var)=""
+		}
+		set (success,return)=""
+		for  {
+			// succesful update
+			if success=1 quit
+			// unsuccessful update
+			if reject'="" quit
+			// insert new diagnosis
+			kill params set params=##class(TC.api.PAAdmInsurance.Edit).%New()
+			set params.PARREF=intAdmNum
+			set var="" for  {
+				set var=$order(PAADMINS(var)) if var="" quit
+				set $property(params,var)=PAADMINS(var)
+			}
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+			// successful update
+			if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+			// unsuccessful update
+			if 'success {
+				do apiReject^HL7Reject(.APIerror,"TC.api.PAAdmInsurance.Edit",$piece(return,"^",2))
+				// remove fields with invalid values
+				set var="" for  {
+					set var=$order(APIerror(var)) if var="" quit
+					kill PAADMINS(var)
+				}
+			}
+			kill APIerror
+		}
+	}
+	kill params,ErrorLog,msg
+	quit
+	// leave of absence
+LEAVE
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdmLeave.EditNew||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdmLeave.EditNew||"_var)
+			if property="" kill PAADM(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		if PAADM(var)="" kill PAADM(var)
+		else  if PAADM(var)=""""!(PAADM(var)="""""") set PAADM(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// update existing leave of absence
+		if intAdmLeave'="" {
+			kill params set params=##class(TC.api.PAAdmLeave.EditNew).%New()
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Open(token,intAdmLeave)
+			if $piece(return,"^")=1 {
+				set var="" for  {
+					set var=$order(PAADM(var)) if var="" quit
+					set $property(params,var)=PAADM(var)
+				}
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+			}
+		}
+		// add leave of absence information
+		if intAdmLeave="" {
+			kill params set params=##class(TC.api.PAAdmLeave.EditNew).%New()
+			set params.ADMLParRef=intAdmNum
+			set var="" for  {
+				set var=$order(PAADM(var)) if var="" quit
+				set $property(params,var)=PAADM(var)
+			}
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+			// rowid for admission
+			if $piece(return,"^")=1 set intAdmLeave=params.ID
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAAdmLeave.EditNew",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PAADM(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// move admission
+MOVEADM
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(MERGE(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAMergePatient.EditCopyAdmission||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAMergePatient.EditCopyAdmission||"_var)
+			if property="" kill MERGE(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(MERGE(var)) if var="" quit
+		if MERGE(var)="" kill MERGE(var)
+		else  if MERGE(var)=""""!(MERGE(var)="""""") set MERGE(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// move admission
+		kill params set params=##class(TC.api.PAMergePatient.EditCopyAdmission).%New()
+		set var="" for  {
+			set var=$order(MERGE(var)) if var="" quit
+			set $property(params,var)=MERGE(var)
+		}
+		if $data(params) {
+			set params.TOVERRIDE=1
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Save(token)
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAMergePatient.EditCopyAdmission",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill MERGE(var)
+			}
+			set return=1
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// admission information
+PAADM
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdm.Edit||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdm.Edit||"_var)
+			if property="" kill PAADM(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		if PAADM(var)="" kill PAADM(var)
+		else  if PAADM(var)=""""!(PAADM(var)="""""") set PAADM(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// update existing admission information
+		if intAdmNum'="" {
+			kill params set params=##class(TC.api.PAAdm.Edit).%New()
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Open(token,intAdmNum)
+			if $piece(return,"^")=1 {
+				set var="" for  {
+					set var=$order(PAADM(var)) if var="" quit
+					set $property(params,var)=PAADM(var)
+				}
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+			}
+		}
+		// add admission information
+		if intAdmNum="" {
+			kill params set params=##class(TC.api.PAAdm.Edit).%New()
+			set params.PatientID=intRegMrn
+			set var="" for  {
+				set var=$order(PAADM(var)) if var="" quit
+				set $property(params,var)=PAADM(var)
+			}
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+			// rowid for admission
+			if $piece(return,"^")=1 set intAdmNum=params.ID
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAAdm.Edit",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PAADM(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// emergency admission information
+PAADMEMR
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdm.EditEmergency||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdm.EditEmergency||"_var)
+			if property="" kill PAADM(var)
+		}
+	}
+	kill property
+	// set additional fields from PA_Person - name, sex etc
+	set var="" for  {
+		set var=$order(PERSON(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdm.EditEmergency||"_var)
+		if property'="",'$data(PAADM(var)) set PAADM(var)=PERSON(var)
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		if PAADM(var)="" kill PAADM(var)
+		else  if PAADM(var)=""""!(PAADM(var)="""""") set PAADM(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// update emergency admission information
+		if intAdmNum'="" {
+			kill params set params=##class(TC.api.PAAdm.EditEmergency).%New()
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Open(token,intAdmNum)
+			if $piece(return,"^")=1 {
+				set var="" for  {
+					set var=$order(PAADM(var)) if var="" quit
+					set $property(params,var)=PAADM(var)
+				}
+				if $data(params) {
+					set params.TOVERRIDE=1
+					// request api token
+					set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+					set return=params.Save(token)
+				}
+			}
+		}
+		// add admission information
+		if intAdmNum="" {
+			kill params set params=##class(TC.api.PAAdm.EditEmergency).%New()
+			set params.PatientID=intRegMrn
+			set var="" for  {
+				set var=$order(PAADM(var)) if var="" quit
+				set $property(params,var)=PAADM(var)
+			}
+			if $data(params) {
+				set params.TOVERRIDE=1
+				// request api token
+				set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+				set return=params.Save(token)
+			}
+			// rowid for admission
+			if $piece(return,"^")=1 set intAdmNum=params.ID
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAAdm.EditEmergency",$piece(return,"^",2))
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PAADM(var)
+			}
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+TRANSFER
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdmTransaction.EditNew||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdmTransaction.EditNew||"_var)
+			if property="" kill PAADM(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		if PAADM(var)="" kill PAADM(var)
+		else  if PAADM(var)=""""!(PAADM(var)="""""") set PAADM(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// transfer admission
+		kill params set params=##class(TC.api.PAAdmTransaction.EditNew).%New()
+		set var="" for  {
+			set var=$order(PAADM(var)) if var="" quit
+			set $property(params,var)=PAADM(var)
+		}
+		if $data(params) {
+			set params.TOVERRIDE=1
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set FirstTrans=$$GetNextPrevTransactionNew^CPAAdmTransaction($get(PAADM("EpisodeID")),"","A","M","",1)
+			if ($get(PAADM("TRANSStartDate"))<$piece(FirstTrans,"^",2))||(($get(PAADM("TRANSStartDate"))=$piece(FirstTrans,"^",2))&&($get(PAADM("TRANSStartTime"))<($piece(FirstTrans,"^",3)\60*60))) {
+				set params.ID=$piece(FirstTrans,"^")
+			}
+			set return=params.Save(token)
+			// rowid for transaction
+			if $piece(return,"^")=1 set intAdmTrans=params.ID
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			// force reject included - too many required fields to allow 2nd process
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAAdmTransaction.EditNew",$piece(return,"^",2),"Y")
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PAADM(var)
+			}
+			set return=1
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+	// emergency transaction information
+TRANSFEREMR
+	kill params,ErrorLog,msg
+	set (success,return,reject)=""
+	// remove invalid fields
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.PAAdmTransaction.Edit||"_var)
+		if property="" {
+			// check hidden fields
+			kill property set property=##class(%Dictionary.PropertyDefinition).%OpenId("TC.api.hidden.PAAdmTransaction.Edit||"_var)
+			if property="" kill PAADM(var)
+		}
+	}
+	kill property
+	// remove empty fields and check for active nulls
+	set var="" for  {
+		set var=$order(PAADM(var)) if var="" quit
+		if PAADM(var)="" kill PAADM(var)
+		else  if PAADM(var)=""""!(PAADM(var)="""""") set PAADM(var)=""
+	}
+	for  {
+		kill params
+		// successful update
+		if success=1 quit
+		// unsuccessful update
+		if reject'="" quit
+		// transfer admission
+		kill params set params=##class(TC.api.PAAdmTransaction.Edit).%New()
+		set var="" for  {
+			set var=$order(PAADM(var)) if var="" quit
+			set $property(params,var)=PAADM(var)
+		}
+		if $data(params) {
+			set params.TOVERRIDE=1
+			// request api token
+			set token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+			set return=params.Save(token)
+			// rowid for transaction
+			if $piece(return,"^")=1 set intAdmTrans=params.ID
+		}
+		// successful update
+		if $piece(return,"^")=1!($piece(return,"^")="I") set success=1
+		// unsuccessful update
+		if 'success {
+			// force reject included - too many required fields to allow 2nd process
+			do apiReject^HL7Reject(.APIerror,"TC.api.PAAdmTransaction.Edit",$piece(return,"^",2),"Y")
+			// remove fields with invalid values
+			set var="" for  {
+				set var=$order(APIerror(var)) if var="" quit
+				kill PAADM(var)
+			}
+			set return=1
+		}
+		kill APIerror
+	}
+	kill params,ErrorLog,msg
+	quit
+
+
+

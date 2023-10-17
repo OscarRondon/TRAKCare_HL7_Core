@@ -1,0 +1,76 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7ResultImageDel^MAC^^^0
+HL7ResultImageDel // ML 02/03/2005 ; HL7 Interface - Image/text result deletion processing
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7ResultImageDel.rtn#1 $
+	quit
+ 
+	// file image/text results
+DelImage(intOrdNum) set intOrdNum=$get(intOrdNum)
+ 
+	// deleted result text
+	set DelText=""
+	&SQL(SELECT OECF_TextForDeletedTestItem INTO :DelText FROM CF_OEConfig WHERE OECF_RowId = '1')
+ 
+	// extract text result type
+	set TextType=$$TextType^HL7Common3(intOrdNum)
+ 
+	kill Result
+	// find sections to post into
+	set TextSection=$$TextSection^HL7Common3(TextType)
+	set Result(TextSection,$increment(Result(TextSection)))=""
+ 
+	// set deleted text
+	set Result(TextSection,$increment(Result(TextSection)))=DelText
+ 
+	// extract collection/authorised date and time
+	for i=7,22 set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",i)),date($select(i=7:"COL",1:"AUTH"))=$extract(datetime,1,8),time($select(i=7:"COL",1:"AUTH"))=$extract(datetime,9,12)
+	for datetype="COL","AUTH" do
+	.if $data(date(datetype)) set date(datetype)=$select(date(datetype)?8N:$$DateConv^HL7Common2(.reject,"EI",date(datetype)),1:"")
+	.if $data(time(datetype)) set time(datetype)=$select(time(datetype)?4N:$$TimeConv^HL7Common2("EI",$extract(time(datetype),1,2)_":"_$extract(time(datetype),3,4)),1:"")
+ 
+	// convert formatting codes
+	set x="" for  set x=$order(Result(TextSection,x)) quit:x=""  do
+	.set Result(TextSection,x)=$$TextFormatCode^HL7Common12($zname,Result(TextSection,x))
+ 
+	// result status 'C'orrected
+	set status="C"
+ 
+	// check if result exists
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2)
+	set TextId=$order(^OEORD(ord1,"I",ord2,"TR",0)),exists=1 if TextId'="" set TextId=$get(^OEORD(ord1,"I",ord2,"TR",TextId))
+	// check for result
+	if TextId="" quit
+	kill PLIST if $$SelImageResult^HL7ResultImage(TextId) do
+	.set exists="" for j=2:1:15 set PLIST(j)=""
+ 
+	// file of results
+	for j=2:1:12 set PLIST(j)=""
+	set PLIST(2)=ord1,PLIST(3)=$order(^OEC("RESST",0,"Code",status,"")),PLIST(5)=TextType,PLIST(6)=+$h,PLIST(7)=$piece($h,",",2)
+	// if result exists kill date/time created
+	if exists'="" kill PLIST(6),PLIST(7) set PLIST(18)=+$h,PLIST(19)=$piece($h,",",2)
+	set PLIST(12)=$piece(TestSegment,%1),PLIST(9)=date("AUTH"),PLIST(10)=time("AUTH"),PLIST(23)=^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",25)
+	set PLIST(11)=HL7("USER"),PLIST(4)=$piece($get(^SSU("SSUSR",HL7("USER"))),"^",14),PLIST(30)=""
+	// clear date, time and user read fields
+	set (PLIST(13),PLIST(14),PLIST(15))="",PLIST(25)=HL7("USER"),PLIST(26)=+$h,PLIST(27)=$piece($h,",",2)
+ 
+	// file text result
+	do FileImage^HL7ResultImage kill PLIST,Result
+ 
+	// overwrite result date/time executed
+	set datetime=$get(^TMP("HL7",$job,cnt1,cnt2,cnt3,"OBR",7)),date("EXE")=$extract(datetime,1,8),time("EXE")=$extract(datetime,9,12)
+	set date("EXE")=$select(date("EXE")?8N:$$DateConv^HL7Common2(.reject,"EI",date("EXE")),1:"")
+	set time("EXE")=$select(time("EXE")?4N:$$TimeConv^HL7Common2("EI",$extract(time("EXE"),1,2)_":"_$extract(time("EXE"),3,4)),1:"")
+	do OrderUpdate^HL7Common3(intOrdNum,"MF",date("EXE")_"^"_time("EXE"),"115^116")
+ 
+	set updhosp=$$Hospital^HL7Common9($piece($get(^TMP("HL7",$job,"MSH",3)),"^"),"R")
+	// add result user/date/time/hospital update detail
+	do OrderUpdate^HL7Common3(intOrdNum,"MF",+$h_"^"_$piece($h,",",2)_"^"_HL7("USER")_"^"_updhosp,"250^251^252^253")
+ 
+	// mark result as unread
+	do OrderUpdate^HL7Common3(intOrdNum,"UR",HL7("USER"))
+ 
+	quit
+
+
+

@@ -1,0 +1,242 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteMONQuery^MAC^^^0
+HL7SiteMONQuery // ab 21.11.05
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteMONQuery.rtn#1 $
+	quit
+         
+CheckQ01 ;; A19 - query
+QueryQ01(reject,event)
+	//s ^zab($zn,0)=$g(event)
+	set event=$get(event),(msgtype,reject)="",rowcnt=0
+	kill queue,^TMP("HL7-OUT",$job)
+ 
+	set searchtype=$get(^TMP("HL7",$job,"QRD",9)) quit:searchtype=""
+	set queryid=$get(^TMP("HL7",$job,"QRD",4)) quit:queryid=""
+ 
+Extract	// extract search criteria
+	if searchtype="APN" do
+	. set (govtcard,givenname,surname,regno,sex,dob,phone)=""
+	. set govtcard=$piece($get(^TMP("HL7",$job,"QRD",8,1)),"^",1)
+	. set givenname=$piece($get(^TMP("HL7",$job,"QRD",8,1)),"^",2)
+	. set surname=$piece($get(^TMP("HL7",$job,"QRD",8,1)),"^",3)
+	. set regno=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",1)
+	. set sex=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",2)
+	. if sex'="" do
+	. . set sex=##class(web.CTSex).GetIdFromCodeOrDescription(sex)
+	. . if sex set sex=$piece($get(^CT("SEX",+sex)),"^",2)
+	. set dob=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",3),dob=$$DateConv^HL7Common2(.reject,"EI",dob)
+	. if dob'="" set dob=##class(websys.Conversions).DateLogicalToHtml(dob)
+	. set phone=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",10)
+	. //s ^zab($zn,1,"APN")=queryid_"^"_govtcard_"^"_givenname_"^"_surname_"^"_regno_"^"_sex_"^"_dob_"^"_phone
+	
+	if searchtype="APP" do
+	. set (cpcode,cpgiven,cpsurname,cpdob)=""
+	. set cpcode=$piece($get(^TMP("HL7",$job,"QRD",8,1)),"^",1)
+	. set cpgiven=$piece($get(^TMP("HL7",$job,"QRD",8,1)),"^",2)
+	. set cpsurname=$piece($get(^TMP("HL7",$job,"QRD",8,1)),"^",3)
+	. set cpdob=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",2),cpdob=$$DateConv^HL7Common2(.reject,"EI",cpdob)
+	. //s ^zab($zn,1,"APP")=cpcode_"^"_cpgiven_"^"_cpsurname_"^"_cpdob
+	
+	if searchtype="OTH" do
+	. set (sercode,serdesc,rescode,loccode)="",broker=1
+	. set sercode=$get(^TMP("HL7",$job,"QRD",8,1))
+	. set serdesc=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",1)
+	. if sercode="" set sercode=serdesc,broker=0
+	. set rescode=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",2)
+	. set loccode=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",3)
+	. //s ^zab($zn,1,"OTH")=sercode_"^"_serdesc_"^"_rescode_"^"_loccode_"^"_broker
+	
+	if searchtype="OTH2" do
+	. set (rescode,resdesc,loccode,locdesc,locid)=""
+	. set rescode=$get(^TMP("HL7",$job,"QRD",8,1))
+	. set resdesc=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",1)
+	. set loccode=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",2)
+	. set locdesc=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",3)
+	. if loccode'="" set locid=##class(web.CTLoc).GetIdFromCodeOrDescription(loccode)
+	. if 'locid,locdesc'="" set locid=##class(web.CTLoc).GetIdFromCodeOrDescription(locdesc)
+	. if rescode="" set rescode=resdesc
+	. //s ^zab($zn,1,"OTH2")=rescode_"^"_loccode_"^"_resdesc_"^"_locdesc_"^"_locid
+	
+	if searchtype="SSA" do
+	. set sercode=$get(^TMP("HL7",$job,"QRD",8,1))
+	. set rescode=$piece($get(^TMP("HL7",$job,"QRF",1)),"~",1)
+	. set loccode=$piece($get(^TMP("HL7",$job,"QRF",1)),"~",2)
+	. set startdate=$get(^TMP("HL7",$job,"QRF",2)),startdate=$$DateConv^HL7Common2(.reject,"EI",startdate)
+	. set enddate=$get(^TMP("HL7",$job,"QRF",3)),enddate=$$DateConv^HL7Common2(.reject,"EI",enddate)
+	. set timeperiod=$get(^TMP("HL7",$job,"QRF",4))
+	. if timeperiod'="" set timeperiod=$extract(timeperiod,1,2)_":"_$extract(timeperiod,3,4),timeperiod=$$TimeConv^HL7Common2("EI",timeperiod)
+	. //s ^zab($zn,1,"SSA")=sercode_"^"_rescode_"^"_loccode_"^"_startdate_"^"_enddate_"^"_timeperiod
+ 
+	if searchtype="SAL" do
+	. set (govtcard,rescode,loccode,startdate,enddate,timeperiod,regno,sercode,surname)=""
+	. set govtcard=$piece($get(^TMP("HL7",$job,"QRD",8)),"^",1)
+	. set rescode=$piece($get(^TMP("HL7",$job,"QRF",1)),"~",1)
+	. set loccode=$piece($get(^TMP("HL7",$job,"QRF",1)),"~",2)
+	. set startdate=$get(^TMP("HL7",$job,"QRF",2)),startdate=$$DateConv^HL7Common2(.reject,"EI",startdate)
+	. set enddate=$get(^TMP("HL7",$job,"QRF",3)),enddate=$$DateConv^HL7Common2(.reject,"EI",enddate)
+	. set timeperiod=$get(^TMP("HL7",$job,"QRF",4))
+	. if timeperiod'="" set timeperiod=$extract(timeperiod,1,2)_":"_$extract(timeperiod,3,4),timeperiod=$$TimeConv^HL7Common2("EI",timeperiod)
+	. set regno=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",1)
+	. set sercode=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",2)
+	. set givenname=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",3)
+	. set surname=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",4)
+	. set sex=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",5)
+	. if sex'="" do
+	. . set sex=##class(web.CTSex).GetIdFromCodeOrDescription(sex)
+	. . if sex set sex=$piece($get(^CT("SEX",+sex)),"^",2)
+	. set dob=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",6),dob=$$DateConv^HL7Common2(.reject,"EI",dob)
+	. set apptid=$piece($get(^TMP("HL7",$job,"QRF",5)),"~",7)
+	. //
+	. //s ^zab($zn,1,"SAL")=govtcard_"^"_rescode_"^"_loccode_"^"_startdate_"^"_enddate_"^"_timeperiod_"^"_regno_"^"_sercode_"^"_givenname_"^"_surname_"^"_sex_"^"_dob_"^"_apptid
+ 
+Search
+	set max=$piece($get(^TMP("HL7",$job,"QRD",7)),"^",1)
+	if 'max set max=25
+	kill ^TMP("HL7-QUERY",queryid,"RESULTS")	// for new query
+ 
+ 	// APN - patient search
+	if searchtype="APN" do
+	. set err=$$open^CPAPerson(regno,surname,givenname,"","","",sex,govtcard,"","","","",dob,"",phone,"","")
+	. for  quit:err  quit:rowcnt=max  do
+	. . set err=$$fetch^CPAPerson(regno,surname,givenname,"","","",sex,govtcard,"","","","",dob,"",phone,"","")
+	. . if 'err,$listdata(Row) do
+	. . . set rowcnt=rowcnt+1
+	. . . set ^TMP("HL7-QUERY",queryid,"RESULTS",rowcnt)=$list(Row,1)
+	. set err=$$close^CPAPerson("")
+	
+	// APP - care prov search
+	if searchtype="APP" do
+	 . &SQL(DECLARE CareProv CURSOR FOR SELECT CTPCP_RowID FROM SQLUser.CT_CareProv WHERE ((%ALPHAUP CTPCP_Code = %ALPHAUP :cpcode) OR (:cpcode IS NULL)) AND ((%ALPHAUP CTPCP_Surname = %ALPHAUP :cpsurname) OR (:cpsurname IS NULL)) AND ((%ALPHAUP CTPCP_FirstName = %ALPHAUP :cpgiven) OR (:cpgiven IS NULL)) AND ((CTPCP_DOB = :cpdob) OR (:cpdob IS NULL)))
+	 . &SQL(OPEN CareProv)
+	 . for  quit:SQLCODE  quit:rowcnt=max  do
+	 . . set cpid=""
+	 . . &SQL(FETCH CareProv INTO :cpid)
+	 . . if 'SQLCODE do
+	 . . . set rowcnt=rowcnt+1
+	 . . . set ^TMP("HL7-QUERY",queryid,"RESULTS",rowcnt)=cpid
+	. &SQL(CLOSE CareProv)
+	
+	// OTH - service search
+	if searchtype="OTH" do
+	. set rsServ=##class(%Library.ResultSet).%New("web.RBAppointment:LookUpService")
+	. if rsServ do
+	. . do rsServ.Execute(loccode,"",sercode,"","","","","","","",rescode,broker,1)
+	. . for  quit:'rsServ.Next()  quit:rowcnt=max  do
+	. . . set rowcnt=rowcnt+1
+	. . . set ^TMP("HL7-QUERY",queryid,"RESULTS",rowcnt)=$piece(rsServ.GetData(4),$char(4),1)
+	. . do rsServ.%Close()
+ 
+	// OTH2 - resource search
+	if searchtype="OTH2" do
+	. set rsServ=##class(%Library.ResultSet).%New("web.RBResource:LookUpRes")
+	. if rsServ do
+	. . do rsServ.Execute(rescode,"","","","","","",locid)
+	. . for  quit:'rsServ.Next()  quit:rowcnt=max  do
+	. . . set rowcnt=rowcnt+1
+	. . . set ^TMP("HL7-QUERY",queryid,"RESULTS",rowcnt)=rsServ.GetData(3)
+	. . do rsServ.%Close()
+	
+	// SSA - appt slot search
+	// ** service required - need to use MVBRBAS if query by resource/location only is needed
+	// 
+	if searchtype="SSA" do
+	. set (serid,resid,locid,resdesc)=""
+	. // first find the service row ID
+	. if sercode'="" do
+	. .set rsServ=##class(%Library.ResultSet).%New("web.RBAppointment:LookUpService")
+	. . if rsServ do
+	. . . do rsServ.Execute(loccode,"",sercode,"","","","","","","",rescode,1,1)
+	. . . for  quit:'rsServ.Next()  do
+	. . . . set serid=$piece(rsServ.GetData(4),$char(4),1)
+	. . . do rsServ.%Close()
+	. //
+	. set locid=##class(web.CTLoc).GetIdFromCodeOrDescription(loccode)
+	. if rescode'="" &SQL(SELECT RES_RowId,RES_Desc INTO :resid, :resdesc FROM SQLUser.RB_Resource WHERE (RES_Code = :rescode) AND ((RES_CTLOC_DR->CTLOC_RowID = :locid) OR (:locid IS NULL)))
+	. set rsServ=##class(%Library.ResultSet).%New("web.RBAppointment:FindAppt")
+	. if rsServ do
+	. . do rsServ.Execute(serid,locid,resid,"","","",startdate,timeperiod,timeperiod,"","","PP^N^N^Y","","","")
+	. . for  quit:'rsServ.Next()  quit:rowcnt=max  do
+	. . . //s ^zab($zn,"slot",rsServ.GetData(1))=serid_"^"_locid_"^"_resid_"^"_enddate_"^"_rsServ.GetData(39)
+	. . . if enddate'="",rsServ.GetData(39)'="",rsServ.GetData(39)>enddate quit
+	. . . set rowcnt=rowcnt+1
+	. . . set ^TMP("HL7-QUERY",queryid,"RESULTS",rowcnt)=rsServ.GetData(1)
+	. . . do rsServ.%Close()
+ 
+	// SAL - patient appt search
+	if searchtype="SAL" do
+	.// first find patient with matching criteria
+	. set err=$$open^CPAPerson(regno,surname,givenname,"","","",sex,govtcard,"","","","",dob,"","","","")
+	. for  quit:err  quit:rowcnt=1  do
+	. . set err=$$fetch^CPAPerson(regno,surname,givenname,"","","",sex,govtcard,"","","","",dob,"","","","")
+	. . if 'err,$listdata(Row) do
+	. . . set rowcnt=rowcnt+1
+	. . . set PatientID=$list(Row,1)
+	. set err=$$close^CPAPerson("")
+	. //
+	. // get appt list by all criteria
+	. set rowcnt=0,err=$$open^MVBAPPT5("","","","","","","","","","","","","","",$get(PatientID))
+	. for  quit:err  quit:rowcnt=max  do
+	. . set err=$$fetch^MVBAPPT5("","","","","","","","","","","","","","",$get(PatientID))
+	. . if 'err,$data(PLIST) do
+	. . . set rowcnt=rowcnt+1
+	. . . set ^TMP("HL7-QUERY",queryid,"RESULTS",rowcnt)=$get(PatientID)_"^"_$get(PLIST(1))
+	. set err=$$close^MVBAPPT5()
+ 
+Build	// build reply and queue on outbound interface
+	set ^TMP("HL7-OUT",$job,"MSA",1)="AA"
+	set ^TMP("HL7-OUT",$job,"MSA",2)=$get(^TMP("HL7",$job,"MSH",9))
+	do Build^HL7Queue("MSA",12)
+	
+	merge ^TMP("HL7-OUT",$job,"QRD")=^TMP("HL7",$job,"QRD"),^TMP("HL7-OUT",$job,"QRF")=^TMP("HL7",$job,"QRF")
+	do Build^HL7Queue("QRD",$order(^TMP("HL7",$job,"QRD",""),-1))
+	do Build^HL7Queue("QRF",$order(^TMP("HL7",$job,"QRF",""),-1))
+	
+	set index=0 for  set index=$order(^TMP("HL7-QUERY",queryid,"RESULTS",index)) quit:index=""  do Reply
+	
+	//s msgtype="ADR_A19"
+	//i $$sendto^HL7Outbound(msgtype)
+	
+	//s msgtype="ADR^A19"
+	//i $d(queue) d
+	//. s idx="" f  s idx=$o(SendTo(idx)) q:idx=""  d Queue^HL7Queue($g(SendTo(idx)),msgtype,"","","")
+	//. k queue,^TMP("HL7-OUT",$j)
+	
+	//s ^zab($zn,2)=$d(queue)
+	//
+	if reject="",$data(queue) do  kill queue
+	.set controlid=$$ControlId^HL7AckNak
+	. // reverse sending and receiving applications found in interface info
+	.set mshmsg="MSH"_msh_%_$get(HL7("ACKSENDAPP"))_%_$get(HL7("ACKSENDFAC"))_%_$get(^TMP("HL7",$job,"MSH",2))_%_$get(^TMP("HL7",$job,"MSH",3))_%_$$Date^HL7_%_%_"ADR^A19"_%_$$ControlId^HL7AckNak_%_$get(HL7("PT"))_%_$get(HL7("VER"))_%_%_%_"AL"_%_"NE"_%_%_%_"EN"_%
+	.//s msamsg="MSA"_%_"AA"_%_^TMP("HL7",$j,"MSH",9)_%_%_%
+	.kill trace set trace=1
+	.write ESC("VT"),mshmsg,ESC("CR") set trace(trace)=mshmsg
+	.//w msamsg,ESC("CR"),ESC("FS"),ESC("CR"),! s trace=trace+1,trace(trace)=msamsg
+	.set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  do
+	..write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	.write ESC("FS"),ESC("CR"),!
+	.do trace^HL7Trace("M-->E",$h,"",tracerowid) kill trace
+ 
+	quit ""
+	
+Reply
+	//s intAdmNum="",intRegMrn=$g(^TMP("HL7-QUERY",queryid,"RESULTS",index))
+	set rowid=$get(^TMP("HL7-QUERY",queryid,"RESULTS",index))
+	
+	set LineRoutine="Check^HL7Site"_HL7("OUTCODE")_"Create4"
+	set routine=$select($length($text(@LineRoutine),";;")'=2:"HL7Create4",1:"HL7Site"_HL7("OUTCODE")_"Create4")
+	for label="DSP" xecute "s fail=$$"_label_"^"_routine if fail quit
+	
+	set ^TMP("HL7-OUT",$job,"PID",1)=index
+	do Build^HL7Queue("PID",$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","PID"),2))
+	
+	set ^TMP("HL7-OUT",$job,"PV1",1)=index
+	do Build^HL7Queue("PV1",$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","PV1"),2))
+	
+	set ^TMP("HL7-OUT",$job,"DSP",1)=index
+	do Build^HL7Queue("DSP",$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","DSP"),2))
+	
+	quit
+
+
+

@@ -1,0 +1,94 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Outbound^MAC^^^0
+HL7Outbound // ML 20/03/2003 ; HL7 Interface - Outbound message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Outbound.rtn#1 $
+	quit
+	
+Table(table,rowid,trigger) new (table,rowid,trigger,%d,%e,%old,%after,%before,%PDSDATA,insert,HL7Flag,HL7PreadminCreate,%session,%request)
+	set table=$get(table),rowid=$get(rowid),trigger=$get(trigger),insert=$get(insert),HL7Flag=$get(HL7Flag),HL7PreadminCreate=$get(HL7PreadminCreate),(adttype,order)=""
+	
+	set ScreenForm=$select($data(%request):$get(%request.Data("TFORM",1)),1:"")
+	
+	// set table triggering msg, rowid set in HL7OutboundADT
+	kill TRIGGER
+	set TRIGGER("TABLE")=table
+	set table=##class(%Collation).AlphaUp(table)
+	quit:table=""
+.
+	// supress outbound message
+	if HL7Flag="Y"!('$$outexist) quit
+	
+	// check if OMP/ORM message required
+	if table="OEORDITEM"!(table="OEORDQUESTION")!(table="OEORDSPECIMEN") do  quit
+	. // find ordered item
+	. set OrderedItem="" if $piece(rowid,"||",2)'="" set OrderedItem=$piece(^OEORD($piece(rowid,"||"),"I",$piece(rowid,"||",2),1),"^",2)
+	. // check if pharmacy order message
+	. if $$SubCatType^HL7Common11(OrderedItem)="PHA" do  quit
+	. . do check^HL7OutboundOMP(table,rowid,trigger)
+	. // other order message
+	. do check^HL7OutboundORM(table,rowid,trigger)
+	
+	// check if ORU message required
+	if table="OEORDRESULT"!(table="OETEXTRESULTSECTION") do  quit
+	. if '$data(^SSHL7i("OUT-TABLE",table,"LINK")) quit
+	. do check^HL7OutboundORU(table,rowid,trigger)
+	
+	// check if SRM/SIU message required
+	if ",RBAPPOINTMENT,RBNOTAVAIL,RBRESEFFDATESESSION,RBSERVICEOVERRIDE,RBRESEFFDATESESSSERVICES,RBRESEFFDATESESSNOTAVAIL,RBRESEFFDATE,"[(","_table_",") do  quit
+	. if '$data(^SSHL7i("OUT-TABLE",table,"LINK")) quit
+	. do check^HL7OutboundSCH(table,rowid,trigger)
+.
+	// allow RBOperationRoom to generate SIU msg and fall through to ADT processing
+	if ",RBOPERATINGROOM,RBOPERROOMSECPROC,"[(","_table_",") {
+		if $data(^SSHL7i("OUT-TABLE",table,"LINK")) {
+			do check^HL7OutboundSCH(table,rowid,trigger)
+		}
+	}
+.
+	// check if REF message required
+	if table="PAADM2DISCHARGESUMMARY"!(table="PADISCHARGESUMMARY")!(table="RBREFERRAL") do  quit
+	. if '$data(^SSHL7i("OUT-TABLE",table,"LINK")) quit
+	. do check^HL7OutboundREF(table,rowid,trigger)
+	
+	// check if ADT message required
+	if '$data(^SSHL7i("OUT-TABLE",table,"LINK")) quit
+	do check^HL7OutboundADT(table,trigger)
+	
+	quit
+	
+	// check if outbound interfaces exist
+outexist() new  set found=0,(dir,type)=""
+	set int=0 for  set int=$order(^SST("INT",int)) quit:int=""  do  quit:found
+	. &SQL(SELECT INT_DataDirection, INT_DataType INTO :dir, :type FROM SS_Interface WHERE INT_RowId = :int)
+	. // 'O'utbound and 'H'L7
+	. if dir="O",type="H" set found=1
+	quit found
+	
+	// extract link to send message to
+sendto(msgtype,table,intOrdNum) new (msgtype,table,intOrdNum,SendTo) set msgtype=$get(msgtype),table=$get(table),intOrdNum=$get(intOrdNum),cnt="" kill SendTo
+	
+	// extract links for message
+	if msgtype'="",$data(^SSHL7i("MSG-TYPE",msgtype)) do
+	. set xlink="" for  set xlink=$order(^SSHL7i("MSG-TYPE",msgtype,"LINK",xlink)) quit:xlink=""  set cnt=cnt+1,SendTo(cnt)=xlink
+	. // cross-reference table against message
+	. set cnt="" if table'="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do
+	. . set xlink=SendTo(cnt) if '$data(^SSHL7i("OUT-TABLE",table,"LINK",xlink)) kill SendTo(cnt)
+	
+	// extract link for ORM message
+	if intOrdNum'="" do
+	. set sendlink=""
+	. &SQL(SELECT CTLOC_HL7OrdersLink INTO :sendlink FROM CT_Loc, OE_OrdItem WHERE CTLOC_RowID = OEORI_RecDep_DR AND OEORI_RowId = :intOrdNum)
+	. quit:sendlink=""
+	. set cnt=cnt+1,SendTo(cnt)=sendlink
+	
+	set SendTo=$order(SendTo(""),-1)
+	quit 0
+	
+	// extract when to send order
+sendon(intOrdNum) new (intOrdNum) set intOrdNum=$get(intOrdNum),send=""
+	&SQL(SELECT CTLOC_SendHL7MessageOn INTO :send FROM CT_Loc, OE_OrdItem WHERE CTLOC_RowID = OEORI_RecDep_DR AND OEORI_RowId = :intOrdNum)
+	quit send
+
+
+

@@ -1,0 +1,269 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Data^MAC^^^0
+HL7Data // ML 25/03/2003 ; HL7 Interface - build DATA array
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Data.rtn#1 $
+	quit
+	
+	// break down segments into DATA array
+Data	set id=$piece(seg,"|",1),level=""
+	if ",MSH,MSA,EVN,QRD,QRF,QAK,DSC,"[(","_id_",") set level=0
+	if ",PID,PD1,MRG,NK1,AL1,IAM,ARQ,APR,MFI,RF1,PRD,"[(","_id_",") set level=1
+	if ",PV1,PV2,IN1,IN2,ORC,AIL,AIS,STF,PRA,OM1,OM4,OM7,LOC,MFE,"[(","_id_",") set level=2
+	if ",OBR,RXO,TXA,PR1,"[(","_id_",") set level=3
+	if ",OBX,RXD,RXR,RXC,"[(","_id_",") set level=4
+	if ",DG1,NTE,ROL,"[(","_id_",") set level="FLOAT"
+	if $extract(id)="Z" set level="CUSTOM"
+.
+	set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment",id),length=""
+	// add one to cover 1st field being segment id
+	if $length(detail) set length=$list(detail,2)+1
+	if 'length set length=$length(seg,"|")
+.
+	if level=0 do  set previd=id quit
+	. // MSH segment
+	. if id="MSH" do  quit
+	. . for i=3:1:length do Build(i,level)
+	. // other segments
+	. if id'="MSH" do  quit
+	. . for i=2:1:length do Build(i,level)
+	. . // split required repeat fields
+	. . if id="QRD" do  quit
+	. . . set i=8 if $data(DATA(id,i)) do Split(i,level)
+.
+	if level=1 do  set previd=id,plevel=1 quit
+	. // PID segment
+	. if id="PID" do
+	. . if $get(previd)="APR"!($get(previd)="ARQ")!($get(previd)="RF1")!($get(previd)["PRD") quit
+	. . set cnt1=$increment(cnt1) kill cnt2,cnt3,cnt4,cnt("NK1"),cnt("AL1"),cnt("IAM"),cnt("DG1")
+	. // ARQ, MFI, RF1, PRD segment
+	. if id="ARQ"!(id="MFI")!(id="RF1") do
+	. . set cnt1=$increment(cnt1) kill cnt2,cnt3,cnt4,cnt("NK1"),cnt("AL1"),cnt("IAM"),cnt("DG1")
+	. // PRD segment
+	. if id="PRD",$get(cnt1)="" set cnt1=$increment(cnt1)
+	. // NK1, AL1, IAM, PRD repeating segment
+	. if id="NK1"!(id="AL1")!(id="IAM")!(id="PRD") do
+	. . set id=id_"-"_$increment(cnt(id))
+	. // PD1, MRG segments
+	. if id="PD1"!(id="MRG") do  quit
+	. . if $get(cnt1)="" set cnt1=$increment(cnt1)
+	. . for i=2:1:length do Build(i,level)
+	. // common build
+	. for i=1:1:length do Build(i,level)
+.
+	if level=2 do  set previd=id,plevel=2 quit
+	. if $get(cnt1)="" set cnt1=$increment(cnt1)
+	. // PV1 segment
+	. if id="PV1" do  quit
+	. . set cnt2=$increment(cnt2) kill cnt("L2-ROL")
+	. . for i=1:1:length do Build(i,level)
+	. . // split repeat fields
+	. . for i=7,8,9,15,17,20,24,25,26,27 if $data(DATA(cnt1,cnt2,id,i)) do Split(i,level)
+	. . for i=7,8,9 do Strip(i,2)
+	. // PV2 segment
+	. if id="PV2" do  quit
+	. . if $get(cnt2)="" set cnt2=$increment(cnt2)
+	. . for i=2:1:length do Build(i,level)
+	. . // split repeat fields
+	. . for i=5,13,23 if $data(DATA(cnt1,cnt2,id,i)) do Split(i,level)
+	. // IN1 segment
+	. if id="IN1" do  quit
+	. . if $get(cnt2)="" set cnt2=$increment(cnt2)
+	. . for i=3:1:length do Build(i,level)
+	. // IN2 segment
+	. if id="IN2" do  quit
+	. . if $get(cnt2)="" set cnt=$increment(cnt2)
+	. . for i=2:1:length do Build(i,level)
+	. // ORC segment
+	. if id="ORC" do  quit
+	. . if $data(cnt3)!($data(cnt1)&'$data(cnt2)) set cnt2=$increment(cnt2)
+	. . for i=2:1:length do Build(i,level)
+	. . // split repeat fields
+	. . for i=12,19 if $data(DATA(cnt1,cnt2,id,i)) do Split(i,level)
+	. . // convert escape characters
+	. . for i=12,19 do Strip(i,level)
+	. // AIS segment
+	. if id="AIS" do
+	. . set cnt2=$increment(cnt2)
+	. // AIL segment
+	. if $get(previd)="AIL",id="AIL" do
+	. . set cnt2=$increment(cnt2)
+	. // MFE segment
+	. if id="MFE" set cnt2=$increment(cnt2)
+	. // common build
+	. for i=1:1:length do Build(i,level)
+.
+	if level=3 do  set previd=id,plevel=3 quit
+	. // OBR segment
+	. if id="OBR" do  quit
+	. . if ($get(previd)="PID"!($get(previd)="NTE")),'$data(cnt2) set cnt2=$increment(cnt2)
+	. . if cnt2'=1,'$data(DATA(cnt1,cnt2,1)) kill cnt3
+	. . if $increment(cnt3) for i=3:1:length do Build(i,level)
+	. . // split repeat fields
+	. . for i=10,16,17,28,31,33,34,35 if $data(DATA(cnt1,cnt2,cnt3,id,i)) do Split(i,level)
+	. . do Strip(13,level)
+	. . kill cnt4
+	. // RXO segment
+	. if id="RXO" do  quit
+	. . if $increment(cnt3) for i=1:1:length do Build(i,level)
+	. // TQ1 segment
+	. if id="TQ1" do  quit
+	. . for i=2:1:length do Build(i,level)
+	. // TXA segment
+	. if id="TXA" do  quit
+	. . if ($get(previd)="PID"!($get(previd)="NTE")),'$data(cnt2) set cnt2=$increment(cnt2)
+	. . if cnt2'=1,'$data(DATA(cnt1,cnt2,1)) kill cnt3
+	. . if $increment(cnt3) for i=3:1:length do Build(i,level)
+	. // PR1 segment
+	. if id="PR1" do  quit
+	. . kill cnt("L3-ROL")
+	. . if $increment(cnt3) for i=1:1:length do Build(i,level)
+.
+	if level=4 do  set previd=id,plevel=4 quit
+	. // OBX segment
+	. if id="OBX" do  quit
+	. . if $get(previd)'="OBR",$get(previd)'="OBX",'$data(cnt3) set cnt3=$increment(cnt3)
+	. . if $increment(cnt4) for i=3:1:length do
+	. . . // extract only first field in units
+	. . . if i=7 set $piece(seg,"|",7)=$piece($piece(seg,"|",7),"^")
+	. . . do Build(i,level)
+	. . // split repeat fields
+	. . for i=5,10,17 if $data(DATA(cnt1,cnt2,cnt3,cnt4,id,i)) do Split(i,level,$select(i=5:HL7("ALTFEED"),1:""))
+	. . // convert escape characters
+	. . for i=5,6,7,8 do Strip(i,level)
+	. // RXD segment
+	. if id="RXD" do  quit
+	. . if $increment(cnt4) for i=1:1:length do Build(i,level)
+	. . // split repeat fields
+	. . do Split(9,level,HL7("ALTFEED"))
+	. // RXR segment
+	. if id="RXR" do  quit
+	. . if $increment(cnt4) for i=1:1:length do Build(i,level)
+	. // RXC segment
+	. if id="RXC" do  quit
+	. . if $increment(cnt4) for i=2:1:length do Build(i,level)
+.
+	// FLOAT segments can follow different segments - as such they will be assigned to the preceding segment and level
+	if level="FLOAT" do  quit
+	. // DG1 segment
+	. if id="DG1" do  quit
+	. . if plevel=1 do
+	. . . set id=id_"-"_$increment(cnt("L1-DG1"))
+	. . . for i=2:1:length do Build(i,plevel)
+	. . if plevel=2 do
+	. . . set id=id_"-"_$increment(cnt("L2-DG1"))
+	. . . for i=2:1:length do Build(i,plevel)
+	. // NTE segment
+	. if id="NTE" do  quit
+	. . set (line,row)="",newline=$piece(seg,"|",4),id=previd_"-NTE"
+	. . if plevel=1 do
+	. . . if $data(DATA(cnt1,id)) do
+	. . . . set row="" for  set row=$order(DATA(cnt1,id,3,row)) quit:row=""  set line=line_$select($length(line):"~",1:"")_DATA(cnt1,id,3,row)
+	. . . . set $piece(seg,"|",4)=line_$select($length(line):"~",1:"")_newline
+	. . if plevel=2 do
+	. . . if $data(DATA(cnt1,cnt2,id)) do
+	. . . . set row="" for  set row=$order(DATA(cnt1,cnt2,id,3,row)) quit:row=""  set line=line_$select($length(line):"~",1:"")_DATA(cnt1,cnt2,id,3,row)
+	. . . . set $piece(seg,"|",4)=line_$select($length(line):"~",1:"")_newline
+	. . if plevel=3 do
+	. . . if $data(DATA(cnt1,cnt2,cnt3,id)) do
+	. . . . set row="" for  set row=$order(DATA(cnt1,cnt2,cnt3,id,3,row)) quit:row=""  set line=line_$select($length(line):"~",1:"")_DATA(cnt1,cnt2,cnt3,id,3,row)
+	. . . . set $piece(seg,"|",4)=line_$select($length(line):"~",1:"")_newline
+	. . if plevel=4 do
+	. . . if $data(DATA(cnt1,cnt2,cnt3,cnt4,id)) do
+	. . . . set row="" for  set row=$order(DATA(cnt1,cnt2,cnt3,cnt4,id,3,row)) quit:row=""  set line=line_$select($length(line):"~",1:"")_DATA(cnt1,cnt2,cnt3,cnt4,id,3,row)
+	. . . . set $piece(seg,"|",4)=line_$select($length(line):"~",1:"")_newline
+	. . for i=3:1:length do Build(i,plevel)
+	. . do Split(3,plevel,HL7("ALTFEED"))
+	. // ROL segment
+	. if id="ROL" do  set previd=$piece(id,"-") quit
+	. . if ($get(previd)="OBR")||($get(previd)="OBX") set plevel=2 do  quit
+	. . . set id="ROL-"_$increment(cnt("L2-ROL"))
+	. . . for i=1:1:length do Build(i,plevel)
+	. . . do Split(4,plevel)
+	. . . do Strip(4,plevel)
+	. . if $get(previd)="PR1" set plevel=3 do  quit
+	. . . set id="ROL-"_$increment(cnt("L3-ROL"))
+	. . . for i=1:1:length do Build(i,plevel)
+	. . . do Split(4,plevel)
+	. . . do Strip(4,plevel)
+	. . if $get(previd)="ROL" do  quit
+	. . . set id="ROL-"_$increment(cnt($select(plevel=2:"L2-ROL",plevel=3:"L3-ROL",plevel=4:"L4-ROL",1:"ROL")))
+	. . . for i=1:1:length do Build(i,plevel)
+	. . . do Split(4,plevel)
+	. . . do Strip(4,plevel)
+.
+	if level="CUSTOM" do  quit
+	. if HL7("INCODE")'="SWARH" do  quit
+	. . if id="ZID" do  set plevel=1
+	. . . for i=1:1:length do Build(i,1)
+	. . if id="ZRF" do  set plevel=1
+	. . . for i=1:1:length do Build(i,1)
+	. . if id="ZV1" do  set plevel=2
+	. . . for i=1:1:length do Build(i,2)
+	. . if id="ZMF" do  set plevel=2
+	. . . for i=1:1:length do Build(i,2)
+	. . if id="ZFA" do  set plevel=2
+	. . . set id=id_"-"_$increment(cnt(id))
+	. . . for i=1:1:length do Build(i,2)
+	. . if id="ZXL" do  set plevel=2
+	. . . set id=id_"-"_$increment(cnt(id))
+	. . . for i=1:1:length do Build(i,2)
+	. . if id="ZPR" do  set plevel=2
+	. . . for i=1:1:length do Build(i,2)
+	. if HL7("INCODE")="SWARH" do  quit
+	. . if id="ZID" do  quit
+	. . . for i=1:1:length do Build(i,1)
+	. . . // split repeat fields
+	. . . set i=4 do Split(i,1)
+	. . . // convert escape characters
+	. . . set i=4 do Strip(i,1)
+	. . if id="ZV1" do  quit
+	. . . set length=$length(seg,"|")
+	. . . for i=1:1:length do Build(i,2)
+.
+	quit
+	
+	// build array
+Build(piece,level) new Fields set Fields=$piece(seg,"|",piece),field=piece-1
+	if 'level set DATA(id,field)=Fields quit
+	if level=1 set DATA(cnt1,id,field)=Fields quit
+	if level=2 set DATA(cnt1,cnt2,id,field)=Fields quit
+	if level=3 set DATA(cnt1,cnt2,cnt3,id,field)=Fields quit
+	if level=4 set DATA(cnt1,cnt2,cnt3,cnt4,id,field)=Fields quit
+	set DATA(cnt1,cnt2,cnt3,cnt4,cnt5,id,field)=Fields
+	quit
+	
+	// split fields into sub-pieces
+Split(field,level,AltFeed) new Fields,x set AltFeed=$get(AltFeed)
+	if 'level set Fields=DATA(id,field) do Split2 merge DATA(id,field)=Fields quit
+	if level=1 set Fields=DATA(cnt1,id,field) do Split2 merge DATA(cnt1,id,field)=Fields quit
+	if level=2 set Fields=DATA(cnt1,cnt2,id,field) do Split2 merge DATA(cnt1,cnt2,id,field)=Fields quit
+	if level=3 set Fields=DATA(cnt1,cnt2,cnt3,id,field) do Split2 merge DATA(cnt1,cnt2,cnt3,id,field)=Fields quit
+	if level=4 set Fields=DATA(cnt1,cnt2,cnt3,cnt4,id,field) do Split2 merge DATA(cnt1,cnt2,cnt3,cnt4,id,field)=Fields quit
+	set Fields=DATA(cnt1,cnt2,cnt3,cnt4,cnt5,id,field) do Split2 merge DATA(cnt1,cnt2,cnt3,cnt4,cnt5,id,field)=Fields
+	quit
+Split2	if Fields="" quit
+	if AltFeed'="Y" do
+	. for x=1:1:$length(Fields,"~") set Fields(x)=$piece(Fields,"~",x)
+	if AltFeed="Y" do
+	. for x=1:1:$length(Fields,"\.br\") set Fields(x)=$piece(Fields,"\.br\",x)
+	set Fields=""
+	quit
+	
+	// remove escapes from ST, TX or FT HL7 field formats
+Strip(field,level) new Fields,esctype
+	if 'level merge Fields=DATA(field,id) do Strip2 merge DATA(field,id)=Fields quit
+	if level=1 merge Fields=DATA(cnt1,id,field) do Strip2 merge DATA(cnt1,id,field)=Fields quit
+	if level=2 merge Fields=DATA(cnt1,cnt2,id,field) do Strip2 merge DATA(cnt1,cnt2,id,field)=Fields quit
+	if level=3 merge Fields=DATA(cnt1,cnt2,cnt3,id,field) do Strip2 merge DATA(cnt1,cnt2,cnt3,id,field)=Fields quit
+	if level=4 merge Fields=DATA(cnt1,cnt2,cnt3,cnt4,id,field) do Strip2 merge DATA(cnt1,cnt2,cnt3,cnt4,id,field)=Fields quit
+	merge Fields=DATA(cnt1,cnt2,cnt3,cnt4,cnt5,id,field) do Strip2 merge DATA(cnt1,cnt2,cnt3,cnt4,cnt5,id,field)=Fields
+	quit
+Strip2	if Fields'="" do
+	. set Fields=$$TextConversion^HL7Common12(Fields,"I")
+	if $data(Fields)>1 do
+	. set x="" for  set x=$order(Fields(x)) quit:x=""  set Fields(x)=$$TextConversion^HL7Common12(Fields(x),"I")
+	quit
+
+
+

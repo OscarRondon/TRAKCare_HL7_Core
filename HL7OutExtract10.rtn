@@ -1,0 +1,104 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract10^MAC^^^0
+HL7OutExtract10 // ML 11/08/2004 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract10.rtn#1 $
+	quit
+ 
+	// extract care provider
+CareProvider(intCareProv,CareProv) new (intCareProv,CareProv) set intCareProv=$get(intCareProv)
+	&SQL(SELECT * INTO :CareProv() FROM CT_CareProv WHERE CTPCP_RowId = :intCareProv)
+	quit SQLCODE
+ 
+	// extract referring doctor
+RefDoctor(intRefDr,RefDoctor) new (intRefDr,RefDoctor) set intRefDr=$get(intRefDr)
+	&SQL(SELECT * INTO :RefDoctor() FROM PAC_RefDoctor WHERE REFD_RowId = :intRefDr)
+	quit SQLCODE
+ 
+	// extract clinic detail
+Clinic(intClinic,Clinic) new (intClinic,Clinic) set intClinic=$get(intClinic)
+	&SQL(SELECT * INTO :Clinic() FROM PAC_Clinic WHERE CLN_RowId = :intClinic)
+	quit SQLCODE
+ 
+	// extract ref doctor clinic detail
+RefClinic(intClinic,Clinic) new (intClinic,Clinic) set intClinic=$get(intClinic)
+	&SQL(SELECT * INTO :Clinic() FROM PAC_RefDoctorClinic WHERE CLN_RowId = :intClinic)
+	quit SQLCODE
+ 
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable) set (code,desc,other)=""
+	if mtable="CT_CareProv" do
+	.for i=7,13,14,15,16,45,55,74 if $get(CareProv(i))'="" do  set CareProv(i)=$select($get(CareProv(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=CareProv(i) quit:value=""""""
+	..if i=7 do
+	... &SQL(SELECT CTCPT_Code, CTCPT_Desc INTO :code, :desc FROM CT_CarPrvTp WHERE CTCPT_RowId = :value)
+	..if i=13 do
+	... &SQL(SELECT CTCIT_Code, CTCIT_Desc INTO :code, :desc FROM CT_City WHERE CTCIT_RowId = :value)
+	..if i=14 do
+	... &SQL(SELECT PROV_Code INTO :code FROM CT_Province WHERE PROV_RowId = :value)
+	..if i=15 do
+	... &SQL(SELECT CTZIP_Code INTO :code FROM CT_Zip WHERE CTZIP_RowId = :value)
+	..if i=16 do
+	... &SQL(SELECT CTSPC_Code, CTSPC_Desc INTO :code, :desc FROM CT_Spec WHERE CTSPC_RowId = :value)
+	..if i=45 do
+	... &SQL(SELECT CPG_Code, CPG_Desc INTO :code, :desc FROM CT_CareProvGroup WHERE CPG_RowId = :value)
+	..if i=55 do
+	...set code=CareProv(i),desc=##class(websys.StandardTypeItem).GetDescription("ContactFirstOn",CareProv(i))
+	..if i=74 do
+	... &SQL(SELECT TTL_Code INTO :code FROM CT_Title WHERE TTL_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(CareProv(""),-1) if $data(CareProv(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",7,10,13,14,15,16,45,55,74,"[(","_i_",") quit
+	..set CareProv(i)=$$TextConversion^HL7Common12(CareProv(i),"O")
+	if mtable="PAC_RefDoctor" do
+	.for i=7,8,9,46,53 if $get(RefDoctor(i))'="" do  set RefDoctor(i)=$select($get(RefDoctor(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=RefDoctor(i) quit:value=""""""
+	..if i=7 do
+	... &SQL(SELECT CTZIP_Code INTO :code FROM CT_Zip WHERE CTZIP_RowId = :value)
+	..if i=8 do
+	... &SQL(SELECT CTCIT_Code, CTCIT_Desc INTO :code, :desc FROM CT_City WHERE CTCIT_RowId = :value)
+	..if i=9 do
+	... &SQL(SELECT PROV_Code INTO :code FROM CT_Province WHERE PROV_RowId = :value)
+	..if i=46 do
+	... set code=RefDoctor(i),desc=##class(websys.StandardTypeItem).GetDescription("ContactMethod",RefDoctor(i))
+	..if i=53 do
+	... &SQL(SELECT TTL_Code INTO :code FROM CT_Title WHERE TTL_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(RefDoctor(""),-1) if $data(RefDoctor(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",6,7,8,9,46,53,"[(","_i_",") quit
+	..set RefDoctor(i)=$$TextConversion^HL7Common12(RefDoctor(i),"O")
+	if mtable="PAC_RefDoctorClinic" do
+	.for i=6,7 if $get(RefClinic(i))'="" do  set RefClinic(i)=$select($get(RefClinic(i))="""""":"""""",1:code_"^"_desc_"^"_other),(code,desc,other)=""
+	..set value=RefClinic(i) quit:value=""""""
+	..if i=6 do
+	... &SQL(SELECT CTCIT_Code, CTCIT_Desc, CTCIT_Province_DR -> PROV_Code INTO :code, :desc, :other FROM CT_City WHERE CTCIT_RowId = :value)
+	..if i=7 do
+	... &SQL(SELECT CTZIP_Code INTO :code FROM CT_Zip WHERE CTZIP_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(RefClinic(""),-1) if $data(RefClinic(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",6,7,"[(","_i_",") quit
+	..set RefClinic(i)=$$TextConversion^HL7Common12(RefClinic(i),"O")
+	if mtable="PAC_Clinic" do
+	.for i=6,7 if $get(Clinic(i))'="" do  set Clinic(i)=$select($get(Clinic(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=Clinic(i) quit:value=""""""
+	..if i=6 do
+	... &SQL(SELECT CTCIT_Code, CTCIT_Desc INTO :code, :desc FROM CT_City WHERE CTCIT_RowId = :value)
+	..if i=7 do
+	... &SQL(SELECT CTZIP_Code INTO :code FROM CT_Zip WHERE CTZIP_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(Clinic(""),-1) if $data(Clinic(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",6,7,"[(","_i_",") quit
+	..set Clinic(i)=$$TextConversion^HL7Common12(Clinic(i),"O")
+ 
+	quit
+
+
+

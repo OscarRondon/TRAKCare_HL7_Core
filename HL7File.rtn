@@ -1,0 +1,167 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7File^MAC^^^0
+HL7File // ML 23/5/02 ; HL7 interface - file transfer version
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7File.rtn#1 $
+	quit
+	// start link
+Start(link) if $get(link)="" quit
+	lock +^SSHL7(link,"LOCK"):5 else  do trace^HL7Trace("*****",$h,"Locked - Interface already running","","","INF") quit
+	kill ^SSHL7(link,"COUNT")
+	if '$$Init^HL7 quit
+	if INT("INDIR")="" do trace^HL7Trace("*****",$h,"Unable to start interface, no "_$select(INT("DIRECT")="I":"inbound",1:"outbound")_" path specified","","","INF") quit
+	if $$CheckStop^HL7(link) do trace^HL7Trace("*****",$h,"Flag Stopped","","","INF") do Shutdown quit
+	do trace^HL7Trace("*****",$h,"Started as job "_$job_".  Polling Interval - "_INT("DIRPOLL")_" seconds.","","","INF")
+	// record start date/time
+	do StartStop^HL7($h)
+	// unix or windows files
+	set filesep=$select(INT("UNIX")="Y":"/",1:"\")
+	set INT("INDIR")=$select($extract(INT("INDIR"),$length(INT("INDIR")))'=filesep:INT("INDIR")_filesep,1:INT("INDIR"))
+	if $length(INT("MOVEDIR")) set INT("MOVEDIR")=$select($extract(INT("MOVEDIR"),$length(INT("MOVEDIR")))'=filesep:INT("MOVEDIR")_filesep,1:INT("MOVEDIR"))
+	if '$length(INT("MOVEDIR")) set INT("MOVEDIR")=INT("INDIR")
+	if INT("FILE")="" set INT("FILE")="*.*"
+	if INT("FILEACT")="" set INT("FILEACT")="M"
+	// check for new files every 'poll' seconds
+	set connect="" for  quit:$$CheckStop^HL7(link)  do  h INT("DIRPOLL")
+	. if INT("DIRECT")="O" do Send^HL7SendFile quit
+	. do trace^HL7Trace("*****",$h,"Polling directory "_INT("INDIR")_" for new files","","","INF")
+	. do OpenDir
+	. if $order(^TMP($zname,$job,"FileName",""),-1)="" do trace^HL7Trace("*****",$h,"No new files located","","","INF") quit
+	. do Dir2
+	. if $data(^TMP($zname,$job,"Process")) set connect="" do
+	. . set file="" for  set file=$order(^TMP($zname,$job,"Process",file)) quit:file=""  do
+	. . . do trace^HL7Trace("*****",$h,"Processing file "_file,"","","INF") set filedate=$zdate(+$h,3)
+	. . . set patient="" for  set patient=$order(^TMP($zname,$job,"Process",file,"Patient",patient)) quit:patient=""  do
+	. . . . kill trace,tracerowid,DATA set (cnt1,cnt2,cnt3,cnt4)=0,xlevel=""
+	. . . . set count="" for  set count=$order(^TMP($zname,$job,"Process",file,"Patient",patient,count)) quit:count=""  do
+	. . . . . set seg=^(count),trace=$get(trace)+1,trace(trace)=seg
+	. . . . . kill segx for i=1:1:$length(seg,"\.br\") set segx(i)=$piece(seg,"\.br\",i)
+	. . . . . set seg="",i="" for  set i=$order(segx(i)) quit:i=""  set seg=seg_$select($length(seg):"~",1:"")_segx(i)
+	. . . . . do Data^HL7Data set previd=$piece(seg,%,1)
+	. . . . do trace^HL7Trace("E-->M",$h,"","","Y")
+	. . . . do Main
+	. . . kill trace,tracerowid
+	. . . do trace^HL7Trace("*****",$h,"File "_file_" has been processed","","","INF") kill ^TMP($zname,$job,"Process",file)
+	. . . // no rejections
+	. . . if $zf(-1,$select(INT("UNIX")="Y":"ls ",1:"dir ")_""""_INT("MOVEDIR")_filedate_filesep_"Reject"_filesep_file_"_Failed.txt"_"""") do  quit
+	. . . . do trace^HL7Trace("*****",$h,"No rejections found in file "_file_".  "_$select(INT("FILEACT")="M":"Moved to processed folder",1:"Deleting file"),"","","INF")
+	. . . . // delete file
+	. . . . if INT("FILEACT")="D" do  quit
+	. . . . . if $zf(-1,$select(INT("UNIX")="Y":"rm ",1:"del ")_""""_INT("INDIR")_file_"""")
+	. . . . // move file
+	. . . . if $zf(-1,$select(INT("UNIX")="Y":"ls ",1:"dir ")_""""_INT("MOVEDIR")_filedate_filesep_"Processed"_filesep_"""") do
+	. . . . . if INT("UNIX")="Y" do  quit
+	. . . . . . if $zf(-1,"mkdir "_""""_INT("MOVEDIR")_filedate_"""")
+	. . . . . . if $zf(-1,"mkdir "_""""_INT("MOVEDIR")_filedate_filesep_"Processed"_"""")
+	. . . . . if $zf(-1,"md "_""""_INT("MOVEDIR")_filedate_filesep_"Processed"_filesep_"""")
+	. . . . // wrap file paths in "..." to cater for paths with spaces included
+	. . . . if $zf(-1,$select(INT("UNIX")="Y":"mv ",1:"move ")_""""_INT("INDIR")_file_""""_" "_""""_INT("MOVEDIR")_filedate_filesep_"Processed"_filesep_"""")
+	. . . // rejections exist for file, move file to rejections
+	. . . do trace^HL7Trace("*****",$h,"Rejections found in file "_file_".  Check rejections folder "_INT("MOVEDIR")_filedate_filesep_"Reject","","","INF")
+	. . . if $zf(-1,$select(INT("UNIX")="Y":"ls ",1:"dir ")_""""_INT("MOVEDIR")_filedate_filesep_"Reject"_filesep_"""") do
+	. . . . if INT("UNIX")="Y" do  quit
+	. . . . . if $zf(-1,"mkdir "_""""_INT("MOVEDIR")_filedate_"""")
+	. . . . . if $zf(-1,"mkdir "_""""_INT("MOVEDIR")_filedate_filesep_"Reject"_"""")
+	. . . . if $zf(-1,"md "_""""_INT("MOVEDIR")_filedate_filesep_"Reject"_filesep_"""")
+	. . . if $zf(-1,$select(INT("UNIX")="Y":"mv ",1:"move ")_""""_INT("INDIR")_filesep_file_""""_" "_""""_INT("MOVEDIR")_filedate_filesep_"Reject"_"""")
+	set flagstop="" if $get(^SSHL7(link,"STOP"))=1 set flagstop=1
+	do trace^HL7Trace("*****",$h,$select(flagstop=1:"Flag Stopped",1:"Stopped"),"","","INF")
+	// shutdown interface
+Shutdown do StartStop^HL7("",$h,1)
+	// release all locks
+	lock
+	quit
+	// release all locks (and memory?) and start new process
+Restart do Shutdown
+	h 5
+	job Start^HL7File(link)
+	quit
+	// process messages
+Main
+	// reset counter for data coming in
+	set readcount=""
+	// count number of messages received
+	if $increment(^SSHL7(link,"COUNT"))
+	// merge DATA array in ^TMP("HL7",$j)
+	kill ^TMP("HL7",$job) merge ^TMP("HL7",$job)=DATA kill DATA
+	// check for version match
+	set version("MSH")=$get(^TMP("HL7",$job,"MSH",11))
+	if version("MSH")'=HL7("VER") do AckNak^HL7AckNak("AR","Version received "_version("MSH")_" does not match interface version "_HL7("VER"),"MSH^"_version("MSH")_"^12",203) quit
+	// check for message 'ok' (must have control ID)
+	if $get(^TMP("HL7",$job,"MSH",9))="" do AckNak^HL7AckNak("AR","Blank message control id received","MSH^^10",203) quit
+	// ignore 'ack'
+	if $get(^TMP("HL7",$job,"MSH",8))="ACK" quit
+	// if not production mode, no updates
+	if ^TMP("HL7",$job,"MSH",10)'="P" do AckNak^HL7AckNak("AR","Message processing type received is not 'P'roduction","MSH^^10",203) quit
+	// extract event type - ignore if acknowledgment
+	set event=$piece($get(^TMP("HL7",$job,"MSH",8)),"^",1,2)
+	if event="" do AckNak^HL7AckNak("AR","No event type received in MSH segment","MSH^"_version("MSH")_"^9",203) quit
+	set ok=""
+	// currently only processing ADT, ORM and ORU msgs via file input
+	if $piece(event,"^")="ADT"||($piece(event,"^")="ORM")||($piece(event,"^")="ORU") do
+	. set ok=$$MsgProcess^HL7Inbound(event)
+	// relock required of ^SSHL7 due to problems unlocking OEORD - TEMP ONLY
+	lock +^SSHL7(link,"LOCK"):5
+	quit
+	// open directory and check for files
+OpenDir kill ^TMP($zname,$job,"FileName")
+	if $zf(-1,$select(INT("UNIX")="Y":"ls "_INT("INDIR")_INT("FILE")_" > """_INT("INDIR")_"found.txt""",1:"dir "_INT("INDIR")_INT("FILE")_" /B > """_INT("INDIR")_"found.txt"""))
+	set file=INT("INDIR")_"found.txt",$ztrap="ErrDir1^"_$zname
+	open file:("RS"::$char(13,10)):30 else  quit
+	for  use file read x set xfile=x if $length(xfile) do
+	. if xfile'["."!(xfile["found.txt") quit
+	. if INT("UNIX")="Y" set xfile=$select(xfile[INT("INDIR"):$piece(xfile,INT("INDIR"),2),1:xfile)
+	. set ^TMP($zname,$job,"FileName",xfile)=""
+Dir1	close file kill ^TMP($zname,$job,"Process")
+	quit
+	// extract file content
+Dir2	set $ztrap="ErrDir2^"_$zname
+	set file="",file=$order(^TMP($zname,$job,"FileName",file)) if $length(file) do
+	. set dir=INT("INDIR")_file
+	. open dir:("RS"::$char(13,10)):1 else  quit
+	. do trace^HL7Trace("*****",$h,"Reading in file "_file,"","","INF")
+	. set patient="" use dir set line="" for  read line:10 do
+	. . if " FHS BHS "[(" "_$extract(line,1,3)_" ") set count=$order(^TMP($zname,$job,"Process",file,"Header",""),-1)+1,^TMP($zname,$job,"Process",file,"Header",count)=line quit
+	. . if " BTS FTS "[(" "_$extract(line,1,3)_" ") set count=$order(^TMP($zname,$job,"Process",file,"Footer",""),-1)+1,^TMP($zname,$job,"Process",file,"Footer",count)=line quit
+	. . if $extract(line,1,3)="MSH" set patient=patient+1
+	. . set count=$order(^TMP($zname,$job,"Process",file,"Patient",patient,""),-1)+1,^TMP($zname,$job,"Process",file,"Patient",patient,count)=line
+	quit
+	// error log
+ErrDir1 if $zerror'["ENDOFFILE" do BACK^%ETN quit
+	goto Dir1
+	// error log
+ErrDir2 if $zerror'["ENDOFFILE" do BACK^%ETN quit
+	close dir kill ^TMP($zname,$job,"FileName",file) do trace^HL7Trace("*****",$h,"Closing read of file "_file,"","","INF")
+	// check if all patients
+	set actualcnt=$order(^TMP($zname,$job,"Process",file,"Patient",""),-1)
+	// check counts only if header/footer segments received
+	if $data(^TMP($zname,$job,"Process",file,"Footer")) do
+	. set (expectedcnt,x)="" for  set x=$order(^TMP($zname,$job,"Process",file,"Footer",x)) quit:x=""  if ^(x)["BTS" set expectedcnt=+$piece(^(x),"|",2) quit
+	. if expectedcnt'=actualcnt do
+	. . // place file in rejection folder and remove from processing queue
+	. . set filedate=$zdate(+$h,3)
+	. . if $zf(-1,$select(INT("UNIX")="Y":"ls ",1:"dir ")_""""_INT("MOVEDIR")_filedate_filesep_"Reject"_filesep_"""") do
+	. . . if INT("UNIX")="Y" do  quit
+	. . . . if $zf(-1,"mkdir "_INT("MOVEDIR")_""""_filedate_"""")
+	. . . . if $zf(-1,"mkdir "_INT("MOVEDIR")_""""_filedate_filesep_"Reject"_"""")
+	. . . if $zf(-1,"md "_""""_INT("MOVEDIR")_filedate_filesep_"Reject"_filesep_"""")
+	. . if $zf(-1,$select(INT("UNIX")="Y":"mv ",1:"move ")_""""_dir_""""_" "_""""_INT("MOVEDIR")_filedate_filesep_"Reject"_filesep_"""")
+	. . // create reason for rejection
+	. . set dir=INT("MOVEDIR")_filedate_filesep_"Reject"_filesep_file_" Failed.txt"
+	. . set notexist=$zf(-1,$select(INT("UNIX")="Y":"ls ",1:"dir ")_""""_dir_"""")
+	. . // new or append
+	. . open dir:$select(notexist:"WNS",1:"WAS") use dir
+	. . write "File "_file_" was rejected due to the number of actual patients in the file",!
+	. . write "was not the same as the number indicated in the BTS record in the file",!
+	. . write "------------------------",!
+	. . close dir kill ^TMP($zname,$job,"Process",file)
+	. . do trace^HL7Trace("*****",$h,"File "_file_" was rejected due to incorrect number of patients","","","INF")
+	goto Dir2
+	// log errors and restart process
+Error	do trace^HL7Trace("*****",$h,$zerror,"","","ERR")
+	// will allow closure of directory required from 'write/read' errors in other routines
+Error1	do trace^HL7Trace("*****",$h,"Connection stopped","","","INF") h 15 set $ztrap="Error^"_$zname
+	goto Restart
+
+
+

@@ -1,0 +1,35 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Queue^MAC^^^0
+HL7Queue // ML 13/03/2003 ; HL7 interface - build transmission queue
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Queue.rtn#1 $
+	quit
+ 
+	// build packets for queue
+Build(segment,max) set packet=segment
+	for k=1:1:max set packet=packet_%_$get(^TMP("HL7-OUT",$job,segment,k))
+	set queue=$get(queue)+1,queue(queue)=packet
+	quit
+ 
+	// insert message into queue
+Queue(link,msgtype,ReceivingApp,ReceivingFac,SendingFac) new (link,msgtype,queue,ReceivingApp,ReceivingFac,SendingFac)
+	set link=$get(link),msgtype=$get(msgtype),ReceivingApp=$get(ReceivingApp),ReceivingFac=$get(ReceivingFac),SendingFac=$get(SendingFac)
+	set PLIST(0)=link,PLIST(4)=msgtype,PLIST(5)=ReceivingApp,PLIST(6)=ReceivingFac,PLIST(7)=SendingFac
+ 
+	set cnt=$increment(^SSHL7(link,"QUEUE")) lock +^SSHL7(link,"QUEUE",cnt) 
+ 
+	set ^SSHL7(link,"QUEUE",cnt)=msgtype_"\"_ReceivingApp_"\"_ReceivingFac_"\"_SendingFac
+	set queue=$order(queue(""),-1),^SSHL7(link,"QUEUE",cnt,"MSG",0)=queue
+	for i=1:1:queue set ^SSHL7(link,"QUEUE",cnt,"MSG",i)=$get(queue(i))
+ 
+	lock -^SSHL7(link,"QUEUE",cnt)
+	quit
+ 
+	// delete message from queue
+DelQueue(link,sequence) new (link,sequence) set link=$get(link),sequence=$get(sequence)
+	set rowid=link_"||"_sequence
+	&SQL(DELETE FROM SS_HL7Queue WHERE HL7MQ_RowId =:rowid)
+	quit
+
+
+

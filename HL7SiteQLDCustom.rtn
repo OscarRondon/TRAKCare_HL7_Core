@@ -1,0 +1,18 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteQLDCustom^MAC^^^0
+HL7SiteQLDCustom // ML 20/05/2003 ; HL7 interface - custom defined messages - QLD Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteQLDCustom.rtn#1 $
+	quit
+ 
+CheckZ ;; check for site defined messages
+Check(reject,event) new (event,link,INT,HL7,ESC,PatNum,tracerowid,version,msh,%,%1,%2,%3,%4)
+	set event=$get(event),reject=""
+ 
+	// custom defined query
+	if event=("ZHS"_%1_"Z04")!(event=("ZHS"_%1_"Z05")) do  quit
+	.do Query^HL7SiteQLDCustom1
+	quit
+
+
+

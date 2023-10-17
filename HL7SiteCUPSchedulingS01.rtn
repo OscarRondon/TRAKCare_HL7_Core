@@ -1,0 +1,138 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteCUPSchedulingS01^MAC^^^0
+HL7SiteCUPSchedulingS01 // ML 19/10/2005 ; HL7 interface : scheduling - CUP 2000
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteCUPSchedulingS01.rtn#1 $
+	quit
+CheckS01 ;; S01 - request appointment booking new
+S01()
+	set (UBRN,USRN,EBEInum,reject,PAYP)=""
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	.if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	.if '$data(^TMP("HL7",$job,cnt1,"ARQ")) set reject="No ARQ segment contained within message" quit
+	. // extract unique booking number and EBEI number
+ 	.set UBRN=$get(^TMP("HL7",$job,cnt1,"ARQ",1)),EBEInum=$get(^TMP("HL7",$job,cnt1,"ARQ",2)),xEBEInum=EBEInum
+ 	.if UBRN'="" set UBRN=$$TextConversion^HL7Common12(UBRN,"I")
+ 	.if EBEInum'="" set EBEInum=$$TextConversion^HL7Common12(EBEInum,"I")
+	.if EBEInum=""!(UBRN="") set reject=$select(EBEInum="":"EBEI number",1:"UBRN")_" is required and was not received" quit
+	. // check EBEI number exists
+	.if '$data(^RB("SCHID",0,"EBEI",EBEInum)) do  quit
+	..set reject="EBEI number "_xEBEInum_" received does not exist in TrakCare"
+ 	. // extract internal/external registration numbers
+	.set numbers=$$RegNum^HL7Common2(.reject,"S01")
+	.set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+ 	. // create patient if required
+ 	.if intRegMrn="" do  if reject'="" quit
+ 	..set adttype="A28"
+ 	..do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	..do PatSet^HL7PatEv1
+	..do PatInsert^HL7PatEv1A
+	..if intRegMrn="" quit
+	..set RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+ 	.if intRegMrn="" set reject="Unable to create patient received for UBRN "_UBRN_", EBEI "_xEBEInum quit
+	.set External=""
+ 	.set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do
+	.. // extract service and payor/plan
+	..if $data(^TMP("HL7",$job,cnt1,cnt2,"AIS")) do
+	...set External=$get(External)_$select($get(External)'="":",",1:"")_$piece($get(^TMP("HL7",$job,cnt1,cnt2,"AIS",3)),"^")
+	...set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"AIS",11))
+	...set (payor,plan)="" for i=1:1:$length(detail,"~") do
+	....if $piece($piece(detail,"~",i),"^",3)="PAYOR" set payor=$piece($piece(detail,"~",i),"^")
+	....if $piece($piece(detail,"~",i),"^",3)="PLAN" set plan=$piece($piece(detail,"~",i),"^")
+	...set PAYP=payor_"|"_plan_"^"
+	. // locate required USRN's for EBEI number
+	.kill requiredUSRN
+	.set intSchNum="" for  set intSchNum=$order(^RB("SCHID",0,"EBEI",EBEInum,intSchNum)) quit:intSchNum=""  do
+	.. // cross check EBEI
+	..if EBEInum'=$piece($get(^RB("SCHID",intSchNum)),"^",2) quit
+	..set USRN=$piece($get(^RB("SCHID",intSchNum)),"^") if USRN="" quit
+	.. // check if external code for service requested for booking
+	..set service=$piece(USRN,"-",4),intItmNum=$piece($get(^RBC("SER",service)),"^")
+	..set detail=""
+	..set seq=0 for  set seq=$order(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq),1,detail) quit:seq=""  do  if $data(requiredUSRN(USRN)) quit
+	...if (","_External_",")'[(","_$piece(detail,"^",4)_",") quit
+	...set requiredUSRN(USRN)=$piece(detail,"^",4)
+	. // check for group number
+ 	.set GroupNum=$get(^TMP("HL7",$job,cnt1,"ARQ",4))
+ 	.if GroupNum'="" set GroupNum=$$TextConversion^HL7Common12(GroupNum,"I")
+	. // supress any outbound 'SIU' messages
+	.set HL7Flag="Y"
+	. // book required appointments
+	.set USRN="" for  set USRN=$order(requiredUSRN(USRN)) quit:USRN=""  do  if ok=""!(reject'="") quit
+	..set err="",ok=##class(web.RBAppointment).BookAppt(intRegMrn,$get(HL7("USER")),USRN,UBRN,PAYP,.err,GroupNum,EBEInum)
+	..if ok="" do  quit
+	...set reject="Unable to complete appointment/s for EBEI "_xEBEInum_", patient "_RegMrn_", USRN "_USRN_", service "_requiredUSRN(USRN)_$select(err'="":". "_err,1:"")
+	...kill requiredUSRN(USRN)
+	. // cancel all successful appointments if one fails
+	.if reject'="" do
+	..set USRN="" for  set USRN=$order(requiredUSRN(USRN)) quit:USRN=""  do
+	...set ok=##class(web.RBAppointment).CancelAppt($get(HL7("USER")),USRN)
+	.kill HL7Flag
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	// build MSA segment
+	set DATA("MSA",1)=$select(reject="":"AA",1:"AR"),DATA("MSA",2)=$get(^TMP("HL7",$job,"MSH",9)),DATA("MSA",3)=reject
+	do Build("MSA")
+	if reject="" do
+	.set (USRN,rowcnt)="" for  set USRN=$order(requiredUSRN(USRN)) quit:USRN=""  do
+	..if $increment(rowcnt)
+	..set External=$get(requiredUSRN(USRN))
+	.. // extract partial schedule details
+	..set detail=$$PartialSched^HL7OutExtract11(USRN,UBRN)
+	..set ServiceItem=$listget(detail),comm=$listget(detail,2),price=$listget(detail,3),doc=$listget(detail,4),location=$listget(detail,5),date=$listget(detail,6),time=$listget(detail,7),ExternalCode=$listget(detail,8)
+	..set comment="" for i=1:1:$listlength(comm) set comment=comment_$select($length(comment):"~",1:"")_$listget(comm,i)
+	..set datetime("START")=$$DateTime^HL7Common2(date,time,"Y")
+	.. // service
+	..set detail=$get(^ARCIM($piece(ServiceItem,"||"),$piece(ServiceItem,"||",2),1)),code=$piece(detail,"^"),desc=$piece(detail,"^",2)
+	..set service=code_"^"_desc
+	.. // extract location detail
+	..kill locat
+	..set locat("CODE")=$listget(location),locat("DESC")=$listget(location,2),locat("PH")=$listget(location,3),locat("ADD")=$listget(location,4)
+	..set locat("CTY")=$listget(location,5),locat("PRV")=$select($listget(location,6)'="":$listget(location,6),1:$listget(location,7)),locat("ZIP")=$listget(location,8)
+	.. // extract care provider
+	..set doctor=""
+	..set drcode=$$Provider^HL7Common5(doc,"","","","C","O")
+	..for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	...set drcodetype=$piece(dr,$char(2),7)
+	...set doctor=doctor_$select($length(doctor):"~",1:"")_$piece(dr,$char(2),1)_"^"_$piece(dr,$char(2),2)_"^"_$piece(dr,$char(2),3)_"^^^^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	.. // build SCH segment once
+	..if rowcnt=1 do
+	...set DATA("SCH",1)=$$TextConversion^HL7Common12(UBRN,"O"),DATA("SCH",2)=$$TextConversion^HL7Common12(xEBEInum,"O"),DATA("SCH",17)=locat("PH")
+	...set DATA("SCH",18)=locat("ADD")_"^^"_locat("CTY")_"^"_locat("PRV")_"^"_locat("ZIP"),DATA("SCH",19)="^^^"_locat("CODE")_"^^^^^"_locat("DESC")
+	...do Build("SCH")
+	.. // build NTE segment
+	..if comment'="" do
+	...set DATA("NTE",3)=comment,DATA("NTE",4)="SERVMSG^^TRAKCARE"
+	...do Build("NTE")
+	.. // build data array - RGS
+	..set DATA("RGS",1)=1,DATA("RGS",2)="U"
+	..do Build("RGS")
+	.. // build AIS segment
+	..if External="",ExternalCode'="" set External=ExternalCode
+	..set DATA("AIS",1)=1,DATA("AIS",3)=$select($piece($get(External),"^")'="":External,1:service),DATA("AIS",4)=datetime("START"),DATA("AIS",12)=price
+	..do Build("AIS")
+	.. // build AIP segment
+	..set DATA("AIP",1)=1,DATA("AIP",2)="U",DATA("AIP",3)=doctor,DATA("AIP",4)="CP^Care Provider"
+	..do Build("AIP")
+	// send response
+	if $data(queue) do  kill queue
+	.set controlid=$$ControlId^HL7AckNak
+	. // reverse sending and receiving applications found in interface info
+	.set mshmsg="MSH|^~\&|"_$get(HL7("ACKSENDAPP"))_"|"_$get(HL7("ACKSENDFAC"))_"|"_$get(^TMP("HL7",$job,"MSH",2))_"|"_$get(^TMP("HL7",$job,"MSH",3))_"|"_$$Date^HL7_"||SRR^S01|"_$$ControlId^HL7AckNak_"|"_$get(HL7("PT"))_"|"_$get(HL7("VER"))_"|||AL|NE||||EN|"
+	.kill trace set trace=1
+	.write ESC("VT"),mshmsg,ESC("CR") set trace(trace)=mshmsg
+	.set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  do
+	..write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	.write ESC("FS"),ESC("CR"),!
+	.do trace^HL7Trace("M-->E",$h,"",tracerowid) kill trace
+	kill reject
+	quit ""
+	// compile segment
+Build(seg) set seg=$get(seg)
+	// compile queue
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	do Build^HL7Queue(seg,$list(##class(websys.StandardTypeItem).GetDescriptionPlus($select(seg="MSA":"HL7AcknowledgeSegment",1:"HL7Segment"),seg),2))
+	kill ^TMP("HL7-OUT",$job)
+	quit
+
+
+

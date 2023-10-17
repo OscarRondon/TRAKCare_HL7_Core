@@ -1,0 +1,35 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Result^MAC^^^0
+HL7Result	// ML 24/06/2005 ; HL7 interface : result processing
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Result.rtn#1 $
+	quit
+ 
+Result	new (event,link,INT,HL7,ESC,msh,%,%1,%2,%3,%4,port,directory,file,filedate,tracerowid,version,PatNum,OrderNum,Action,MaxNum,ActionMax,nakcount,CheckAppFac)
+	set SQLCODE=0,WriteRead=0,event=$get(event),file=$get(file),filedate=$get(filedate) kill OrdDetail,rejected
+ 
+	// extract patient detail
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  if SQLCODE quit
+	.if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	.set reject=""
+	. // extract internal/external registration numbers
+	.set numbers=$$RegNum^HL7Common2(.reject,"R01")
+	.set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+	.if reject'="" do Reject^HL7Reject(reject,"R"),AckNak^HL7AckNak("AR",reject,$piece(reject("Detail"),"~"),$piece(reject("Detail"),"~",2)) quit
+	. // check if merged
+	.set merge="",masternum=$$patto^CPAPerson(intRegMrn)
+	.if masternum'=intRegMrn do
+	..set merge="Y",intRegMrn=masternum,RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+ 
+	// relock required of ^SSHL7 due to problems unlocking OEORD
+	lock +^SSHL7(link,"LOCK"):5
+ 
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	if $data(rejected) do
+	.set (rejectx,testreject)="" for  set rejectx=$order(rejected(rejectx)) quit:rejectx=""  do
+	..set testreject=testreject_$select($length(testreject):", ",1:"")_$piece(rejectx,"^")_" ("_$piece(rejectx,"^",2)_")"
+	.set reject="Test code/s "_testreject_" not found in MedTrak",reject("Detail")="OBR^^4~103"
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2)) 
+
+
+

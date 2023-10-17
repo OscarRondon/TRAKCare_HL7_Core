@@ -1,0 +1,49 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Create4^MAC^^^0
+HL7Create4 // ML 21/04/05 ; HL7 interface : create transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Create4.rtn#1 $
+	quit
+ 
+CheckQRD ;; build data array - QRD
+QRD()	set uniqueid=$get(uniqueid),search=$get(search),querytype=$get(querytype) kill DATA
+ 
+	// extract number of records to return
+	set number=$select($get(RequestRows)'="":RequestRows,1:$piece($get(^SSHL7(link,"QUERY",1)),"^",2))
+ 
+	set DATA("QRD",1)=$$Date^HL7,DATA("QRD",2)="R",DATA("QRD",3)="I",DATA("QRD",4)=$get(uniqueid)
+	set DATA("QRD",7)=$get(number)_"^RD",DATA("QRD",8)=$get(search),DATA("QRD",9)=$get(querytype)
+ 
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckQRF ;; build data array - QRF
+QRF()	set intRegMrn=$get(intRegMrn),intAdmNum=$get(intAdmNum) kill DATA
+ 
+	set DATA("QRF",4)=$get(filter),DATA("QRF",5)=$get(filtertype)
+ 
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckDSC ;; build data array - DSC
+DSC()	kill DATA
+ 
+	if '$data(^SSHL7(link,"QUERY-DETAIL",uniqueid,"CONT")) quit 0
+	
+	set seg=$get(^SSHL7(link,"QUERY-DETAIL",uniqueid,"CONT"))
+	set seg=$piece(seg,"|",2,$length(seg,"|"))
+	for i=1:1:$length(seg,"|") set DATA("DSC",i)=$piece(seg,"|",i)
+ 
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+ 
+CheckDSP ;; build data array - DSP
+DSP()	set line=$get(line) kill DATA
+	
+	set DATA("DSP",3)=line
+ 
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

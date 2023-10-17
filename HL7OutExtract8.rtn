@@ -1,0 +1,122 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract8^MAC^^^0
+HL7OutExtract8 // ML 14/07/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract8.rtn#1 $
+	quit
+ 
+	// extract required external/internal numbers
+OrdAdmNum(intOrdNum,OrdNum,intAdmNum) new (intOrdNum,OrdNum,intAdmNum) set intOrdNum=$get(intOrdNum)
+	&SQL(SELECT OEORI_LabEpisodeNo, PAADM_RowID INTO :OrdNum, :intAdmNum FROM OE_Order, OE_OrdItem, PA_Adm
+	      WHERE OEORI_OEORD_ParRef = OEORD_RowId AND PAADM_RowID = OEORD_Adm_DR AND OEORI_RowId = :intOrdNum)
+	quit SQLCODE
+ 
+	// extract order detail
+OrdDetail(intOrdNum,OrdDetail) new (intOrdNum,OrdDetail) set intOrdNum=$get(intOrdNum)
+	&SQL(SELECT * INTO :OrdDetail() FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	quit SQLCODE
+ 
+	// extract item ordered detail
+ItemOrdered(intItmNum,ItemOrdered) new (intItmNum,ItemOrdered) set intItmNum=$get(intItmNum)
+	&SQL(SELECT * INTO :ItemOrdered() FROM ARC_ItmMast WHERE ARCIM_RowId = :intItmNum)
+	quit SQLCODE
+ 
+	// extract order specimen detail
+OrdSpecimen(intSpecNum,OrdSpecimen) new (intSpecNum,OrdSpecimen) set intSpecNum=$get(intSpecNum)
+	&SQL(SELECT * INTO :OrdSpecimen() FROM OE_OrdSpecimen WHERE SPEC_RowId = :intSpecNum)
+	quit SQLCODE
+ 
+	// extract question detail
+Question(intQuesNum,Question) new (intQuesNum,Question) set intQuesNum=$get(intQuesNum)
+	&SQL(SELECT * INTO :Question() FROM OE_OrdQuestion WHERE QA_RowId = :intQuesNum)
+	quit SQLCODE
+ 
+	// extract order doctors
+OrdDoctor(intOrdNum,doctor) new (intOrdNum,doctor,old,curr) set intOrdNum=$get(intOrdNum)
+	set orderdr=""
+	&SQL(SELECT OEORI_Doctor_DR INTO :orderdr FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if orderdr'="" do
+	.set (code,desc,tel,telext)="",type="ORDER" do  if code'="" set doctor(type)=code_"^"_desc_"^"_tel_"^"_telext
+	.. &SQL(SELECT CTPCP_Code, CTPCP_Desc, CTPCP_TelO, CTPCP_TelOExt INTO :code, :desc, :tel, :telext FROM CT_CareProv WHERE CTPCP_RowId = :orderdr)
+ 
+	quit 0
+ 
+	// extract order number based on type
+OrdNum(intOrdNum,ordertype) new (intOrdNum,ordertype) set intOrdNum=$get(intOrdNum),ordertype=$get(ordertype)
+	set OrdNum=""
+	if ordertype'="PHA" do
+	. &SQL(SELECT OEORI_LabEpisodeNo INTO :OrdNum FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if ordertype="PHA" do
+	. &SQL(SELECT OEORI_PrescNo INTO :OrdNum FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	quit OrdNum
+	// extract order dates and times
+OrdDates(intOrdNum,arrivedate,arrivetime,startdate,starttime,arrivedatetime,startdatetime)
+	new (intOrdNum,arrivedate,arrivetime,startdate,starttime,arrivedatetime,startdatetime)
+	set intOrdNum=$get(intOrdNum),arrivedate=$get(arrivedate),arrivetime=$get(arrivetime),startdate=$get(startdate),starttime=$get(starttime)
+	if arrivedate'="" set arrivedatetime=$select(arrivedate="""""":"""""",1:$$Date^HL7(arrivedate_","_arrivetime))
+	if startdate'="" set startdatetime=$select(startdate="""""":"""""",1:$$Date^HL7(startdate_","_starttime))
+ 
+	quit 0
+ 
+	// extract code table settings
+CodeTable(mtable) set (code,desc,type,other)=""
+ 
+	if mtable="OE_OrdItem" do
+	.for i=6,10,23,25,27,28,75,269 if $get(OrdDetail(i))'="" do  set OrdDetail(i)=$select($get(OrdDetail(i))="""""":"""""",1:code_"^"_desc_$select(i=27:"^"_other,1:"")),(code,desc,other)=""
+	..set value=OrdDetail(i) quit:value=""""""
+	..if i=6!(i=75) do
+	...set detail=##class(web.CTLoc).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	...set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	..if i=10 do
+	...set detail=##class(web.OECOrderStatus).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	...set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	..if i=23 do
+	...set detail=##class(web.OECPriority).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	...set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	..if i=25 do
+	...set detail=##class(web.PHCFreq).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	...set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	..if i=27 do
+	... &SQL(SELECT PHCIN_Code, PHCIN_Desc1, PHCIN_Desc2 INTO :code, :desc, :other FROM PHC_Instruc WHERE PHCIN_RowId = :value)
+	..if i=28 do
+	...set detail=##class(web.CTUOM).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	...set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	..if i=269 do
+	...set detail=##class(web.PHCAdministrationRoute).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	...set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(OrdDetail(""),-1) if $data(OrdDetail(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",6,10,23,25,27,28,53,75,267,269,"[(","_i_",") quit
+	..set OrdDetail(i)=$$TextConversion^HL7Common12(OrdDetail(i),"O")
+ 
+	if mtable="OE_OrdQuestion" do
+	.set i=3 if $get(Question(i))'="" do  set Question(i)=$select($get(Question(i))="""""":"""""",1:code_"^"_desc_"^"_other),(code,desc,other)=""
+	..set value=Question(i) quit:value=""""""
+	..if i=3 do
+	... &SQL(SELECT QUES_Code, QUES_Desc, QUES_ControlType INTO :code, :desc, :other FROM PAC_Question WHERE QUES_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(Question(""),-1) if $data(Question(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",3,4,"[(","_i_",") quit
+	..set Question(i)=$$TextConversion^HL7Common12(Question(i),"O")
+ 
+	if mtable="ARC_ItmMast" do
+	.for i=74 if $get(ItemOrdered(i))'="" do  set ItemOrdered(i)=$select($get(ItemOrdered(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=ItemOrdered(i) quit:value=""""""
+	..if i=74 do
+	...set detail=##class(web.ARCSurchargeCode).GetCodeDescriptionFromId(value) if '$listlength(detail) quit
+	...set code=$list(detail,3),desc=$list(detail) if code="" set (code,desc)=""
+ 	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(ItemOrdered(""),-1) if $data(ItemOrdered(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",74,"[(","_i_",") quit
+	..set ItemOrdered(i)=$$TextConversion^HL7Common12(ItemOrdered(i),"O")
+ 
+	quit
+
+
+

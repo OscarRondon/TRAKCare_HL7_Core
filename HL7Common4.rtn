@@ -1,0 +1,172 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Common4^MAC^^^0
+HL7Common4 // ML 28/07/2003 ; HL7 interface - common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common4.rtn#1 $
+	quit
+	
+	// function : S - select test set
+	// 	     I - insert test set
+	// 	     U - update test set
+	// test set check
+TestSet(tscode,function) new (tscode,function,TS) set tscode=$get(tscode),function=$get(function)
+	
+	// select test set
+	if function="S" &SQL(SELECT * INTO :TS() FROM Lab.CT_TestSet WHERE CTTS_RowId = :tscode)
+	// insert test set
+	if function="I" set ^TTAB("TS",TS(2))=TS(3),SQLCODE=0 // &SQL(INSERT INTO Lab.CT_TestSet VALUES :TS())
+	// update test set
+	if function="U" set ^TTAB("TS",TS(2))=TS(3),SQLCODE=0 // &SQL(UPDATE Lab.CT_TestSet VALUES :TS() WHERE CTTS_RowId = :tscode)
+	
+	quit SQLCODE
+	
+	// function : S - select test item
+	// 	     I - insert test item
+	// 	     U - update test item
+	// test item check
+TestItem(tccode,function) new (tccode,function,TC) set tccode=$get(tccode),function=$get(function)
+	
+	// select test item
+	if function="S" &SQL(SELECT * INTO :TC() FROM Lab.CT_TestCode WHERE CTTC_RowId = :tccode)
+	
+	// translate ^\| to $c(16), $c(17), $c(18)
+	if function'="S" do
+	. set TC(4)=$translate(TC(4),"^\|",$char(16,17,18))
+	
+	// insert test item
+	if function="I" set ^TTAB("TC",TC(2))=TC(3)_"\"_TC(4),SQLCODE=0 // &SQL(INSERT INTO Lab.CT_TestCode VALUES :TC())
+	// update test item
+	if function="U" set ^TTAB("TC",TC(2))=TC(3)_"\"_TC(4),SQLCODE=0 // &SQL(UPDATE Lab.CT_TestCode VALUES :TC() WHERE CTTC_RowId = :tccode)
+	
+	quit SQLCODE
+	
+	// check if test item exists and update/insert as required. If units do not match create new test item
+TestItemExist(tc,tcdesc,tcUnits,units,reject) new (tc,tcdesc,tcUnits,units,reject)
+	set tc=$get(tc),tcdesc=$get(tcdesc),tcUnits=$get(tcUnits),units=$get(units),reject=$get(reject)
+	set check=1,rejtype=""
+	
+	kill TC
+	set SQLCODE=$$TestItem(tc,"S")
+	if 'SQLCODE do
+	. if units'=""&&($get(TC(4))="") set check=3,rejtype=1 quit
+	. if units=""&&($get(TC(4))'="") set check=3,rejtype=2 quit
+	. if units'=$get(TC(4)) set check=2,rejtype=3 quit
+	. if tcdesc'=$get(TC(3)) set check=3 quit
+	
+	if rejtype'="" do
+	. if rejtype=1 set reject="Units for test item "_tc_" ("_tcdesc_") have changed from no UOM to "_units
+	. if rejtype=2 set reject="Units for test item "_tc_" ("_tcdesc_") have changed from "_TC(4)_" to no UOM"
+	. if rejtype=3 set reject="Units for test item "_tc_" ("_tcdesc_") have changed from "_TC(4)_" to "_units_". New test item "_tcUnits_" has been created"
+	
+	if check'="" do
+	. if check=2 do
+	. . set tc=tcUnits
+	. . set SQLCODE=$$TestItem(tc,"S")
+	. . if SQLCODE set check=1 quit
+	. . // new test item with units already exists.  No need for warning (rejection) message
+	. . set reject=""
+	. . set check=3
+	. kill TC set TC(2)=tc,TC(3)=tcdesc,TC(4)=units
+	. if $$TestItem(tc,$select(check=3:"U",1:"I"))
+	
+	kill TC
+	
+	quit tc
+	
+	// build test item and test set index
+TestItemTestSet(tccode,tscode) new (tccode,tscode) set tccode=$get(tccode),tscode=$get(tscode)
+	if '$data(^TTAB("TC",tccode,1,tscode)) set ^TTAB("TC",tccode,1,tscode)=""
+	quit
+	// function : S - select antibiotic
+	// 	     I - insert antibiotic
+	// 	     U - update antibiotic
+	// antibiotic check
+Antibiotic(anticode,function) new (anticode,function,ANTI) set anticode=$get(anticode),function=$get(function)
+	
+	// select antibiotic
+	if function="S" &SQL(SELECT * INTO :ANTI() FROM Lab.CT_Antibiotics WHERE CTANT_RowId = :anticode)
+	// insert antibiotic
+	if function="I" set ^TTAB("ANT",ANTI(2))=ANTI(3)_"\\\"_ANTI(6),SQLCODE=0 // &SQL(INSERT INTO Lab.CT_Antibiotics VALUES :ANTI())
+	// update antibiotic
+	if function="U" set ^TTAB("ANT",ANTI(2))=ANTI(3)_"\\\"_ANTI(6),SQLCODE=0 // &SQL(UPDATE Lab.CT_Antibiotics VALUES :ANTI() WHERE CTANT_RowId = :anticode)
+	
+	quit SQLCODE
+	
+	// function : S - select sensitivity
+	// 	     I - insert sensitivity
+	// 	     U - update sensitivity
+	// sensitivity check
+Sensitivity(senscode,function) new (senscode,function,SENS) set senscode=$get(senscode),function=$get(function)
+	
+	// select sensitivity
+	if function="S" &SQL(SELECT * INTO :SENS() FROM Lab.CT_Sensitivity WHERE CTSN_RowId = :senscode)
+	// insert sensitivity
+	if function="I" set ^TTAB("SENS",SENS(2))=SENS(3),SQLCODE=0 // &SQL(INSERT INTO Lab.CT_Sensitivity VALUES :SENS())
+	// update sensitivity
+	if function="U" set ^TTAB("SENS",SENS(2))=SENS(3),SQLCODE=0 // &SQL(UPDATE Lab.CT_Sensitivity VALUES :SENS() WHERE CTSN_RowId = :senscode)
+	
+	quit SQLCODE
+	
+	// extract test set dates and times
+TestDateTime set (datetime,reqdate,colldate,colltime,recdate,rectime,authdate,authtime)=""
+	for i=6,7,14,22 do
+	. set datetime=$piece(^TMP("HL7",$job,cnt1,cnt2,parent,"OBR",i),"^")
+	. // extract request/collection/received date and time
+	. if i=6 set reqdate=$extract(datetime,1,8),reqdate=$select(reqdate?8N:$$DateConv^HL7Common2(.reject,"EI",reqdate),1:"") quit
+	. // extract specimen collection/observation date and time
+	. if i=7 do  quit
+	. . set colldate=$extract(datetime,1,8),colldate=$select(colldate?8N:$$DateConv^HL7Common2(.reject,"EI",colldate),1:"")
+	. . set colltime=$extract(datetime,9,12),colltime=$select(colltime?4N:$$TimeConv^HL7Common2("EI",$extract(colltime,1,2)_":"_$extract(colltime,3,4))/60,1:"")
+	. // extract specimen received date and time
+	. if i=14 do  quit
+	. . set recdate=$extract(datetime,1,8),recdate=$select(recdate?8N:$$DateConv^HL7Common2(.reject,"EI",recdate),1:"")
+	. . set rectime=$extract(datetime,9,12),rectime=$select(rectime?4N:$$TimeConv^HL7Common2("EI",$extract(rectime,1,2)_":"_$extract(rectime,3,4))/60,1:"")
+	. // extract authorised date and time
+	. if i=22 do  quit
+	. . set authdate=$extract(datetime,1,8),authdate=$select(authdate?8N:$$DateConv^HL7Common2(.reject,"EI",authdate),1:"")
+	. . set authtime=$extract(datetime,9,12),authtime=$select(authtime?4N:$$TimeConv^HL7Common2("EI",$extract(authtime,1,2)_":"_$extract(authtime,3,4))/60,1:0)
+	quit
+	
+	// insert/update episode detail
+BuildEpisode(OrdNum) new SQLCODE set OrdNum=$get(OrdNum) kill VISIT
+	
+	// check if non-Labtrak system
+	set intextMrn=RegMrn if $$LabSystem^HL7Common2="Y" set intextMrn=intRegMrn
+	
+	set (VISIT(1),VISIT(2))=OrdNum set SQLCODE=$$Episode^HL7ResultAtomic("S")
+	if $data(VISIT(12)) do
+	. set SQLCODE=0
+	. if VISIT(12)'="" kill ^TDEB(intextMrn,VISIT(12),0,OrdNum)
+	. if VISIT(20)'=intextMrn,(VISIT(20)'=""),(VISIT(12)'="") kill ^TDEB(VISIT(20),VISIT(12),0,OrdNum)
+	. if VISIT(86)'=1,(VISIT(86)'=2) set VISIT(86)=0
+	
+	// check for collection date
+	do  set colldate=VISIT(12),colltime=VISIT(13)
+	. // date - from msg
+	. if colldate'="" set VISIT(12)=colldate,VISIT(13)=colltime quit
+	. // date - existing
+	. if $get(VISIT(12))'="" quit
+	. // date - from order
+	. if $piece($get(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),11)),"^")'="" do  if VISIT(12)'="" quit
+	. . set VISIT(12)=$piece($get(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),11)),"^")
+	. . set VISIT(13)=$piece($get(^OEORD($piece(intOrdNum,"||"),"I",$piece(intOrdNum,"||",2),11)),"^",2)/60
+	. // date - +$h
+	. set VISIT(12)=+$h,VISIT(13)=""
+	
+	set VISIT(5)=sex,VISIT(20)=intextMrn
+	set VISIT(14)=$select(reqdate'="":reqdate,1:$get(VISIT(14))),VISIT(61)=$select(recdate'="":recdate,1:$get(VISIT(61)))
+	set VISIT(62)=$select(recdate'="":rectime,1:$get(VISIT(62))),VISIT(86)=$select($get(VISIT(86))'="":VISIT(86),1:0)
+	if $$Episode^HL7ResultAtomic($select(SQLCODE'=0:"I",1:"U"))
+	set ^TDEB(intextMrn,VISIT(12),0,OrdNum)=0
+	
+	// update order receive date/time
+	if VISIT(61)'="" do
+	. set OrdDetail(218)=VISIT(61),OrdDetail(219)=$select(VISIT(62)'="":(VISIT(62)*60),1:"")
+	. set value=VISIT(61)_"^"_$select(VISIT(62)'="":(VISIT(62)*60),1:""),fields="218^219"
+	. do OrderUpdate^HL7Common3(intOrdNum,"MF",value,fields)
+	kill VISIT
+	
+	quit
+
+
+

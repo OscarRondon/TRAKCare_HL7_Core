@@ -1,0 +1,106 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutboundORU^MAC^^^0
+HL7OutboundORU // ML 27/07/2005 ; HL7 Interface - Outbound ORU message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutboundORU.rtn#1 $
+	quit
+ 
+check(table,rowid,trigger) new (table,rowid,trigger,%d,%e,%old,%before,%after,insert,TFORM,LogonUser) kill old,curr
+	set table=$get(table),rowid=$get(rowid),trigger=$get(trigger),table=$get(table),insert=$get(insert),TFORM=$get(TFORM),LogonUser=$get(LogonUser)
+	set (ok,textfile,nostdrep,webdocument)=""
+	kill resultOrd
+	set intResNum=$select(rowid'="":rowid,1:$get(%d(1)))
+	if table="OEORDRESULT" do
+	.set intOrdNum=$piece(intResNum,"||",1,2)
+	.set file=$piece($get(%d(4)),$char(1)),nonstdrep=$piece($get(%d(35)),$char(1))
+	.if file'[".rtf",nonstdrep="" quit
+ 	. // check if report is already verified
+	.if nonstdrep="",$piece($get(%d(43)),$char(1))=$piece($get(%old(43)),$char(1)),($piece($get(%d(44)),$char(1))=$piece($get(%old(44)),$char(1))) quit
+	.if nonstdrep="",$piece($get(%d(8)),$char(1))=$piece($get(%old(8)),$char(1)),($piece($get(%d(10)),$char(1))=$piece($get(%old(10)),$char(1))) quit
+	.if nonstdrep="",$piece($get(%old(8)),$char(1))'="" quit
+	. // check if no change to non-standard report
+	.if nonstdrep'="",nonstdrep=$piece($get(%old(35)),$char(1)) quit
+	. // search for text file or non-standard report reason associated with rtf
+	.if nonstdrep="" do
+	..if $order(^OEORD($piece(intResNum,"||"),"I",$piece(intResNum,"||",2),"RES",$piece(intResNum,"||",3)),1,detail) quit:detail=""
+	..set textfile=$piece(detail,"^"),nonstdrep=$piece(detail,"^",29),webdocument=$piece(detail,"^",43)
+	..if textfile[".txt",webdocument'="" do
+	... // check if web document is type 'TXT'
+	...set doc=##class(websys.Document).%OpenId(webdocument)
+	...set webdocument=$select(doc="":"",doc.DataType'="TXT":"",1:webdocument)
+	...kill doc
+	.if textfile'[".txt",nonstdrep="",webdocument="" quit
+ 	.set resultOrd(intOrdNum)=intResNum
+ 
+	if table="OETEXTRESULTSECTION" do
+	.set intTextNum=$piece(intResNum,"||")
+	. // locate order text is associated with
+	.set ord1=$piece(^OETR(intTextNum),"^"),intOrdNum=""
+	.set ord2="" for  set ord2=$order(^OEORD(ord1,"I",ord2)) quit:ord2=""  do
+	..if '$data(^OEORD(ord1,"I",ord2,"TR")) quit
+	..set ord3=0 for  set ord3=$order(^OEORD(ord1,"I",ord2,"TR",ord3)) quit:ord3=""  do
+	...if $get(^OEORD(ord1,"I",ord2,"TR",ord3))=intTextNum set resultOrd(ord1_"||"_ord2)=intResNum
+	if '$data(resultOrd) quit
+ 
+	set type="ORU_R01"
+	// extract links to send message to
+	kill SendTo if '$$sendto^HL7Outbound(type) if $order(SendTo(""))="" quit
+ 
+	set intOrdNum="" for  set intOrdNum=$order(resultOrd(intOrdNum)) quit:intOrdNum=""  do
+	.set intResNum=resultOrd(intOrdNum)
+ 
+	.set cnt="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do
+	..set link=SendTo(cnt)
+	
+	.. // build result
+	..do Results(intResNum,intOrdNum,link)
+ 
+	quit
+ 
+	// build segments and message
+Results(intResNum,intOrdNum,link) new (intResNum,intOrdNum,link,trigger,table,forwardnum,fwdcnt) set intResNum=$get(intResNum),intOrdNum=$get(intOrdNum),link=$get(link),trigger=$get(trigger),table=$get(table),LogonUser=$get(LogonUser),LogonHosp=$get(LogonHosp)
+	set (ord1,ord2,OrdNum,intRegMrn,intAdmNum,ReceivingApp,ReceivingFac)=""
+ 
+	set msgtype="ORU_R01" kill queue,^TMP("HL7-OUT",$job)
+ 
+	// check link status
+	if '$$Init^HL7Create() quit
+ 
+	if '$data(fwdcnt) do
+	.if table="OEORDRESULT" do
+	.. // check file separator
+	..set filesep=$select(INT("UNIX")="Y":"/",1:"\")
+	.. // search for text file and matching web document / non-standard report
+	..set (textfile,nonstdrep,webdocument)=""
+	.. &SQL(SELECT RES_NonSTDRepIssReason_DR INTO :nonstdrep FROM OE_OrdResult WHERE RES_RowId = :intResNum)
+	..if nonstdrep="" do
+	...if $order(^OEORD($piece(intResNum,"||"),"I",$piece(intResNum,"||",2),"RES",$piece(intResNum,"||",3)),1,detail) quit:detail=""
+	...set textfile=$piece(detail,"^"),webdocument=$piece(detail,"^",43)
+ 
+	. // extract required external/internal numbers
+	.set SQLCODE=$$OrdAdmNum^HL7OutExtract8(intOrdNum,.OrdNum,.intAdmNum)
+	.set intRegMrn=$$AdmPatNum^HL7OutExtract2(intAdmNum)
+ 
+	.set RegMrn=$$extRegMrn^HL7Common2(intRegMrn)
+ 
+	. // extract segments required
+	.kill SEG if '$$Segment^HL7Create(msgtype)
+	.if $order(SEG(""))="" quit
+	.set msgtype=$translate(msgtype,"_","^")
+ 
+	. // build segment information
+	.do BuildSegment^HL7Create if fail kill ^TMP("HL7-OUT",$job) quit
+ 
+	// forward exact message received - caters for NTE segment usage as received
+	if $data(fwdcnt),$data(forwardnum(fwdcnt,intResNum)) do
+	.set (line,linecnt)="" for  set line=$order(forwardnum(fwdcnt,intResNum,"ORU_R01",line)) quit:line=""  do
+	..set queue($increment(linecnt))=forwardnum(fwdcnt,intResNum,"ORU_R01",line)
+	.set msgtype=$translate(msgtype,"_","^")
+ 
+	if $data(queue) do Queue^HL7Queue(link,msgtype,ReceivingApp,ReceivingFac)
+ 
+	kill queue,^TMP("HL7-OUT",$job)
+	quit
+
+
+

@@ -1,0 +1,106 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SendFile^MAC^^^0
+HL7SendFile // ML 06/02/2007 ; HL7 Interface - create outbound messages file
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SendFile.rtn#1 $
+	quit
+ 
+	// for each message to be sent
+Send	set (failack,failtimeout,action)="" kill trace,tracerowid
+ 
+	// wait before sending messages
+	set StopNow="" if TIMEOUT("BEF-SEND")>0 do
+	.do trace^HL7Trace("*****",$h,"Wait before send timeout set - sending messages in "_TIMEOUT("BEF-SEND")_" seconds","","","INF")
+	.for i=1:1:TIMEOUT("BEF-SEND") do  quit:StopNow
+	..if $$CheckStop^HL7(link) set flagstop=1,StopNow=1 quit
+	..h 1
+	if StopNow do Shutdown^HL7(1)
+ 
+	set filesep=$select(INT("UNIX")="Y":"/",1:"\")
+	set INT("INDIR")=$select($extract(INT("INDIR"),$length(INT("INDIR")))'=filesep:INT("INDIR")_filesep,1:INT("INDIR"))
+ 
+	set (ReplayCount,NewCount)=""
+	if INT("MAXNUMFILE")="" do
+	.set ReplayCount=$order(^SSHL7(link,"REPLAY",""),-1),NewCount=$order(^SSHL7(link,"QUEUE",""),-1)
+ 
+	if INT("MAXNUMFILE")'="" do
+	.set x1="" for i=1:1 set x1=$order(^SSHL7(link,"REPLAY",x1)) quit:x1=""  set ReplayCount=ReplayCount+1 quit:ReplayCount=INT("MAXNUMFILE")
+	.if ReplayCount=INT("MAXNUMFILE") quit
+	.set x1="" for i=1:1 set x1=$order(^SSHL7(link,"QUEUE",x1)) quit:x1=""  set NewCount=NewCount+1 quit:(NewCount+ReplayCount)=INT("MAXNUMFILE")
+ 
+	if ReplayCount="",NewCount="" quit
+ 
+	// attempt to create file
+	set fail=0 do  quit:fail
+	.set file=INT("INDIR")_"TC"_$translate($h,",")_".HL7"
+	. // open file
+	.open file:"WNS":10 else  set fail=1
+	.if fail kill trace,tracerowid do trace^HL7Trace("*****",$h,"Unable to create file "_file,"","","INF")
+ 
+	kill trace,tracerowid do trace^HL7Trace("*****",$h,"Creating file "_file,"","","INF")
+ 
+	use file
+ 
+	set datetime("MSH")=$$Date^HL7
+ 
+	kill trace,tracerowid
+ 
+	// produce file/batch headers
+	set record="FHS|^~\&"_"|"_HL7("SENDAPP")_"|"_HL7("SENDFAC")_"|"_HL7("RECAPP")_"|"_HL7("RECFAC")_"|"_datetime("MSH")
+	write record,! set trace=$get(trace)+1,trace(trace)=record
+	set record="BHS|^~\&"_"|"_HL7("SENDAPP")_"|"_HL7("SENDFAC")_"|"_HL7("RECAPP")_"|"_HL7("RECFAC")_"|"_datetime("MSH")
+	write record,! set trace=$get(trace)+1,trace(trace)=record
+	do trace^HL7Trace("M-->E",$h,"","","Y")
+ 
+	set StartCount=$get(^SSHL7(link,"COUNT"))
+ 
+	// send any replay messages
+	if ReplayCount'="" do
+	.set x1="" for i=1:1:ReplayCount set x1=$order(^SSHL7(link,"REPLAY",x1)) quit:x1=""  do  if i=ReplayCount quit
+	.. // prevent sending till message build complete
+	..lock +^SSHL7(link,"REPLAY",x1):5 else  quit
+	.. // send one message at a time
+	..set controlId=""
+	..set x2=0 for  set x2=$order(^SSHL7(link,"REPLAY",x1,"MSG",x2)) quit:x2=""  do
+	...set record=$get(^SSHL7(link,"REPLAY",x1,"MSG",x2)) if record["MSH" set controlId=$piece(record,"|",10) do
+	....kill trace,tracerowid do trace^HL7Trace("*****",$h,"Sending queued REPLAY message - message control Id "_controlId,"","","INF") kill trace,tracerowid
+	...write record,! set trace=$get(trace)+1,trace(trace)=record
+	..do trace^HL7Trace("M-->E",$h,"","","Y")
+	..do DelReplay^HL7Replay(link,x1)
+	..kill trace,tracerowid do trace^HL7Trace("*****",$h,"Queued REPLAY message of control Id "_controlId_" sent and removed from REPLAY queue","","","INF")
+	.. // count number of messages sent
+	..if $increment(^SSHL7(link,"COUNT"))
+ 
+	// send new messages
+	if NewCount'="" do
+	.set x1="" for i=1:1:NewCount set x1=$order(^SSHL7(link,"QUEUE",x1)) quit:x1=""  do  if i=NewCount quit
+	.. // prevent sending till message build complete
+	..lock +^SSHL7(link,"QUEUE",x1):5 else  quit
+	..kill trace,tracerowid
+	.. // send one message at a time
+	..set headdetail=$get(^SSHL7(link,"QUEUE",x1)) set record=$$SendHead^HL7Send(headdetail) set trace=1,trace(1)=record
+	..write record,!
+	..set x2=0 for  set x2=$order(^SSHL7(link,"QUEUE",x1,"MSG",x2)) quit:x2=""  do
+	...set record=$get(^SSHL7(link,"QUEUE",x1,"MSG",x2)) write record,! set trace=$get(trace)+1,trace(trace)=record
+	..do trace^HL7Trace("M-->E",$h,"","","Y")
+ 	.. // count number of messages sent
+	..if $increment(^SSHL7(link,"COUNT"))
+ 
+	.. // remove sent message from queue
+	..lock -^SSHL7(link,"QUEUE",x1) do DelQueue^HL7Queue(link,x1)
+ 
+	kill trace,tracerowid
+ 
+	// produce file/batch footers
+	set record="BTS|"_($get(^SSHL7(link,"COUNT"))-StartCount) write record,! set trace=$get(trace)+1,trace(trace)=record
+	set record="FTS|" write record,! set trace=$get(trace)+1,trace(trace)=record
+	do trace^HL7Trace("M-->E",$h,"","","Y")
+ 
+	// close file
+	close file
+	kill trace,tracerowid do trace^HL7Trace("*****",$h,"File "_file_" created successfully.","","","INF")
+ 
+	quit
+
+
+

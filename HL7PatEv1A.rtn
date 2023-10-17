@@ -1,0 +1,328 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7PatEv1A^MAC^^^0
+HL7PatEv1A // ML 20/12/2004 ; HL7 interface : patient event category processes
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7PatEv1A.rtn#1 $
+	quit
+ 
+	// insert person details
+PatInsert do NullCheck^HL7PatEv1("PA_Person")
+	set SQLCODE=$$PaperInsert
+	if SQLCODE do  quit
+	.set reject="Unable to add Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~207"
+ 
+	set intRegMrn=$get(%ROWID)
+	// insert title, indig status
+	set $piece(^PAPER(intRegMrn,"PER",4),"^",20)=$get(PAPER(139))
+	set $piece(^PAPER(intRegMrn,"PER",4),"^",22)=$get(PAPER(141))
+ 
+	// update patient numbers
+	if $$updRegMrn^HL7Common2(intRegMrn,RegMrn)
+ 
+	// update patient details
+	do NullCheck^HL7PatEv1("PA_PatMas")
+	if $$PapmiUpdate(intRegMrn)
+ 
+	// define keyword indexes
+	do keyw^at84d(intRegMrn)
+ 
+	// set patient alias index
+	kill PALIAS,SALIAS for altype="G","O","S" do
+	.set alcnt="" for  set alcnt=$order(ALIAS(altype,alcnt)) quit:alcnt=""  do
+	..if altype="G"!(altype="O") do
+	...if ALIAS(altype,alcnt,0)="" set ALIAS(altype,alcnt,0)=intRegMrn
+	...merge PALIAS=ALIAS(altype,alcnt) do NullCheck^HL7PatEv1("PA_PersonAlias") if $get(PALIAS(3))="" quit
+	...set SQLCODE=$$AliasInsert(altype)
+	...kill HL7Flag,PALIAS,initvalue
+	...if SQLCODE set reject="Unable to add alias for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^9~207" quit
+	..if altype="S" do
+	...if ALIAS("S",alcnt,0)="" set ALIAS("S",alcnt,0)=intRegMrn
+	...merge SALIAS=ALIAS("S",alcnt) do NullCheck^HL7PatEv1("PA_PersonSurnameAlias") if $get(SALIAS(3))="" quit
+	...set SQLCODE=$$AliasInsert("S")
+	...kill HL7Flag,SALIAS,initvalue
+	...if SQLCODE set reject="Unable to add alias for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^9~207" quit
+	kill ALIAS
+ 
+	// insert temp addresses
+	if $data(PTADD) do
+	.do NullCheck^HL7PatEv1("PA_TempAddress")
+	.set i="" for  set i=$order(PTADD(i)) quit:i=""  do
+	..set j="" for  set j=$order(PTADD(i,j)) quit:j=""  do
+	...kill TADDR set TADDR(0)=intRegMrn
+	...merge TADDR=PTADD(i,j) set SQLCODE=$$TempAddress^HL7Common8("","I",.TADDR) kill TADDR
+	...if SQLCODE set reject="Unable to add temporary addresses for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^11~207"
+ 
+	// insert next of kin
+	if $data(NextOfKin) do
+	.set segid="" for  set segid=$order(NextOfKin(segid)) quit:segid=""  do
+	..kill PANOK merge PANOK=NextOfKin(segid)
+	.. // null check
+	..do NullCheck^HL7PatEv1("PA_Nok")
+	..set PANOK(0)=intRegMrn,initvalue=intRegMrn
+	..set SQLCODE=$$NextOfKinInsert^HL7PatEv1A() kill PANOK
+	..if SQLCODE set reject="Unable to add next of kin for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="NK1^"_$piece(segid,"-",2)_"^11~207"
+ 
+	// insert allergy
+	if $data(Allergy) do
+	.set segid="" for  set segid=$order(Allergy(segid)) quit:segid=""  do
+	..kill ALG merge ALG=Allergy(segid)
+	.. // null check
+	..do NullCheck^HL7PatEv1("PA_Allergy")
+	..set ALG(0)=intRegMrn,initvalue=intRegMrn
+	..set SQLCODE=$$AllergyInsert() kill ALG
+	..if SQLCODE set reject="Unable to add allergy for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="AL1^"_$piece(segid,"-",2)_"^11~207"
+ 
+	// insert alert
+	if $data(Alert) do
+	.set segid="" for  set segid=$order(Alert(segid)) quit:segid=""  do
+	..kill ALM merge ALM=Alert(segid)
+	.. // null check
+	..do NullCheck^HL7PatEv1("PA_AlertMsg")
+	..set ALM(0)=intRegMrn,initvalue=intRegMrn
+	..set SQLCODE=$$AlertInsert() kill ALM
+	..if SQLCODE set reject="Unable to add alert for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="AL1^"_$piece(segid,"-",2)_"^11~207"
+ 
+	// insert hospital mrn
+	set x="" for  set x=$order(HospMrn(x)) quit:x=""  do
+	.if $piece(HospMrn(x),"^")="" quit
+	.set HospMrn=$piece(HospMrn(x),"^") do HospMrn
+	quit
+ 
+	// insert hospital mrn
+HospMrn quit:HospMrn=""
+	// updating user and location
+	do UpdateUser^HL7PatEv1("EX"),UpdateUser^HL7PatEv1("CT")
+	// mrtype = medical record type
+	kill HOSP set HOSP(2)=HospMrn,HOSP(3)=intRegMrn,HOSP(9)=$piece(HospMrn(x),"^",2,4),HOSP(10)=+$h,HOSP(11)=$piece($h,",",2),HOSP(12)=upduser,HOSP(13)="Y"
+	set HL7Flag="Y"
+	// check fields
+	set mrtype=$$MedRecType^HL7Common5(.reject,$piece(HospMrn(x),"^",2),$piece(HospMrn(x),"^",3),$piece(HospMrn(x),"^",4),HospMrn,RegMrn)
+	if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)="" quit
+	set intHospMrn=$$intHospMrn^HL7Common2(HospMrn,mrtype) if intHospMrn'="" do  quit
+	.set checkRegMrn=$$intRegMrnHosp^HL7Common2(intHospMrn) if checkRegMrn'=intRegMrn do
+	..if checkRegMrn'=intRegMrn set reject="Unable to add Medical Record Id "_HospMrn_" - already exists on Patient Id "_$$extRegMrn^HL7Common2(checkRegMrn)
+	..do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	set HOSP(9)=mrtype
+	&SQL(INSERT INTO RT_Master VALUES :HOSP())
+	kill HL7Flag,HOSP
+	if SQLCODE set reject="Unable to add new hospital/other number to Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^3~207"
+	quit
+ 
+	// compare and update details
+PatUpdate(intRegMrn,reject) new (PAPER,PAPMI,PATMAS,PTADD,ALIAS,PatNum,NextOfKin,Allergy,Alert,intRegMrn,RegMrn,forward,old,cnt1,reject,link)
+	set intRegMrn=$get(intRegMrn),RegMrn=$get(RegMrn),PAPER=$get(PAPER),PAPMI=$get(PAPMI),forward=$get(forward),cnt1=$get(cnt1),reject=""
+ 
+	do NullCheck^HL7PatEv1("PA_Person")
+ 
+	// check changes to address
+	set updatedetail=$get(PAPER(123))_"^"_$get(PAPER(145))_"^"_$get(PAPER(146))_"^"_$get(PAPER(164))
+	set addfound="" for i=26,28,33,35,113 if $data(PAPER(i)) set addfound=1
+	if addfound'="" do AddressRules^HL7Common8(intRegMrn,"P",updatedetail)
+ 
+	kill PLIST merge PLIST=PAPER kill PAPER
+	// check if old data required for cross-checking when forwarding
+	if forward do
+	.kill old("PAPER") if $$PaperSelect(intRegMrn)
+	.merge old("PAPER")=PAPER kill PAPER
+	kill PAPER merge PAPER=PLIST kill PLIST
+ 
+	set SQLCODE=$$PaperUpdate(intRegMrn)
+	if SQLCODE set reject="Unable to update patient detail for Patient Id "_$$extRegMrn^HL7Common2(intRegMrn)_$select($get(%msg)'="":" (Reason: "_%msg_")",1:"") quit SQLCODE
+ 
+	// update title, indig status
+	if $data(PAPER(139)) set $piece(^PAPER(intRegMrn,"PER",4),"^",20)=PAPER(139)
+	if $data(PAPER(141)) set $piece(^PAPER(intRegMrn,"PER",4),"^",22)=PAPER(141)
+ 
+	// update patient numbers
+	if $$extRegMrn^HL7Common2(intRegMrn)="" do
+	.set RegMrn="",type="REG" if $data(PatNum(type)) do  quit:reject'=""
+	..do NumTypeDetail^HL7Common2(PatNum(type),.seg,.field,"","","","",.usetype,.usecode)
+	..set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+	..for i=1:1:$length(numbers,"~") set number=$piece(numbers,"~",i) do  quit:RegMrn'=""  quit:reject'=""
+	...if $piece($piece(number,"^",usetype),"&")'=usecode!($piece(number,"^")="") quit
+	...set RegMrn=$piece(number,"^")
+	.if RegMrn'="",$$updRegMrn^HL7Common2(intRegMrn,RegMrn)
+ 
+	// define keyword indexes
+	do keyw^at84d(intRegMrn)
+ 
+	do NullCheck^HL7PatEv1("PA_PatMas")
+	set SQLCODE=$$PapmiUpdate(intRegMrn) kill PAPMI
+	if SQLCODE do  quit SQLCODE
+	.set reject="Unable to update patient detail for Patient Id "_$$extRegMrn^HL7Common2(intRegMrn)_$select($get(%msg)'="":" (Reason: "_%msg_")",1:"")
+	.set reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^~207"
+ 
+	// delete and reinsert alias
+	if $data(ALIAS) do
+	.if $$AliasDelete()
+	. // check for active null in surname as only alias available
+	.set delete="" if '$data(ALIAS("G")),'$data(ALIAS("O")) do  if delete quit
+	..if '$data(ALIAS("S",2)),$get(ALIAS("S",1))="""""" set delete=1
+	.kill PALIAS,SALIAS for altype="G","O","S" do
+	..set alcnt="" for  set alcnt=$order(ALIAS(altype,alcnt)) quit:alcnt=""  do
+	...// ab 13.04.06 - 58852 - dont save alias if the same as current name
+	...if altype="S",$zconvert($get(ALIAS(altype,alcnt,3)),"U")=$zconvert($piece($get(^PAPER(+intRegMrn,"ALL")),"^",1),"U") quit
+	...if altype="G",$zconvert($get(ALIAS(altype,alcnt,3)),"U")=$zconvert($piece($get(^PAPER(+intRegMrn,"ALL")),"^",2),"U") quit
+	...if altype="O",$zconvert($get(ALIAS(altype,alcnt,3)),"U")=$zconvert($piece($get(^PAPER(+intRegMrn,"ALL")),"^",19),"U") quit
+	...if altype="G"!(altype="O") do
+	....if ALIAS(altype,alcnt,0)="" set ALIAS(altype,alcnt,0)=intRegMrn
+	....merge PALIAS=ALIAS(altype,alcnt) do NullCheck^HL7PatEv1("PA_PersonAlias") if $get(PALIAS(3))="" quit
+	....set SQLCODE=$$AliasInsert(altype)
+	....kill PALIAS,initvalue
+	....if SQLCODE set reject="Unable to add alias for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^9~207" quit
+	...if altype="S" do
+	....if ALIAS("S",alcnt,0)="" set ALIAS("S",alcnt,0)=intRegMrn
+	....merge SALIAS=ALIAS("S",alcnt) do NullCheck^HL7PatEv1("PA_PersonSurnameAlias") if $get(SALIAS(3))="" quit
+	....set SQLCODE=$$AliasInsert("S")
+	....kill SALIAS,initvalue
+	....if SQLCODE set reject="Unable to add alias for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^9~207" quit
+	.kill ALIAS
+ 
+	do NullCheck^HL7PatEv1("PA_TempAddress")
+	// check for changes to temporary addresses
+	if addfound'=""!$data(PTADD) do
+	.set updatedetail=$get(PAPER(123))_"^"_$get(PAPER(145))_"^"_$get(PAPER(146))_"^"_$get(PAPER(164))
+	.do AddressRules^HL7Common8(intRegMrn,"T",updatedetail)
+	// insert temp addresses
+	if $data(PTADD) do
+	.set i="" for  set i=$order(PTADD(i)) quit:i=""  do
+	..set j="" for  set j=$order(PTADD(i,j)) quit:j=""  do
+	...kill TADDR set TADDR(0)=intRegMrn
+	...merge TADDR=PTADD(i,j) set SQLCODE=$$TempAddress^HL7Common8("","I",.TADDR) kill TADDR
+	...if SQLCODE do
+	....set reject="Unable to update temporary addresses for Patient Id "_$$extRegMrn^HL7Common2(intRegMrn)_$select($get(%msg)'="":" (Reason: "_%msg_")",1:"")
+	....set reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^11~207"
+ 
+	// insert next of kin
+	if $data(NextOfKin) do
+	.kill ^PAPER(intRegMrn,"NOK")
+	.set segid="" for  set segid=$order(NextOfKin(segid)) quit:segid=""  do
+	..kill PANOK merge PANOK=NextOfKin(segid)
+	..do NullCheck^HL7PatEv1("PA_Nok")
+	..set PANOK(0)=intRegMrn,initvalue=intRegMrn
+	..set SQLCODE=$$NextOfKinInsert() kill PANOK
+	..if SQLCODE set reject="Unable to add next of kin for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="NK1^"_$piece(segid,"-",2)_"^11~207"
+ 
+	// update allergies
+	if $data(Allergy) do
+	. // set all to inactive
+	.set x=0 for  set x=$order(^PAPER(intRegMrn,"ALG",x)) quit:x=""  set $piece(^(x),"^",8)="I"
+	. // update/insert allergies - only ones received will be made active
+	.set segid="" for  set segid=$order(Allergy(segid)) quit:segid=""  do
+	..kill ALG merge ALG=Allergy(segid)
+	..set intAlgNum=$$AllergySelect(intRegMrn,$get(ALG(8)))
+	..if intAlgNum'="" do  quit
+	...set ALG(1)=intAlgNum kill ALG(0)
+	...if $$AllergyUpdate(intAlgNum)
+	..set ALG(0)=intRegMrn,initvalue=intRegMrn
+	..set SQLCODE=$$AllergyInsert() kill ALG
+	..if SQLCODE set reject="Unable to add allergy for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="AL1^"_$piece(segid,"-",2)_"^11~207"
+ 
+	// update alerts 
+	if $data(Alert) do
+	. // set all to inactive
+	.set x=0 for  set x=$order(^PAPER(intRegMrn,"ALM",x)) quit:x=""  set $piece(^(x),"^",18)="I"
+	. // update/insert alerts - only ones received will be made active
+	.set segid="" for  set segid=$order(Alert(segid)) quit:segid=""  do
+	..kill ALT merge ALT=Alert(segid)
+	..set intAltNum=$$AlertSelect(intRegMrn,$get(ALT(21)))
+	..if intAltNum'="" do  quit
+	...set ALT(1)=intAltNum kill ALT(0)
+	...if $$AlertUpdate(intAltNum)
+	..set ALT(0)=intRegMrn,initvalue=intRegMrn,ALT(4)=$listbuild("")
+	..set SQLCODE=$$AlertInsert() kill ALT
+	..if SQLCODE set reject="Unable to add alert for Patient Id "_RegMrn_$select($get(%msg)'="":" (Reason: "_%msg_")",1:""),reject("Detail")="AL1^"_$piece(segid,"-",2)_"^11~207"
+ 
+	quit SQLCODE
+ 
+	// update volume detail
+HospUpdate(RowId) set RowId=$get(RowId),HL7Flag="Y"
+	&SQL(UPDATE RT_MasTer VALUES :PLIST() WHERE RTMAS_RowId = :RowId)
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// insert patient details
+PaperInsert() set HL7Flag="Y"
+	&SQL(INSERT INTO PA_Person VALUES :PAPER())
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// update patient details
+PaperUpdate(intRegMrn) set intRegMrn=$get(intRegMrn),HL7Flag="Y"
+	&SQL(UPDATE PA_Person VALUES :PAPER() WHERE PAPER_RowId = :intRegMrn)
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// select patient details
+PaperSelect(intRegMrn) set intRegMrn=$get(intRegMrn) kill PAPER
+	&SQL(SELECT * INTO :PAPER() FROM PA_Person WHERE PAPER_RowId = :intRegMrn)
+	quit SQLCODE
+ 
+	// update patient details
+PapmiUpdate(intRegMrn) set intRegMrn=$get(intRegMrn),HL7Flag="Y"
+	&SQL(UPDATE PA_PatMas VALUES :PAPMI() WHERE PAPMI_RowId = :intRegMrn)
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// select patient details
+PapmiSelect(intRegMrn) set intRegMrn=$get(intRegMrn) kill PAPMI
+	&SQL(SELECT * INTO :PAPMI() FROM PA_PatMas WHERE PAPMI_RowId = :intRegMrn)
+	quit SQLCODE
+ 
+	// insert alias details
+AliasInsert(type) set type=$get(type),HL7Flag="Y",initvalue=intRegMrn
+	if type="G"!(type="O") do
+	. &SQL(INSERT INTO PA_PersonAlias VALUES :PALIAS())
+	if type="S" do
+	. &SQL(INSERT INTO PA_PersonSurnameAlias VALUES :SALIAS())
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// delete alias detail
+AliasDelete() set HL7Flag="Y",initvalue=intRegMrn
+	&SQL(DELETE FROM PA_PersonAlias WHERE ALIAS_ParRef = :intRegMrn)
+	&SQL(DELETE FROM PA_PersonSurnameAlias WHERE SUR_ParRef = :intRegMrn)
+	quit 0
+ 
+	// insert next of kin detail
+NextOfKinInsert() set HL7Flag="Y"
+	&SQL(INSERT INTO PA_Nok VALUES :PANOK())
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// select allergy details
+AllergySelect(intRegMrn,allergy) set inRegMrn=$get(intRegMrn),allergy=$get(allergy),intAlgNum=""
+	&SQL(SELECT ALG_RowId INTO :intAlgNum FROM PA_Allergy WHERE ALG_PAPMI_ParRef = :intRegMrn AND ALG_Type_DR = :allergy)
+	quit intAlgNum
+ 
+	// insert allergy detail
+AllergyInsert() set HL7Flag="Y"
+	&SQL(INSERT INTO PA_Allergy VALUES :ALG())
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// update allergy details
+AllergyUpdate(intAlgNum) set intAlgMrn=$get(intAlgMrn),HL7Flag="Y"
+	&SQL(UPDATE PA_Allergy VALUES :ALG() WHERE ALG_RowId = :intAlgNum)
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// select alert details
+AlertSelect(intRegMrn,alert) set inRegMrn=$get(intRegMrn),alert=$get(alert),intAltNum=""
+	&SQL(SELECT ALM_RowId INTO :intAltNum FROM PA_AlertMsg WHERE ALM_PAPMI_ParRef = :intRegMrn AND ALM_Alert_DR = :alert)
+	quit intAltNum
+ 
+	// insert alert detail
+AlertInsert() set HL7Flag="Y"
+	&SQL(INSERT INTO PA_AlertMsg VALUES :ALT())
+	kill HL7Flag
+	quit SQLCODE
+ 
+	// update alert details
+AlertUpdate(intAltNum) set intAltMrn=$get(intAltMrn),HL7Flag="Y"
+	&SQL(UPDATE PA_AlertMsg VALUES :ALT() WHERE ALM_RowId = :intAltNum)
+	kill HL7Flag
+	quit SQLCODE
+
+
+

@@ -1,0 +1,202 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Common5^MAC^^^0
+HL7Common5 // ML 24/09/2003 ; HL7 interface - common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common5.rtn#1 $
+	quit
+	
+	// check if ordered procedure exists
+Procedure(code,icdcode) new (code,icdcode) set ProcOrdered=""
+	set code=##class(%Collation).AlphaUp($get(code)),icdcode=##class(%Collation).AlphaUp($get(icdcode))
+	
+	&SQL(SELECT OPER_RowId INTO :ProcOrdered FROM ORC_Operation, ORC_OperationEdition, MRC_ICDEdition
+		WHERE %ALPHAUP(OPER_Code) = :code AND ED_ParRef = OPER_RowId
+		AND ICDED_RowId = ED_Edition_DR AND %ALPHAUP(ICDED_Code) = :icdcode)
+	
+	quit ProcOrdered
+	// extract care provider from user
+UserCareProv(user) new (user,drid) set user=$get(user),drid=""
+	&SQL(SELECT SSUSR_CareProv_DR INTO :drid FROM SS_User WHERE SSUSR_RowId = :user)
+	quit drid
+	// extract care provider/referring dr - drtype : C - Care Provider
+	// 												R - Referring Doctor
+	//									 - method : O - Outbound
+	// 												I - Inbound
+Provider(drid,external,location,clinic,drtype,method) new (drid,external,location,clinic,drtype,method)
+	set drid=$get(drid),external=$get(external),location=$get(location),clinic=$get(clinic),drtype=$get(drtype),method=$get(method),(value,value1,value2)=""
+	
+	if drid="" quit ""
+	
+	if method="I" do
+	. // check external system
+	. if external="TRAKCARE"!(external="MEDTRAK") set external=""
+	. // extract trakcare care provider
+	. if drtype="C" do
+	. . if external="SMC" do  quit
+	. . . &SQL(SELECT CTPCP_RowId, CTPCP_Code INTO :value, :value2 FROM CT_CareProv WHERE CTPCP_SMCNo = %ALPHAUP(:drid))
+	. . if external'="" do
+	. . . &SQL(SELECT SSUSR_CareProv_DR, SSUSR_CareProv_DR -> CTPCP_Code INTO :value, :value2 FROM SS_User, SS_UserExtSysCodes, CT_CareProv
+		WHERE EXT_Code = %ALPHAUP(:drid) AND EXT_Interface = :external AND SSUSR_RowId = EXT_ParRef)
+	. . if external="" do
+	. . . &SQL(SELECT CTPCP_RowId, CTPCP_Code INTO :value, :value2 FROM CT_CareProv WHERE CTPCP_Code = %ALPHAUP(:drid))
+	. . if value="" do
+	. . . &SQL(SELECT CTPCP_RowId, CTPCP_Code INTO :value, :value2 FROM CT_CareProv WHERE CTPCP_PrescriberNumber = :drid)
+	. // extract trakcare referring doctor
+	. if drtype="R" do
+	. . if external'="" do
+	. . . &SQL(SELECT ALIAS_ParRef INTO :Alias FROM PAC_RefDoctorClinicAlias WHERE ALIAS_Text = %ALPHAUP(:drid) AND ALIAS_SystemText = :external)
+	. . . if SQLCODE quit
+	. . . set value=$piece(Alias,"||"),ClinRowId=$piece(Alias,"||",1,2)
+	. . . &SQL(SELECT CLN_Clinic_DR INTO :value1 FROM PAC_RefDoctorClinic WHERE CLN_RowId = :ClinRowId)
+	. . if external="" do
+	. . . &SQL(SELECT REFD_RowId INTO :value FROM PAC_RefDoctor WHERE REFD_Code = %ALPHAUP(:drid))
+	. . if value'="" do
+	. . . &SQL(SELECT REFD_Code INTO :value2 FROM PAC_RefDoctor WHERE REFD_RowId = :value)
+	. . if value="" do
+	. . . set clinrow=""
+	. . . &SQL(SELECT CLN_RowId INTO :clinrow FROM PAC_RefDoctorClinic WHERE CLN_ProviderNo = :drid)
+	. . . if SQLCODE quit
+	. . . set value=$piece(clinrow,"||")
+	. . . &SQL(SELECT CLN_Clinic_DR INTO :value1 FROM PAC_RefDoctorClinic WHERE CLN_RowId = :clinrow)
+	
+	. set value=$piece(value,$char(1))_$char(1)_value1_$char(1)_value2
+	
+	if method="O" do
+	. // extract care provider
+	. if drtype="C" do
+	. . set (code,name,nameL,nameG,nameO,nameT,nameTdr,dateactivefrom,dateactiveto,SMCNo)=""
+	. . // extract TrakCare code
+	. . &SQL(SELECT CTPCP_Code, CTPCP_Desc, CTPCP_Surname, CTPCP_FirstName, CTPCP_OtherName, CTPCP_Title, CTPCP_Title_DR -> TTL_Code, CTPCP_DateActiveFrom, CTPCP_DateActiveTo, CTPCP_SMCNo
+		INTO :code, :name, :nameL, :nameG, :nameO, :nameT, :nameTdr, :dateactivefrom, :dateactiveto, :SMCNo FROM CT_CareProv WHERE CTPCP_RowId = :drid)
+	. . if code="" quit
+	. . // convert escape characters
+	. . for var="code","name","nameL","nameG","nameO","nameT","nameTdr" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. . if dateactivefrom'="" set dateactivefrom=$$DateConv^HL7Common2(.reject,"IE",dateactivefrom,"B")
+	. . if dateactiveto'="" set dateactiveto=$$DateConv^HL7Common2(.reject,"IE",dateactiveto,"B")
+	. . set namedetail="" if nameL'="",nameG'="" set namedetail=nameL_"~"_nameG_"~"_nameO_"~"_nameT_"~"_nameTdr
+	. . set value=code_$char(2)_name_$char(2)_$char(2)_"TRAKCARE"_$char(2)_dateactivefrom_$char(2)_dateactiveto_$char(2)_"D"_$char(2)_SMCNo_$char(2)_namedetail
+	. . // extract provider number
+	. . set provcode=""
+	. . &SQL(SELECT CTPCP_PrescriberNumber INTO :provcode FROM CT_CareProv WHERE CTPCP_RowId = :drid)
+	. . if provcode'="" do
+	. . . // convert escape characters
+	. . . set provcode=$$TextConversion^HL7Common12(provcode,"O")
+	. . . set value=value_$select(value'="":$char(1),1:"")_provcode_$char(2)_name_$char(2)_$char(2)_"TRAKCARE"_$char(2)_dateactivefrom_$char(2)_dateactiveto_$char(2)_"P"_$char(2)_$char(2)_namedetail
+	. . // extract external system codes
+	. . set user=$order(^SSU("SSUSR",0,"CTPCP",drid,"")) quit:user=""
+	. . set row=0 for  set row=$order(^SSU("SSUSR",user,"EXT",row)) quit:row=""  do
+	. . . set rowid=user_"||"_row,(extcode,system,locat,dateactivefrom,dateactiveto)=""
+	. . . &SQL(SELECT EXT_Code, EXT_Interface, EXT_CTLOC_DR, EXT_DateFrom, EXT_DateTo INTO :extcode, :system, :locat, :dateactivefrom, :dateactiveto FROM SS_UserExtSysCodes WHERE EXT_RowId = :rowid)
+	. . . if extcode="" quit
+	. . . // convert escape characters
+	. . . for var="extcode","system","locat" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. . . if dateactivefrom'="" set dateactivefrom=$$DateConv^HL7Common2(.reject,"IE",dateactivefrom,"B")
+	. . . if dateactiveto'="" set dateactiveto=$$DateConv^HL7Common2(.reject,"IE",dateactiveto,"B")
+	. . . if location'="",location'=locat quit
+	. . . set value=value_$select(value'="":$char(1),1:"")_extcode_$char(2)_name_$char(2)_$char(2)_system_$char(2)_dateactivefrom_$char(2)_dateactiveto_$char(2)_"D"_$char(2)_$char(2)_namedetail
+	. // extract referring doctor
+	. if drtype="R" do
+	. . set (code,nameL,nameG,nameO,nameT,nameTdr,dateactivefrom,dateactiveto)=""
+	. . // extract TrakCare code
+	. . &SQL(SELECT REFD_Code, REFD_Desc, REFD_Forename, REFD_MiddleName, REFD_Title, REFD_Title_DR -> TTL_Code, REFD_DateActiveFrom, REFD_DateActiveTo
+		INTO :code, :nameL, :nameG, :nameO, :nameT, :nameTdr, :dateactivefrom, :dateactiveto FROM PAC_RefDoctor WHERE REFD_RowId = :drid)
+	. . if code="" quit
+	. . // convert escape characters
+	. . for var="code","nameL","nameG","nameO","nameT","nameTdr" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. . if dateactivefrom'="" set dateactivefrom=$$DateConv^HL7Common2(.reject,"IE",dateactivefrom,"B")
+	. . if dateactiveto'="" set dateactiveto=$$DateConv^HL7Common2(.reject,"IE",dateactiveto,"B")
+	. . set namedetail="" if nameL'="",nameG'="" set namedetail=nameL_"~"_nameG_"~"_nameO_"~"_nameT_"~"_nameTdr
+	. . set value=code_$char(2)_nameL_$char(2)_nameG_$char(2)_"TRAKCARE"_$char(2)_dateactivefrom_$char(2)_dateactiveto_$char(2)_"D"_$char(2)_$char(2)_namedetail
+	. . // extract external system codes
+	. . set cln=0 for  set cln=$order(^PAC("REFD",drid,"CLN",cln)) quit:cln=""  do
+	. . . if clinic'="",clinic'=cln quit
+	. . . set rowid=drid_"||"_cln
+	. . . &SQL(SELECT CLN_DateFrom, CLN_DateTo INTO :dateactivefrom, :dateactiveto FROM PAC_RefDoctorClinic WHERE CLN_RowId = :rowid)
+	. . . if dateactivefrom'="" set dateactivefrom=$$DateConv^HL7Common2(.reject,"IE",dateactivefrom,"B")
+	. . . if dateactiveto'="" set dateactiveto=$$DateConv^HL7Common2(.reject,"IE",dateactiveto,"B")
+	. . . set row=0 for  set row=$order(^PAC("REFD",drid,"CLN",cln,"ALIAS",row)) quit:row=""  do
+	. . . . set rowid=drid_"||"_cln_"||"_row,(extcode,system,locat)=""
+	. . . . &SQL(SELECT ALIAS_Text, ALIAS_SystemText, ALIAS_LocationCode INTO :extcode, :system, :locat FROM PAC_RefDoctorClinicAlias WHERE ALIAS_RowId = :rowid)
+	. . . . if location'="",location'=locat quit
+	. . . . // convert escape characters
+	. . . . for var="extcode","system","locat" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. . . . set value=value_$select(value'="":$char(1),1:"")_extcode_$char(2)_nameL_$char(2)_nameG_$char(2)_$get(system)_$char(2)_dateactivefrom_$char(2)_dateactiveto_$char(2)_"D"_$char(2)_$char(2)_namedetail
+	
+	if $translate(value,$char(1))="" set value=""
+	quit value
+	
+	// compile outbound dr format
+BuildDoctor(drcode) new (drcode) set drcode=$get(drcode),str=""
+	
+	for j=1:1:$length(drcode,$char(1)) set dr=$piece(drcode,$char(1),j) do
+	. set drcodetype=$piece(dr,$char(2),7)
+	. set (nameL,nameG,nameO,nameT)="" set nameL=$piece(dr,$char(2),2),nameG=$piece(dr,$char(2),3) if $piece(dr,$char(2),9)'="" do
+	. . set nameL=$piece($piece(dr,$char(2),9),"~"),nameG=$piece($piece(dr,$char(2),9),"~",2),nameO=$piece($piece(dr,$char(2),9),"~",3),nameT=$piece($piece(dr,$char(2),9),"~",4)
+	. . if nameT="" set nameT=$piece($piece(dr,$char(2),9),"~",5)
+	. set str=str_$select($length(str):"~",1:"")_$piece(dr,$char(2),1)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^"_$select(drcodetype="P":"AUSHIC",1:$piece(dr,$char(2),4))_"^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	. // include SMC number
+	. if $piece(dr,$char(2),8)'="" do
+	. . set str=str_$select($length(str):"~",1:"")_$piece(dr,$char(2),8)_"^"_nameL_"^"_nameG_"^"_nameO_"^^"_nameT_"^^^SMC^^^^"_$select(drcodetype="D":"DN",drcodetype="P":"PRN",1:"")
+	
+	quit str
+	
+	// extract referring dr clinic details
+Clinic(intRefDr,Clinic) new (intRefDr,Clinic,CLINIC) set intRefDr=$get(intRefDr),Clinic=$get(Clinic),intClinic="" kill CLINIC
+	&SQL(SELECT CLN_RowId INTO :intClinic FROM PAC_RefDoctorClinic WHERE CLN_ParRef = :intRefDr AND CLN_Code = :Clinic)
+	if SQLCODE quit ""
+	quit intClinic
+	
+	// extract location
+Location(location,hospital) new (location,hospital) set location=##class(%Collation).AlphaUp($get(location)),hospital=$get(hospital)
+	set locat=""
+	if hospital="" do
+	. &SQL(SELECT CTLOC_RowId INTO :locat FROM CT_Loc WHERE CTLOC_Code = :location)
+	if hospital'="" do
+	. &SQL(SELECT CTLOC_RowId INTO :locat FROM CT_Loc, CT_Hospital WHERE CTLOC_Code = :location AND HOSP_Code = :hospital AND CTLOC_Hospital_DR = HOSP_RowId)
+	
+	quit locat
+	
+	// extract order related number
+OrderNumExtract(cnt1,cnt2,cnt3) new (cnt1,cnt2,cnt3,OrderNum) set cnt1=$get(cnt1),cnt2=$get(cnt2),cnt3=$get(cnt3)
+	set (OrdNum,FillerNum,PlacerNum,AccessionNum,PrescriptionNum)=""
+	
+	set seg="" for  set seg=$order(OrderNum(seg)) quit:seg=""  do
+	. set field="" for  set field=$order(OrderNum(seg,field)) quit:field=""  do
+	. . set num="",type=OrderNum(seg,field) if type="" quit
+	. . if cnt3'="",$data(^TMP("HL7",$job,cnt1,cnt2,cnt3,seg)) set num=$piece($get(^TMP("HL7",$job,cnt1,cnt2,cnt3,seg,field)),"^")
+	. . if cnt2'="",$data(^TMP("HL7",$job,cnt1,cnt2,seg)) set num=$piece($get(^TMP("HL7",$job,cnt1,cnt2,seg,field)),"^")
+	. . if type="MO",OrdNum="" set OrdNum=num
+	. . if type="FI",FillerNum="" set FillerNum=num
+	. . if type="PL",PlacerNum="" set PlacerNum=num
+	. . if type="AC",AccessionNum="" set AccessionNum=num
+	. . if type="PS",PrescriptionNum="" set PrescriptionNum=num
+	if OrdNum=""""""!($extract(##class(%Collation).AlphaUp(OrdNum),1,3)="UNK") set OrdNum=""
+	quit OrdNum_"|"_FillerNum_"|"_PlacerNum_"|"_AccessionNum_"|"_PrescriptionNum
+	
+	// extract med record type
+MedRecType(reject,code,search,type,HospMrn,RegMrn) new (code,search,type,reject,HospMrn,RegMrn)
+	set code=$get(code),search=$get(search),type=$get(type),HospMrn=$get(HospMrn),RegMrn=$get(RegMrn),(rowid,reject)=""
+	
+	if code=""""""!(code="""")!(code="") quit ""
+	
+	// search code as med record type
+	if search'="Y" do
+	. &SQL(SELECT TYP_RowId INTO :rowid FROM RTC_MRecordType WHERE TYP_Code = :code)
+	. if rowid="" set reject="Medical record type received "_code_" for Medical Record Id "_HospMrn_", Registration Id "_RegMrn_" does not exist in TrakCare"
+	
+	// search code as hospital on med record type
+	if search="Y" do
+	. set rowid("HOSP")=""
+	. &SQL(SELECT HOSP_RowId INTO :rowid('HOSP') FROM CT_Hospital WHERE HOSP_Code = :code)
+	. if SQLCODE set reject="Hospital code received "_code_" for Medical Record Id "_HospMrn_", Registration Id "_RegMrn_" does not exist in TrakCare" quit
+	. set rowid("TYPE")="" for  set rowid("TYPE")=$order(^RTC("TYPE",0,"Code",type,rowid("TYPE"))) quit:rowid("TYPE")=""  do  quit:rowid'=""
+	. . &SQL(SELECT TYP_CTLOC_DR -> CTLOC_Hospital_DR -> HOSP_RowId INTO :rowid('HOSPX') FROM RTC_MRecordType WHERE TYP_RowId = :rowid('TYPE'))
+	. . if SQLCODE quit
+	. . if rowid("HOSPX")=rowid("HOSP") set rowid=rowid("TYPE")
+	
+	. if rowid="" set reject="Medical record type received "_type_" for Hospital "_code_", Medical Record Id "_HospMrn_", Registration Id "_RegMrn_" does not exist in TrakCare"
+	
+	quit rowid
+
+
+

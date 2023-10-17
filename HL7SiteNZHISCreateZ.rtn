@@ -1,0 +1,155 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteNZHISCreateZ^MAC^^^0
+HL7SiteNZHISCreateZ // ML 18/08/2005 ; HL7 interface : create 'Z' transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteNZHISCreateZ.rtn#1 $
+	quit
+CheckZID ;; build DATA array - ZID : Other Patient Demographics
+ZID()	set intRegMrn=$get(intRegMrn) kill DATA
+	// extract patient details
+	kill PatDetail,PatDetailx
+	set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	// check f new null fields and change to ""
+	for xtable="PAPER","PAPMI" do
+	. if $data(old(xtable)) do NullChange^HL7Common3(xtable)
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do
+	. do CodeTable^HL7OutExtract1A(mtable)
+	// adjust name
+	set name=$$BuildName^HL7Common3($get(PatDetail(4)),$get(PatDetail(5)),$get(PatDetail(118)))
+	set $piece(name,"^",5)=$piece(title,"^")_"^^L"
+	set Nation=$get(PatDetail(22))
+	set NationalResident=$get(PatDetail(156))
+	set AusSthSeaIsl=$get(PatDetail(180))
+	set Name4=$get(PatDetail(188))
+	set DATA("ZID",1)=Nation
+	set DATA("ZID",2)=NationalResident
+	set DATA("ZID",3)=AusSthSeaIsl
+	set DATA("ZID",4)=Name4
+	// sup name change flag
+	if ",PAPERSONSURNAMEALIAS,PAPERSONALIAS,"[(","_table_",") do
+	. if trigger="Delete" set DATA("ZID",5)="3"
+	. if trigger="Insert" set DATA("ZID",5)="4"
+	. if trigger="Update" set DATA("ZID",5)="UPD"
+	for j=6,7,8 do
+	. set DATA("ZID",j)="N"
+	// check override flags
+	if $data(%request) do
+	. if $get(%request.Data("OverrideDup",1))="on" set DATA("ZID",6)="Y"
+	. if $get(%request.Data("OverideAddress",1))="on" set DATA("ZID",7)="Y"
+	. if $get(%request.Data("OverideMulti",1))="on" set DATA("ZID",8)="Y"
+	kill PatDetail,PatDetailx
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZNA ;; build DATA array - ZNA : Alias
+ZNA()	set intNum=$get(intNum) kill DATA
+	// only build ZNA i an alias table is updated
+	if table="PAPERSONSURNAMEALIAS"||(table="PAPERSONALIAS") do
+	. set intAliasNum=intNum
+	. kill AliasText
+	. if trigger="Delete" do
+	. . // extract deleted alias
+	. . set aliastype=$select(table="PAPERSONSURNAMEALIAS":"PSURALIAS",1:"PALIAS")
+	. . set aliasfield=$select(table="PAPERSONSURNAMEALIAS":15,1:13)
+	. . set AliasDetail=$get(old(aliastype,aliasfield))
+	. . set delim=$select($length($piece(AliasDetail,"|"),"_")=7:"_",1:",")
+	. . if $translate($piece(AliasDetail,"|"),delim)="" quit
+	. . set AliasText("PREVIOUS")=$piece($piece(AliasDetail,"|"),delim,1,5)
+	. . set $piece(AliasText("PREVIOUS"),delim,5)="1"
+	. . set AliasText("PREVIOUS")=$translate(AliasText("PREVIOUS"),delim,"^")
+	. if trigger="Insert"||(trigger="Update") do
+	. . // extract new/updated alias
+	. . set aliastype=$select(table="PAPERSONSURNAMEALIAS":"SUR",1:"ALIAS")
+	. . set AliasDetail=$$PatAlias^HL7OutExtract1(intAliasNum,aliastype)
+	. . set delim=$select($length($piece(AliasDetail,"|"),"_")=7:"_",1:",")
+	. . if $translate($piece(AliasDetail,"|"),delim)="" quit
+	. . set AliasText("CURRENT")=$piece($piece(AliasDetail,"|"),delim,1,5)
+	. . set $piece(AliasText("CURRENT"),delim,5)="1"
+	. . set AliasText("CURRENT")=$translate(AliasText("CURRENT"),delim,"^")
+	. . if trigger="Insert" quit
+	. . // extract previous alias caused by update
+	. . set aliastype=$select(table="PAPERSONSURNAMEALIAS":"PSURALIAS",1:"PALIAS")
+	. . set aliasfield=$select(table="PAPERSONSURNAMEALIAS":15,1:13)
+	. . set AliasDetail=$get(old(aliastype,aliasfield))
+	. . set delim=$select($length($piece(AliasDetail,"|"),"_")=7:"_",1:",")
+	. . if $translate($piece(AliasDetail,"|"),delim)="" quit
+	. . set AliasText("PREVIOUS")=$piece($piece(AliasDetail,"|"),delim,1,5)
+	. . set $piece(AliasText("PREVIOUS"),delim,5)="1"
+	. . set AliasText("PREVIOUS")=$translate(AliasText("PREVIOUS"),delim,"^")
+	. set DATA("ZNA",1)=1
+	. set DATA("ZNA",2)=$get(AliasText("CURRENT"))
+	. set DATA("ZNA",3)=$get(AliasText("PREVIOUS"))
+	kill AliasText
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZPR ;; build DATA array - ZPR : Additional Procedure Details
+ZPR() set intAnaeOper=$get(intAnaeOper),intAnaeNum=$get(intAnaeNum),intOperNum=$get(intOperNum) kill DATA
+	if table="ORANAESTHESIA"!(table="ORANAESTOPERATION") do  if intAnaeNum="" quit 0
+	. // get all required rowid's
+	. if intAnaeOper'="",intAnaeNum="" set intAnaeNum=$piece(intAnaeOper,"||",1,2)
+	. if intAnaeNum'="" do
+	. . &SQL(SELECT ANA_RBOperatingRoom_DR INTO :intOperNum FROM OR_Anaesthesia WHERE ANA_RowId = :intAnaeNum)
+	if table="RBOPERATINGROOM" do
+	. &SQL(SELECT ANA_RowID INTO :intAnaeNum FROM OR_Anaesthesia WHERE ANA_RBOperatingRoom_DR = :intOperNum)
+	// extract operation details
+	kill Operation if $$Operation^HL7OutExtract16(intOperNum,.Operation)
+	// extract code table detail
+	set mtable="RB_OperatingRoom" do CodeTable^HL7OutExtract16(mtable)
+	// extract doctors
+	kill doctor set drcodes=""
+	for i=7,28 if $get(Operation(i))'="" do
+	. if Operation(i)=""""!(Operation(i)="""""") quit
+	. set drid=Operation(i)
+	. set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	. set Operation(i)=$$BuildDoctor^HL7Common5(drcode)
+	for i=7,28 set doctor($select(i=7:"OP-SURGEON",1:"OP-ANAESTHETIST"))=$get(Operation(i))
+	kill remarks set comm=$get(Operation(12)),remarks="" if $listlength(comm) do
+	. for j=1:1:$listlength(comm) set line=$list(comm,j),line=$translate(line,$char(0)),remarks=$get(remarks)_$select($length(remarks):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(line,"O"),$char(13,10),HL7("LINEBK"))
+	// extract anaesthesia details
+	if intAnaeNum'="" kill Anaesthesia if $$Anaesthesia^HL7OutExtract16(intAnaeNum,.Anaesthesia)
+	// extract code table detail
+	if $data(Anaesthesia) set mtable="OR_Anaesthesia" do CodeTable^HL7OutExtract16(mtable)
+	set AnaesthesiaMethod=$get(Anaesthesia(6))
+	// extract doctors
+	set doctor("ANA-ANAESTHETIST")="" set drcodes=""
+	if $get(Anaesthesia(7))'="" do
+	. if Anaesthesia(7)=""""!(Anaesthesia(7)="""""") quit
+	. set drid=Anaesthesia(7)
+	. set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	. set Anaesthesia(7)=$$BuildDoctor^HL7Common5(drcode)
+	. set doctor("ANA-ANAESTHETIST")=$piece($get(Anaesthesia(7)),"^",1,3)
+	set SpecialEquipment=""
+	if intAnaeNum'="" do
+	. set row=0 for  set row=$order(^OR($piece(intAnaeNum,"||"),"ANA",$piece(intAnaeNum,"||",2),"OP",row)) quit:row=""  do
+	. . set intAnaeOper=intAnaeNum_"||"_row
+	. . // extract anaesthesia operation details
+	. . kill AnaestOper if $$AnaestOper^HL7OutExtract16(intAnaeOper,.AnaestOper)
+	. . // extract code table detail
+	. . set mtable="OR_Anaest_Operation" do CodeTable^HL7OutExtract16(mtable)
+	. . // extract doctors
+	. . set doctor("ANAOP-SURGEON")="" set drcodes=""
+	. . if $get(AnaestOper(11))'="" do
+	. . . if AnaestOper(11)=""""!(AnaestOper(11)="""""") quit
+	. . . set drid=AnaestOper(11)
+	. . . set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	. . . set AnaestOper(11)=$$BuildDoctor^HL7Common5(drcode)
+	. . . set doctor("ANAOP-SURGEON")=$piece($get(AnaestOper(11)),"^",1,3)
+	. . set procedure=$get(AnaestOper(44))
+	. . // use last rowid's special equipment as field not repeatable
+	. . if $translate($get(AnaestOper(45)),$char(13,10))'="" set SpecialEquipment=$translate($$TextConversion^HL7Common12(AnaestOper(45),"O"),$char(13,10),HL7("LINEBK"))
+	. . // use last rowid's date/time as field not repeatable
+	. . kill datetime for i="16^4^ANAOP-START^Y","19^5^ANAOP-FINISH^Y" do
+	. . . set datetime($piece(i,"^",3))=$$DateTime^HL7Common2($get(AnaestOper($piece(i,"^"))),$get(AnaestOper($piece(i,"^",2))),$piece(i,"^",4))
+	. . set DATA("ZPR",3)=$get(DATA("ZPR",3))_$select($length($get(DATA("ZPR",3))):"~",1:"")_procedure_"^"_doctor("ANAOP-SURGEON")_"^"_doctor("ANA-ANAESTHETIST")
+	// if no intAnaeNum use procedure from RB_OperatingRoom
+	if intAnaeNum="" do
+	. set procedure=$get(Operation(35))
+	. set DATA("ZPR",3)=procedure
+	set DATA("ZPR",1)="",DATA("ZPR",2)=$get(remarks)_"^"_$piece($get(doctor("OP-SURGEON")),"^",1,3)_"^"_$piece($get(doctor("OP-ANAESTHETIST")),"^",1,3)
+	set DATA("ZPR",4)=$get(datetime("ANAOP-START"))_"^"_$get(datetime("ANAOP-FINISH")),DATA("ZPR",5)=$get(AnaesthesiaMethod),DATA("ZPR",6)=$get(SpecialEquipment)
+	kill Operation,AnaestOper,Anaesthesia,datetime,doctor
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

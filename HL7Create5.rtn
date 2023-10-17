@@ -1,0 +1,471 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Create5^MAC^^^0
+HL7Create5 // ML 16/11/2006 ; HL7 interface : create transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Create5.rtn#1 $
+	quit
+	
+CheckAIG ;; build DATA array - AIG
+AIG()	set intApptNum=$get(intApptNum),count="" kill DATA
+	
+	if msgtype["SIU" do
+	. // extract appt schedule rowid
+	. set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+	
+	. // extract appointment schedule
+	. kill ApptSch if $$ApptSchedule^HL7OutExtract11(intApptSch,.ApptSch)
+	
+	. // extract resource location
+	. set intResource=$get(ApptSch(0))
+	. kill Resource if $$Resource^HL7OutExtract11(intResource,.Resource)
+	
+	. set resource=$get(Resource(7))_"^"_$get(Resource(8))_"^TRAKCARE",type=$get(Resource(19))
+	
+	. set DATA("AIG",1)=1,DATA("AIG",3)=resource,DATA("AIG",4)=type
+	
+	kill ApptSch,Resource
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckAIL ;; build data array - AIL
+AIL()	set intApptNum=$get(intApptNum),count="" kill DATA,Repeat
+	
+	// SQM_S25
+	if msgtype["S25" do
+	. if $get(locations)="" quit
+	. // extract location and location type
+	. for j=1:1:$listlength(locations) set detail=$list(locations,j) if $piece(detail,"^",2)'="" do
+	. . set count=count+1
+	. . if count=1 do
+	. . . set DATA("AIL",1)=count,DATA("AIL",3)=$piece(detail,"^",2)_"^^^^^"_$piece(detail,"^")
+	. . if count>1,repeat="Y" do
+	. . . set Repeat("AIL",count,1)=count,Repeat("AIL",count,3)=$piece(detail,"^",2)_"^^^^^"_$piece(detail,"^")
+	
+	// SRM_S01 or SRM_S04
+	if msgtype["S01"!(msgtype["S04") do
+	. set DATA("AIL",1)=1,DATA("AIL",3)=location_"^^^^^"
+	
+	// all other message types
+	if ",S25,S01,S04,"'[(","_$piece(msgtype,"^",2)_",") do
+	. // extract appointment details
+	. kill Appointment if $$Appointment^HL7OutExtract11(intApptNum,.Appointment)
+	. // extract appt schedule rowid
+	. set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+	
+	. // extract appointment schedule
+	. kill ApptSch if $$ApptSchedule^HL7OutExtract11(intApptSch,.ApptSch)
+	
+	. // extract resource location
+	. set intResource=$get(ApptSch(0))
+	. kill Resource if $$Resource^HL7OutExtract11(intResource,.Resource)
+	
+	. set value=$get(Resource(3)),(code,desc,type)=""
+	. &SQL(SELECT CTLOC_RespUnit_DR -> RU_Code, CTLOC_RespUnit_DR -> RU_Desc, CTLOC_Type INTO :code, :desc, :type FROM CT_Loc, CT_ResponsibleUnit WHERE CTLOC_RowId = :value)
+	. set locgroup=code_"^"_desc_"^"_type
+	
+	. // extract code table detail
+	. for mtable="RB_Appointment","RB_Resource" do CodeTable^HL7OutExtract11(mtable)
+	
+	. // calculate start and end date/time
+	. kill datetime set datetime("START")=$$DateTime^HL7Common2($get(ApptSch(3)),$get(ApptSch(5)),"Y")
+	
+	. set location=$get(Resource(3)),resourceRoom=$get(Resource(7))
+	. set apptstatus=$get(Appointment(5)),dur("MIN")=$get(Appointment(26))
+	
+	. if table'="RBOPERATINGROOM" do
+	. . set DATA("AIL",1)=1,DATA("AIL",2)=$select(msgtype["S12":"A",1:"U"),DATA("AIL",3)=$piece(location,"^")_"^^^^^^^^"_$piece(location,"^",2),DATA("AIL",4)=location,DATA("AIL",5)=locgroup
+	. . set DATA("AIL",6)=$get(datetime("START")),DATA("AIL",9)=$get(dur("MIN")),DATA("AIL",10)="min",DATA("AIL",12)=apptstatus
+	
+	. if table="RBOPERATINGROOM" do
+	. . set DATA("AIL",1)=1,DATA("AIL",2)=$select(msgtype["S12":"A",1:"U"),DATA("AIL",3)=$piece(location,"^")_"^"_resourceRoom_"^^^^^^^"_$piece(location,"^",2),DATA("AIL",4)=location
+	
+	kill Appointment,ApptSch,Resource
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckAIP ;; build data array - AIP
+AIP()	set intApptNum=$get(intApptNum),count="" kill DATA
+	
+	// SRM_S01, SRM_S04 or SQM_S25
+	if msgtype["S01"!(msgtype["S04")!(msgtype["S25") do
+	. set DATA("AIP",1)=1,DATA("AIP",2)="U",DATA("AIP",3)=$get(careprovider),DATA("AIP",4)="CP^Care Provider"
+	
+	// all other message types
+	if ",S01,S04,S25,"'[(","_$piece(msgtype,"^",2)_",") do
+	. // extract appointment details
+	. kill Appointment if $$Appointment^HL7OutExtract11(intApptNum,.Appointment)
+	
+	. // extract appt schedule rowid
+	. set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+	
+	. // extract appointment schedule
+	. kill ApptSch set SQLCODE=$$ApptSchedule^HL7OutExtract11(intApptSch,.ApptSch)
+	
+	. set intResource=$get(ApptSch(0))
+	. kill Resource set SQLCODE=$$Resource^HL7OutExtract11(intResource,.Resource)
+	. set intCareProv=$get(Resource(4))
+	. kill CareProv set SQLCODE=$$CareProvider^HL7OutExtract10(intCareProv,.CareProv)
+	
+	. set mtable="RB_Appointment" do CodeTable^HL7OutExtract11(mtable)
+	. set mtable="CT_CareProv" do CodeTable^HL7OutExtract10(mtable)
+	. // extract doctors
+	. kill doctor set drcode=""
+	. set i=4 if $get(Resource(i))'="" do
+	. . if Resource(i)=""""!(Resource(i)="""""") quit
+	. . set drcode=$$Provider^HL7Common5($get(Resource(i)),"","","","C","O")
+	. . set doctor("RESOURCE")=$$BuildDoctor^HL7Common5(drcode)
+	
+	. set apptstatus=$get(Appointment(5)),dur("MIN")=$get(Appointment(26)),resourcerole=$get(CareProv(7)),resourcegroup=$get(CareProv(45))
+	. // calculate start and end date/time
+	. kill datetime set datetime("START")=$$DateTime^HL7Common2($get(ApptSch(3)),$get(ApptSch(5)),"Y")
+.
+	. if table'="RBOPERATINGROOM" do
+	. . set DATA("AIP",1)=1,DATA("AIP",2)=$select(msgtype["S12":"A",1:"U"),DATA("AIP",3)=$get(doctor("RESOURCE")),DATA("AIP",4)=$select($translate(resourcerole,"^")="":"CP^Care Provider",1:resourcerole)
+	. . set DATA("AIP",5)=resourcegroup,DATA("AIP",6)=$get(datetime("START")),DATA("AIP",9)=$get(dur("MIN")),DATA("AIP",10)="min",DATA("AIP",12)=apptstatus
+	
+	. if table="RBOPERATINGROOM"||(table="RBOPERROOMSECPROC") do
+	. . // extract operation details
+	. . if $$Operation^HL7OutExtract16(intOperNum,.Operation)
+	
+	. . // extract code table detail
+	. . set mtable="RB_OperatingRoom" do CodeTable^HL7OutExtract16(mtable)
+	
+	. . // extract doctors
+	. . kill doctor set drcode=""
+	. . for i=7,28 if $get(Operation(i))'="" do
+	. . . if Operation(i)=""""!(Operation(i)="""""") quit
+	. . . set drcode=$$Provider^HL7Common5($get(Operation(i)),"","","","C","O")
+	. . . set doctor=$$BuildDoctor^HL7Common5(drcode)
+	. . . set resourcerole=$select(i="7":"S^SURGEON",i="28":"AN^ANAETHETIST",1:"")
+	
+	. . . set count=count+1
+	. . . if count=1 do
+	. . . . set DATA("AIP",1)=count,DATA("AIP",2)=$select(msgtype["S12":"A",1:"U"),DATA("AIP",3)=$get(doctor),DATA("AIP",4)=$select($translate(resourcerole,"^")="":"CP^Care Provider",1:resourcerole)
+	. . . if count>1,repeat="Y" do
+	. . . . set Repeat("AIP",count,1)=count,Repeat("AIP",count,2)=$select(msgtype["S12":"A",1:"U"),Repeat("AIP",count,3)=$get(doctor),Repeat("AIP",count,4)=$select($translate(resourcerole,"^")="":"CP^Care Provider",1:resourcerole)
+	
+	kill ApptSch,Resource,CareProv,doctor,Operation
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckAIS ;; build data array - AIS
+AIS()	set intApptNum=$get(intApptNum),count="" kill DATA,Repeat
+	
+	// SIU_S23
+	if msgtype["S23" do
+	. // extract all USRN's required to be sent
+	. set i="" for  set i=$order(^TMP("EBOOK-NOT-AVAIL-SLOTS",$job,i)) quit:i=""  do
+	. . set USRN=$get(^TMP("EBOOK-NOT-AVAIL-SLOTS",$job,i)) if USRN="" quit
+	. . // check USRN format
+	. . set newUSRN=$$USRNFormat^HL7Common13(USRN,"IE")
+	. . set newUSRN=$$TextConversion^HL7Common12(newUSRN,"O")
+	. . // extract slot details
+	. . set detail=$get(^TMP("EBOOK-NOT-AVAIL-SLOTS",$job,i,"DETAIL"))
+	. . set date("START")=$piece(detail,"^"),time("START")=$piece(detail,"^",2),time("END")=$piece(detail,"^",3),service=$piece(detail,"^",4)
+	. . set datetime("START")=$$DateTime^HL7Common2(date("START"),time("START"),"Y")
+	. . set detail=$$CalculateDuration^HL7Common12(date("START"),time("START"),date("START"),time("END"))
+	. . set duration=$piece(detail,"^"),durationunits=$piece(detail,"^",2)
+	. . // service
+	. . set intItmNum=$piece($get(^RBC("SER",service)),"^")
+	. . set detail=$get(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),1)),code=$piece(detail,"^"),desc=$piece(detail,"^",2)
+	. . set service=code_"^"_desc
+	. . kill ExtCode set intItmExt=""
+	. . // check for external code
+	. . set seq=0 for  set seq=$order(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq)) quit:seq=""  do  quit:intItmExt'=""
+	. . . set detail=$get(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq))
+	. . . set datefrom=$piece(detail,"^"),dateto=$piece(detail,"^",2),defaultsend=$piece(detail,"^",9)
+	. . . // check if ordered date falls with in date applicable range
+	. . . if datefrom'="",datefrom>date("START") quit
+	. . . if dateto'="",dateto<date("START") quit
+	. . . if defaultsend="Y" set intItmExt=intItmNum_"||"_seq quit
+	. . . // use default send item if found
+	. . . set ExtCode(datefrom,$select(dateto'="":dateto,1:" "),intItmNum_"||"_seq)=""
+	
+	. . if intItmExt="" do
+	. . . set datefrom=$order(ExtCode(""),-1) quit:datefrom=""
+	. . . set dateto=$order(ExtCode(datefrom,""),-1) quit:dateto=""
+	. . . set intItmExt=$order(ExtCode(datefrom,dateto,""),-1)
+	
+	. . // extract external code detail
+	. . set (ExternalCode,ExternalDesc)=""
+	. . kill SQLCODE if intItmExt'="" do
+	. . . &SQL(SELECT EXT_Code, EXT_Desc INTO :ExternalCode, :ExternalDesc FROM ARC_ItemExternalCodes WHERE EXT_RowId = :intItmExt)
+	. . . set ExternalCode=$get(ExternalCode)_"^"_$get(ExternalDesc)
+	. . set count=count+1
+	. . if count=1 do
+	. . . set DATA("AIS",1)=count,DATA("AIS",3)=$select($piece($get(ExternalCode),"^")'="":ExternalCode,1:service),DATA("AIS",4)=datetime("START")
+	. . . set DATA("AIS",7)=duration,DATA("AIS",8)=durationunits,DATA("AIS",12)=newUSRN_"^^TRAKCARE_USRN"
+	. . if count>1,repeat="Y" do
+	. . . set Repeat("AIS",count,1)=count,Repeat("AIS",count,3)=$select($piece($get(ExternalCode),"^")'="":ExternalCode,1:service),Repeat("AIS",count,4)=datetime("START")
+	. . . set Repeat("AIS",count,7)=duration,Repeat("AIS",count,8)=durationunits,Repeat("AIS",count,12)=newUSRN_"^^TRAKCARE_USRN"
+.
+	// SIU_S24
+	if msgtype["S24" do
+	. // extract all USRN's required to be sent
+	. set i="" for  set i=$order(^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,i)) quit:i=""  do
+	. . set USRN=$get(^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,i)) if USRN="" quit
+	. . // check USRN format
+	. . set newUSRN=$$USRNFormat^HL7Common13(USRN,"IE")
+	. . set newUSRN=$$TextConversion^HL7Common12(newUSRN,"O")
+	. . // extract slot details
+	. . set detail=$get(^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,i,"DETAIL"))
+	. . set date("START")=$piece(detail,"^"),time("START")=$piece(detail,"^",2),time("END")=$piece(detail,"^",3),service=$piece(detail,"^",4)
+	. . set datetime("START")=$$DateTime^HL7Common2(date("START"),time("START"),"Y")
+	. . set detail=$$CalculateDuration^HL7Common12(date("START"),time("START"),date("START"),time("END"))
+	. . set duration=$piece(detail,"^"),durationunits=$piece(detail,"^",2)
+	. . // service
+	. . set intItmNum=$piece($get(^RBC("SER",service)),"^")
+	. . set detail=$get(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),1)),code=$piece(detail,"^"),desc=$piece(detail,"^",2)
+	. . set service=code_"^"_desc
+	. . kill ExtCode set intItmExt=""
+	. . // check for external code
+	. . set seq=0 for  set seq=$order(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq)) quit:seq=""  do  quit:intItmExt'=""
+	. . . set detail=$get(^ARCIM($piece(intItmNum,"||"),$piece(intItmNum,"||",2),"EXT",seq))
+	. . . set datefrom=$piece(detail,"^"),dateto=$piece(detail,"^",2),defaultsend=$piece(detail,"^",9)
+	. . . // check if ordered date falls with in date applicable range
+	. . . if datefrom'="",datefrom>date("START") quit
+	. . . if dateto'="",dateto<date("START") quit
+	. . . if defaultsend="Y" set intItmExt=intItmNum_"||"_seq quit
+	. . . // use default send item if found
+	. . . set ExtCode(datefrom,$select(dateto'="":dateto,1:" "),intItmNum_"||"_seq)=""
+	
+	. . if intItmExt="" do
+	. . . set datefrom=$order(ExtCode(""),-1) quit:datefrom=""
+	. . . set dateto=$order(ExtCode(datefrom,""),-1) quit:dateto=""
+	. . . set intItmExt=$order(ExtCode(datefrom,dateto,""),-1)
+	
+	. . // extract external code detail
+	. . set (ExternalCode,ExternalDesc)=""
+	. . kill SQLCODE if intItmExt'="" do
+	. . . &SQL(SELECT EXT_Code, EXT_Desc INTO :ExternalCode, :ExternalDesc FROM ARC_ItemExternalCodes WHERE EXT_RowId = :intItmExt)
+	. . . set ExternalCode=$get(ExternalCode)_"^"_$get(ExternalDesc)
+	. . set count=count+1
+	. . if count=1 do
+	. . . set DATA("AIS",1)=count,DATA("AIS",3)=$select($piece($get(ExternalCode),"^")'="":ExternalCode,1:service),DATA("AIS",4)=datetime("START")
+	. . . set DATA("AIS",7)=duration,DATA("AIS",8)=durationunits,DATA("AIS",12)=newUSRN_"^^TRAKCARE_USRN"
+	. . if count>1,repeat="Y" do
+	. . . set Repeat("AIS",count,1)=count,Repeat("AIS",count,3)=$select($piece($get(ExternalCode),"^")'="":ExternalCode,1:service),Repeat("AIS",count,4)=datetime("START")
+	. . . set Repeat("AIS",count,7)=duration,Repeat("AIS",count,8)=durationunits,Repeat("AIS",count,12)=newUSRN_"^^TRAKCARE_USRN"
+	
+	// SQM_S25
+	if msgtype["S25" do
+	. if $get(services)="" quit
+	. for i=1:1:$length(services,"~") set detail=$piece(services,"~",i) if $translate(detail,"^~")'="" do
+	. . // extract service/payor/plan
+	. . set service=$piece(detail,"^"),payor=$piece(detail,"^",2),plan=$piece(detail,"^",3)
+	. . if payor'="" set payor=payor_"^^PAYOR"
+	. . if plan'="" set plan=plan_"^^PLAN"
+	. . set count=count+1
+	. . if count=1 do
+	. . . set DATA("AIS",1)=count,DATA("AIS",3)=service,DATA("AIS",11)=payor_$select($get(payor)'="":"~",1:"")_plan
+	. . if count>1,repeat="Y" do
+	. . . set Repeat("AIS",count,1)=count,Repeat("AIS",count,3)=service,Repeat("AIS",count,11)=payor_$select($get(payor)'="":"~",1:"")_plan
+	
+	// SRM_S01 or SRM_S04
+	if msgtype["S01"!(msgtype["S04") do
+	. if payor'="" set payor=payor_"^^PAYOR"
+	. if plan'="" set plan=plan_"^^PLAN"
+	. set DATA("AIS",1)=1,DATA("AIS",3)=service,DATA("AIS",11)=payor_$select($get(payor)'="":"~",1:"")_plan
+	
+	// all other message types
+	if ",S23,S24,S25,S01,S04,"'[(","_$piece(msgtype,"^",2)_",") do
+	. // extract appointment
+	. kill Appointment if $$Appointment^HL7OutExtract11(intApptNum,.Appointment)
+	
+	. set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+	. kill ApptSch set SQLCODE=$$ApptSchedule^HL7OutExtract11(intApptSch,.ApptSch)
+	
+	. // extract code table detail
+	. set mtable="RB_Appointment" do CodeTable^HL7OutExtract11(mtable)
+	
+	. set service=$get(Appointment(18))
+	. // calculate start and end date/time
+	. kill datetime set datetime("START")=$$DateTime^HL7Common2($get(ApptSch(3)),$get(ApptSch(5)),"Y")
+	
+	. if ",RBOPERATINGROOM,RBOPERROOMSECPROC,"'[(","_table_",") do
+	. . set DATA("AIS",1)=1,DATA("AIS",2)="U",DATA("AIS",3)=service,DATA("AIS",4)=datetime("START")
+	
+	. if ",RBOPERATINGROOM,RBOPERROOMSECPROC,"[(","_table_",") do
+	. . // extract operation details
+	. . kill Operation if $$Operation^HL7OutExtract16(intOperNum,.Operation)
+	
+	. . // extract code table detail
+	. . set mtable="RB_OperatingRoom" do CodeTable^HL7OutExtract16(mtable)
+	
+	. . set procedure=$get(Operation(9))
+	. . if procedure="" set procedure=$get(Operation(35))
+	
+	. . set count=count+1
+	. . set DATA("AIS",1)=count,DATA("AIS",2)=$select(msgtype["S12":"A",1:"U"),DATA("AIS",3)=procedure,DATA("AIS",4)=datetime("START")
+	
+	. . if repeat="Y" do
+	. . . set row=0 for  set row=$order(^RBOP(intOperNum,"SPR",row)) quit:row=""  do
+	. . . . set intSecProcOp=intOperNum_"||"_row
+	
+	. . . . // extract secondary procedure details
+	. . . . kill SecProcedure if $$SecProcedure^HL7OutExtract16(intSecProcOp,.SecProcedure) quit
+	
+	. . . . // extract code table detail
+	. . . . set mtable="RB_OperRoomSecProc" do CodeTable^HL7OutExtract16(mtable)
+	
+	. . . . set procedure=$get(SecProcedure(4))
+	. . . . if procedure="" set procedure=$get(SecProcedure(3))
+	
+	. . . . set action=$select(msgtype["S12":"A",1:"U")
+	. . . . if table="RBOPERROOMSECPROC" do
+	. . . . . if (trigger="Insert")&&($get(intSecProc)=intSecProcOp) set action="A"
+	
+	. . . . set count=count+1
+	. . . . set Repeat("AIS",count,1)=count,Repeat("AIS",count,2)=action,Repeat("AIS",count,3)=procedure,Repeat("AIS",count,4)=datetime("START")
+	
+	. . . if table="RBOPERROOMSECPROC" do
+	. . . . if trigger="Delete",$data(old("RBOPERROOMSECPROC")) do
+	. . . . . kill SecProcedure merge SecProcedure=old("RBOPERROOMSECPROC")
+	
+	. . . . . // extract code table detail
+	. . . . . set mtable="RB_OperRoomSecProc" do CodeTable^HL7OutExtract16(mtable)
+	
+	. . . . . set procedure=$get(SecProcedure(4))
+	. . . . . if procedure="" set procedure=$get(SecProcedure(3))
+	
+	. . . . . set count=count+1
+	. . . . . set Repeat("AIS",count,1)=count,Repeat("AIS",count,2)="D",Repeat("AIS",count,3)=procedure,Repeat("AIS",count,4)=datetime("START")
+	
+	kill Appointment,ApptSch,datetime,ExtCode,Operation,SecProcedure
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckARQ ;; build data array - ARQ
+ARQ()	kill DATA
+	// SQM_S25
+	if msgtype["S25" do
+	. set datetime("QUERY-FROM")="" if $get(date("QUERY-FROM"))'="" set datetime("QUERY-FROM")=$$DateTime^HL7Common2($get(date("QUERY-FROM")),$get(time("QUERY-FROM")),"Y")
+	. set datetime("QUERY-TO")="" if $get(date("QUERY-TO"))'="" set datetime("QUERY-TO")=$$DateTime^HL7Common2($get(date("QUERY-TO")),$get(time("QUERY-TO")),"Y")
+	. set GroupNum="" for i=1:1:$length(services,"~") set detail=$piece(services,"~",i) if $piece(detail,"^",4)'="" set GroupNum=$piece(detail,"^",4) quit
+	
+	. if $get(UBRN)'="" set DATA("ARQ",1)=$$TextConversion^HL7Common12(UBRN,"O")
+	. set DATA("ARQ",4)=GroupNum,DATA("ARQ",11)=datetime("QUERY-FROM")_"^"_datetime("QUERY-TO")
+	
+	// SRM_S01 or SRM_S04
+	if msgtype["S01"!(msgtype["S04") do
+	. // check USRN format
+	. set newUSRN=$$USRNFormat^HL7Common13(USRN,"IE")
+	. set newUSRN=$$TextConversion^HL7Common12(newUSRN,"O")
+	. set datetime("APPT")="" if $get(date("APPT"))'="" set datetime("APPT")=$$DateTime^HL7Common2($get(date("APPT")),$get(time("APPT")),"Y")
+	. set CancelReason="" if $get(ReasonId)'="" do
+	. . set detail=$get(^RBC("RFC",ReasonId)),CancelReason=$piece(detail,"^")_"^"_$piece(detail,"^",2)_"^TRAKCARE"
+	
+	. set DATA("ARQ",1)=$$TextConversion^HL7Common12(UBRN,"O"),DATA("ARQ",$select($get(EB("IDFROM"))'="":$piece(EB("IDFROM"),"-",2),1:5))=newUSRN
+	. set DATA("ARQ",4)=GroupNum,DATA("ARQ",6)=CancelReason,DATA("ARQ",11)=datetime("APPT")
+	kill datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckRGS ;; build data array - RGS
+RGS()	kill DATA
+	
+	set DATA("RGS",1)=1,DATA("RGS",2)="U"
+	
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	
+CheckSCH ;; build data array - SCH
+SCH()	set intApptNum=$get(intApptNum) kill DATA
+	set TransactionUser=""
+	// appointment data only available if not SIU^S23/S24
+	if ",S23,S24,"'[(","_$piece(msgtype,"_",2)_",") do
+	. // extract patient details
+	. kill Appointment if $$Appointment^HL7OutExtract11(intApptNum,.Appointment)
+	. // extract appointment schedule
+	. set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+	. kill ApptSch if $$ApptSchedule^HL7OutExtract11(intApptSch,.ApptSch)
+	
+	. // extract resource
+	. set intResource=$get(ApptSch(0))
+	. kill Resource set SQLCODE=$$Resource^HL7OutExtract11(intResource,.Resource)
+	
+	. // extract effective date session
+	. set intEffDate=$get(ApptSch(18))
+	. kill EffDateSess set SQLCODE=$$EffDateSess^HL7OutExtract11(intEffDate,.EffDateSess)
+	
+	. set USRN=$get(Appointment(82))
+	. if USRN="" set USRN=$piece($$USRN^CRBAppointment4(intApptSch,$get(Appointment(18))),"~")
+	. // check USRN format
+	. set newUSRN=$$USRNFormat^HL7Common13(USRN,"IE")
+	. // USRN requires '|' chars excaping
+	. set newUSRN=$$TextConversion^HL7Common12(newUSRN,"O")
+	
+	. // check for new null fields and change to ""
+	. if $data(old("RBAPPOINTMENT")) do NullChange^HL7Common3("RBAPPOINTMENT")
+	
+	. // extract code table detail
+	. for mtable="RB_Appointment","RB_ResEffDateSession" do CodeTable^HL7OutExtract11(mtable)
+	
+	. // check if RBOperatingRoom is driving output
+	. if table="RBOPERATINGROOM" do
+	. . if $$Operation^HL7OutExtract16(intOperNum,.Operation)
+	. . // extract code table detail
+	. . set mtable="RB_OperatingRoom" do CodeTable^HL7OutExtract16(mtable)
+	. . // check USRN format - using appt rowid as USRN as USRN not generated from RBOperatingRoom
+	. . // USRN requires '|' chars excaping
+	. . set newUSRN=$$TextConversion^HL7Common12(intApptNum,"O")
+	
+	. // extract group number
+	. set intOrdNum=$$ApptOrder^HL7OutExtract11(intApptNum)
+	. set GroupNum="" if intOrdNum'="" do
+	. . &SQL(SELECT OEORI_ItemGroup INTO :GroupNum FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	. set apptstatus=$get(Appointment(5)),TransactionUser=$get(Appointment(14)),dur("MIN")=$get(Appointment(26)),dur("SEC")=dur("MIN")*60
+	. set CancelReason=$get(Appointment(31)),ReasonNotShow=$get(Appointment(32))
+	. set UBRN=$get(Appointment(83)),UBRN=$$TextConversion^HL7Common12(UBRN,"O")
+	. set appttype=$get(EffDateSess(11))
+	
+	. // fields to set if RBOperatingRoom
+	. if table="RBOPERATINGROOM" do
+	. . set CancelReason=$get(Operation(29)),TransactionUser=$get(Operation(38))
+	
+	. // extract doctors
+	. kill doctor set doctor("PLACER")=""
+	. if $get(Resource(4))'="" do
+	. . if Resource(4)=""""!(Resource(4)="""""") quit
+	. . set drid=Resource(4)
+	. . set drcode=$$Provider^HL7Common5(drid,"","","","C","O")
+	. . set doctor("PLACER")=$$BuildDoctor^HL7Common5(drcode)
+	
+	. // calculate start and end date/time
+	. kill date,datetime set date("START")=$get(ApptSch(3)),time("START")=$get(ApptSch(5))
+	. set date("END")=date("START")+((time("START")+dur("SEC"))\86400),time("END")=((time("START")+dur("SEC"))-(86400*((time("START")+dur("SEC"))\86400)))
+	. set datetime("START")=$$DateTime^HL7Common2(date("START"),time("START"),"Y"),datetime("FINISH")=$$DateTime^HL7Common2(date("END"),time("END"),"Y")
+	
+	if ",S23,S24,"[(","_$piece(msgtype,"_",2)_",") set TransactionUser=LogonUser
+	
+	set EnteredBy=""
+	// entered by
+	if TransactionUser'="" do
+	. set (login,surname,given,usertype,hospital)=""
+	. &SQL(SELECT SSUSR_Initials, SSUSR_Surname, SSUSR_GivenName, SSUSR_StaffType_DR -> STAFF_Code INTO :login, :surname, :given, :usertype FROM SS_User, CT_StaffType WHERE SSUSR_RowId = :TransactionUser)
+	. if $get(Appointment(68))'="" do
+	. . &SQL(SELECT HOSP_Code INTO :hospital FROM CT_Hospital WHERE HOSP_RowId = :Appointment(68))
+	. // convert escape characters
+	. for var="login","surname","given","usertype","hospital" set @var=$$TextConversion^HL7Common12($get(@var),"O")
+	. set EnteredBy=login_"^"_surname_"^"_given_"^^^^^^TRAKCARE^^^^"_usertype_"^"_hospital
+	
+	// do not populate if SIU^S23/S24 as not all data available
+	if ",S23,S24,"'[(","_$piece(msgtype,"_",2)_",") do
+	. set DATA("SCH",1)=UBRN,DATA("SCH",2)=newUSRN,DATA("SCH",4)=GroupNum,DATA("SCH",8)=appttype,DATA("SCH",9)=dur("MIN"),DATA("SCH",10)="min",DATA("SCH",11)="^^^"_datetime("START")_"^"_datetime("FINISH")_"^^^^"
+	. set DATA("SCH",12)=doctor("PLACER"),(DATA("SCH",16),DATA("SCH",20))=EnteredBy,DATA("SCH",25)=apptstatus_"^TRAKCARE"
+	
+	if ",S23,S24,"[(","_$piece(msgtype,"_",2)_",") set DATA("SCH",20)=EnteredBy
+	
+	if msgtype["S12" set DATA("SCH",6)="NWA^New Appointment^TRAKCARE"
+	if msgtype["S13" set DATA("SCH",6)="RSA^Rescheduled Appointment^TRAKCARE"
+	if msgtype["S14" set DATA("SCH",6)="MDA^Modified Appointment^TRAKCARE"
+	if msgtype["S15" set DATA("SCH",6)=$select(CancelReason'="":CancelReason,1:"CSL^Cancelled Slot")_"^TRAKCARE"
+	if msgtype["S23" set DATA("SCH",6)="CSL^Cancelled Slot^TRAKCARE"
+	if msgtype["S26" set DATA("SCH",7)=ReasonNotShow_"^TRAKCARE"
+	
+	kill Appointment,ApptSch,EffDateSess,Resource,AdmDetail,AdmDetailx,datetime,date,doctor,Operation
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+
+
+

@@ -1,0 +1,193 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7MastFileM08^MAC^^^0
+HL7MastFileM08 // ML 19/10/2005 ; HL7 interface : master file notification categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7MastFileM08.rtn#1 $
+	quit
+	
+	// M08 - order items
+M08()
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if '$data(^TMP("HL7",$job,cnt1,"MFI")) quit
+	. set mode=$get(^TMP("HL7",$job,cnt1,"MFI",3))
+	
+	. // only allow updates
+	. if mode="UPD" do
+	. . // extract table to update
+	. . set table=$piece($get(^TMP("HL7",$job,cnt1,"MFI",1)),"^")
+	. . // check if table set to update
+	. . set reject=""
+	. . set updtable=$$TableCheck^HL7MastFile(event,table,.reject) if reject'="" do  quit
+	. . . set reject("Detail")="MFI^^1~206"
+	
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,"MFE")) quit
+	. . . set updtype=$get(^TMP("HL7",$job,cnt1,cnt2,"MFE",1))
+	. . . set date=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"MFE",3)),1,8),date=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	. . . if date="" set date=+$h
+	
+	. . . // extract order details
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"OM1",2)),code=$piece(detail,"^"),desc=$piece(detail,"^",2)
+	
+	. . . // extract other codes
+	. . . set extcodes=$get(^TMP("HL7",$job,cnt1,cnt2,"OM1",7))
+.
+	. . . set subcategory=""
+	. . . // order sub category
+	. . . if $translate($get(^TMP("HL7",$job,cnt1,cnt2,"OM1",16)),"^")'="" do
+	. . . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"OM1",16))
+	. . . . set subcategory=$$SubCategory($piece(detail,"^"))
+	
+	. . . set specimen=""
+	. . . // extract specimen
+	. . . if $piece($get(^TMP("HL7",$job,cnt1,cnt2,"OM1",4)),"^")="Y" do
+	. . . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"OM4",6))
+	. . . . set specimen=$$Specimen($piece(detail,"^"),$piece(detail,"^",2),date)
+	
+	. . . // extract locations
+	. . . set locations=$get(^TMP("HL7",$job,cnt1,cnt2,"OM1",27))
+	
+	. . . do UpdateTable(updtable,updtype,code,desc,date)
+	
+	if mode'="UPD" do
+	. set reject="Master file mode "_mode_" received is not catered for.  Only catering for mode 'UPD'",reject("Detail")="MFI^^3~206"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// add/update order item
+UpdateTable(updtable,updtype,code,desc,date) set updtable=$get(updtable),updtype=$get(updtype),code=##class(%Collation).AlphaUp($get(code)),desc=$get(desc)
+	set date=$get(date),RowId="" kill PLIST
+	
+	set tablename=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7MasterFileTables",updtable))
+	
+	if updtable="ARCItmMast" do
+	. &SQL(SELECT * INTO :PLIST() FROM ARC_ItmMast WHERE ARCIM_Code = :code)
+	
+	. // code already exists for add
+	. if 'SQLCODE,updtype="MAD" do  quit
+	. . set reject="Unable to add code "_code_" ("_desc_") "_"to table "_tablename_", code already exists",reject("Detail")="MFE^^4~206"
+	. // code does not exist for update
+	. if SQLCODE,updtype'="MAD" do  quit
+	. . set reject="Unable to update code "_code_" ("_desc_") "_"for table "_tablename_", code does not exist",reject("Detail")="MFE^^4~103"
+	
+	. set Exists='(SQLCODE)
+	
+	. // update existing order item
+	. if Exists do
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(3)=desc,PLIST(4)=code,PLIST(73)=$select(updtype="MUP":PLIST(73),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . set PLIST(83)="Y",PLIST(89)=+$h,PLIST(90)=$piece($h,",",2),PLIST(102)="Y"
+	. . &SQL(UPDATE ARC_ItmMast VALUES :PLIST() WHERE ARCIM_RowId = :RowId)
+	
+	. // insert new order item
+	. if 'Exists do
+	. . kill PLIST set PLIST(2)=code,PLIST(3)=desc,PLIST(4)=code,PLIST(9)=subcategory,PLIST(47)=MASTFILE("M08-DEFBILLSUBGRP"),PLIST(58)=date,PLIST(62)=$increment(^ARCIM(0))
+	. . set PLIST(83)="Y",PLIST(89)=+$h,PLIST(90)=$piece($h,",",2)
+	. . for j=8,23,24,43,44,59,65 set PLIST(j)=""
+	. . for j=86,87,93,109,121,132,133,137,138,140,144 set PLIST(j)="N"
+	. . &SQL(INSERT INTO ARC_ItmMast VALUES :PLIST())
+	. . set RowId=%ROWID
+	
+	. // set rejection message
+	. if SQLCODE do  quit
+	. . set reject="Unable to "_$select(updtype="MAD":"add",updtype="MUP":"update",updtype="MDC":"deactivate",1:"reactivate")_" code "_code_" ("_desc_") "_"to table "_tablename
+	. . set reject("Detail")="MFE^"_$get(^TMP("HL7",$job,cnt1,"MFE",2))_"^4~206"
+	
+	. // no need to continue if deactivated
+	. if updtype="MDC" quit
+	
+	. // build keywords
+	. do arcim^at2217(RowId)
+	
+	. // add specimen to order item
+	. if $get(specimen)'="" do
+	. . &SQL(SELECT COUNT(*) INTO :count FROM ARC_ItemSpecimen WHERE SPEC_ParRef = :RowId AND SPEC_Specimen_DR = :specimen)
+	. . if count'=0 quit
+	. . kill PLIST set PLIST(0)=RowId,PLIST(3)=specimen,PLIST(4)="Y"
+	. . &SQL(INSERT INTO ARC_ItemSpecimen VALUES :PLIST())
+	
+	. set OrdItemRowId=RowId,OrdItem=$piece(RowId,"||")
+	
+	. // extract locations and add to order item
+	. kill LOCAT for cnt=1:1:$length(locations,"~") do
+	. . set detail=$piece(locations,"~",cnt),lcode=$piece(detail,"^"),ldesc=$piece(detail,"^",2) if lcode="" quit
+	. . if $data(LOCAT(lcode)) quit
+	. . set LocRowId=$$Location(lcode,ldesc,date),LOCAT(lcode)=""
+	. . if LocRowId="" quit
+	
+	. . // set location as default if no others
+	. . &SQL(SELECT COUNT(*) INTO :count FROM ARC_ItmRecLoc WHERE ARCRL_ARCIMSub = :OrderItem)
+	
+	. . kill PLIST
+	. . &SQL(SELECT * INTO :PLIST() FROM ARC_ItmRecLoc WHERE ARCRL_ARCIMSub = :OrdItem AND ARCRL_RecLoc_DR = :LocRowId)
+	
+	. . // insert new order item location
+	. . if SQLCODE do
+	. . . kill PLIST set PLIST(2)=OrdItem,PLIST(5)=LocRowId,PLIST(7)="Execute",PLIST(8)=$select(count=0:"Y",1:"N"),PLIST(12)=date
+	. . . &SQL(INSERT INTO ARC_ItmRecLoc VALUES :PLIST())
+	. . . if SQLCODE do  quit
+	. . . . set reject="Unable to add location "_lcode_" ("_ldesc_") to Order Item "_code_" ("_desc_")" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	
+	. // extract external codes and location combos
+	. set extcodes=code_"^"_desc_"~"_extcodes
+	. kill LOCAT,EXTCODE
+	. for cnt=1:1:$length(extcodes,"~") do
+	. . set detail=$piece(extcodes,"~",cnt),ecode=$piece(detail,"^"),edesc=$piece(detail,"^",2) if ecode="" quit
+	. . set detail=$piece(locations,"~",cnt) if $piece(detail,"^")="" set detail=$piece(locations,"~")
+	. . set lcode=$piece(detail,"^"),ldesc=$piece(detail,"^",2)
+	. . set LocRowId=$$Location(lcode,ldesc,date)
+	
+	. . // check external code based on location
+	. . kill PLIST
+	. . &SQL(SELECT * INTO :PLIST() FROM ARC_ItemExternalCodes WHERE EXT_Code = :ecode AND EXT_Desc = :edesc AND EXT_CTLOC_DR = :LocRowId AND EXT_ParRef = :OrdItemRowId)
+	
+	. . // insert new external code
+	. . if SQLCODE do
+	. . . kill PLIST set PLIST(0)=OrdItemRowId,PLIST(3)=date,PLIST(6)=ecode,PLIST(8)=edesc,PLIST(10)=LocRowId
+	. . . &SQL(INSERT INTO ARC_ItemExternalCodes VALUES :PLIST())
+	. . . if SQLCODE do  quit
+	. . . . set reject="Unable to add external code "_ecode_" ("_edesc_") to Order Item "_code_" ("_desc_")" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	
+	quit
+	
+	// extract specimen RowId
+Specimen(code,desc,date) new (code,desc,date) set code=##class(%Collation).AlphaUp($get(code)),desc=$get(desc),date=$get(date)
+	set RowId="" kill PLIST
+	
+	&SQL(SELECT * INTO :PLIST() FROM CT_Specimen WHERE SPEC_Code = :code)
+	
+	set Exists='(SQLCODE)
+	
+	// update existing specimen detail
+	if Exists do
+	. set RowId=PLIST(1) kill PLIST(1) set PLIST(3)=desc
+	. &SQL(UPDATE CT_Specimen VALUES :PLIST() WHERE SPEC_RowId = :RowId)
+	
+	// insert new specimen
+	if 'Exists do
+	. kill PLIST set PLIST(2)=code,PLIST(3)=desc,PLIST(4)=date
+	. &SQL(INSERT INTO CT_Specimen VALUES :PLIST())
+	. set RowId=%ROWID
+	
+	quit RowId
+	
+	// extract receiving location
+Location(code,desc,date) new (code,desc,date) set code=##class(%Collation).AlphaUp($get(code)),desc=$get(desc),date=$get(date)
+	set RowId=""  kill PLIST
+	
+	&SQL(SELECT * INTO :PLIST() FROM CT_Loc WHERE CTLOC_Code = :code)
+	
+	set RowId=$get(PLIST(1))
+	
+	quit RowId
+.
+	// extract order subcategory
+SubCategory(code) new (code) set code=##class(%Collation).AlphaUp($get(code))
+.
+	set RowId=""
+	set RowId=##class(web.ARCItemCat).GetIdFromCodeOrDescription(code)
+.
+	quit RowId
+
+
+

@@ -1,0 +1,138 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundADTA08^MAC^^^0
+HL7InboundADTA08	// ML 22/03/2011 ;  HL7 interface : patient event ADT_A08
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundADTA08.rtn#1 $
+	quit
+	// A08 - update patient information/admission
+A08()
+	set HL7Flag="Y"
+	set (reject,rejecthere)=""
+	// check if message forwarding required
+	set forward=$$MsgForward^HL7Inbound(msgtype)
+	set cnt1=0 for  {
+		if reject'="" quit
+		set cnt1=$order(^TMP("HL7",$job,cnt1)) if cnt1="" quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		// check if pre-existing patient
+		set numbers=$$RegNum^HL7Common2(.reject,"A08")
+		set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+		if reject'="" set rejecthere="Y" quit
+		// check if patient details received match those in system
+		if $$PatCheck^HL7Common3(intRegMrn) quit
+		// extract EVN information
+		do EVN^HL7InboundExtract0
+		kill PERSON
+		// extract PID information
+		do PID^HL7InboundExtract1 if reject'="" quit
+		set foundPV1=""
+		set cnt2=0 for  {
+			if reject'="" quit
+			set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) if cnt2="" quit
+			kill PAADM,PAADMINS,DIAG,SQL
+			set reject=""
+			// ignore segment codes in cnt2
+			if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set foundPV1=1
+			if foundPV1,$extract(cnt2,1,2)?1.2A quit
+			if 'foundPV1,'$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) set reject="Required segment PV1 not received in message",reject("Detail")="PV1^^^~"_100,rejecthere="Y" quit
+			kill PLIST
+			// extract PV1 information
+			do PV1^HL7InboundExtract2
+			if PAADM("PAADMADMNo")="" set reject="No admission number received, unable to update admission",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~205",rejecthere="Y" quit
+			// check if admission exists on patient
+			set intAdmNum=$$intAdmNum^HL7Common2(PAADM("PAADMADMNo"),intRegMrn,HL7("INT-ADM-NUM"))
+			if intAdmNum="" set reject=$select(HL7("INT-ADM-NUM")="Y":"Internal admission number ",1:"Admission number ")_PAADM("PAADMADMNo")_" does not exist",reject("Detail")="PV1^"_$get(^TMP("HL7",$job,cnt1,cnt2,"PV1",1))_"^19~205",rejecthere="Y" quit
+			if HL7("INT-ADM-NUM")="Y" set PAADM("PAADMADMNo")=""
+			// extract/keep current admission status
+			set status=""
+			&SQL(SELECT PAADM_VisitStatus INTO :status FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+			set PAADM("PAADMVisitStatus")=status
+			// ignore discharge date/time if admission is not discharged
+			if status'="D" {
+				kill PAADM("PAADMDischgDate"),PAADM("PAADMDischgTime")
+			}
+			set (intAdmTrans,updateTrans)=""
+			// check if ward/room/bed transaction update required
+			if $get(PAADM("BedID"))'=""||$get(PAADM("ROOMId"))'=""||$get(PAADM("PACWardID"))'="" {
+				// find current ward/room/bed combos
+				set (CurrentBed,CurrentRoom,CurrentWard)=""
+				&SQL(SELECT PAADM_CurrentBed_DR, PAADM_CurrentRoom_DR, PAADM_CurrentWard_DR INTO :CurrentBed, :CurrentRoom, :CurrentWard FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+				// compare against new ward/room/bed
+				if (CurrentBed'=$get(PAADM("BedID")))||(CurrentRoom'=$get(PAADM("ROOMId")))||(CurrentWard'=$get(PAADM("PACWardID"))) {
+					set row="" for  {
+						if updateTrans=1 quit
+						set detail=$$GetNextPrevTransactionNew^CPAAdmTransaction(intAdmNum,intAdmTrans,"D","M","",+$h)
+						set intAdmTrans=$piece(detail,"^") if intAdmTrans="" quit
+						if CurrentBed=$piece(detail,"^",9),$get(CurrentRoom)=$piece(detail,"^",8),$get(CurrentWard)=$piece(detail,"^",10) set updateTrans=1
+					}
+				}
+				// set up null fields
+				if updateTrans=1 {
+					// use 'ROOMDesc' as this is the field used by the api.  'ROOMId' used for checking rowids only
+					for field="BedID","ROOMDesc","PACWardID" if $data(PAADM(field)),$get(PAADM(field))="" set PAADM(field)=""""""
+				}
+			}
+			// extract PV2 information
+			do PV2^HL7InboundExtract2
+			// extract IN1 information
+			do IN1^HL7InboundExtract2
+			// extract DG1 information
+			do DG1^HL7InboundExtract2
+			// extract ZV1 information
+			do ZV1^HL7InboundExtractZ
+			set reject=""
+			// update person information
+			do PERSON^HL7InboundUpdate1
+			if reject'="" quit
+			// update transaction
+			if updateTrans=1,intAdmTrans'="" {
+				kill savePAADM merge savePAADM=PAADM
+				set PAADM("EpisodeID")=intAdmNum
+				// start date/time of transaction
+				set PAADM("TRANSStartDate")=EVNupdate("EVENT-DATE")
+				set PAADM("TRANSStartTime")=EVNupdate("EVENT-TIME")
+				if $get(PAADM("PAADMType"))'="E" do TRANSFER^HL7InboundUpdate2
+				if $get(PAADM("PAADMType"))="E" do TRANSFEREMR^HL7InboundUpdate2
+				merge PAADM=savePAADM kill savePAADM
+			}
+			if reject'="" quit
+			// update admission information
+			if $get(PAADM("PAADMType"))'="E" do PAADM^HL7InboundUpdate2
+			// update emergency admission information
+			if $get(PAADM("PAADMType"))="E" do PAADMEMR^HL7InboundUpdate2
+			if reject'="" quit
+			// extract MR_Adm rowid
+			&SQL(SELECT PAADM_MainMRADM_DR INTO :intMRAdm FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+			// update non-api fields
+			kill PLIST
+			if $data(SQL) {
+				set var="" for  {
+					set var=$order(SQL(var)) if var="" quit
+					if $get(SQL(var))'="" {
+						if SQL(var)="""""" set SQL(var)=""
+						set j=$piece(var,"-")
+						set PLIST(j)=SQL(var)
+					}
+				}
+				// manually update fields not processed by api
+				if $data(PLIST) {
+					&SQL(UPDATE PA_Adm VALUES :PLIST() WHERE PAADM_RowId = :intAdmNum)
+				}
+			}
+			// add insurance information
+			do INSURANCE^HL7InboundUpdate2
+			if reject'="" quit
+			// add diagnosis information
+			do DIAGNOSIS^HL7InboundUpdate2
+			// check if message forwarding required
+			if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmNum)="PAADM"
+		}
+		kill PERSON,PAADM,PAADMINS,DIAG,SQL
+	}
+	kill PERSON,PAADM,PAADMINS,DIAG,SQL
+	if rejecthere="Y" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

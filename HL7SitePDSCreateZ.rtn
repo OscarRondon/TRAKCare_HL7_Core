@@ -1,0 +1,204 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SitePDSCreateZ^MAC^^^0
+HL7SitePDSCreateZ // ML 18/08/2005 // HL7 interface : create 'Z' transmission packets
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SitePDSCreateZ.rtn#1 $
+	quit
+	
+CheckZID ;; build DATA array - ZID : Additional Patient Demographics
+ZID()	set intRegMrn=$get(intRegMrn) kill DATA,PDSCHANGE,xPDSDATA
+	new xPDSDATA merge xPDSDATA=%PDSDATA
+	
+	// extract patient details
+	kill PatDetail,PatDetailx set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail,.PatDetailx)
+	// set update status
+	kill UpdatedField
+	if $get(old("PAPER",168))="",$get(PatDetail(168))'="" set UpdatedField("PAPERSON",168)="A"
+	if $get(old("PAPER",168))'="",$get(PatDetail(168))'="",($get(old("PAPER",168))'=$get(PatDetail(168))) set UpdatedField("PAPERSON",168)="U"
+	// check for new null fields and change to ""
+	for xtable="PAPER","PAPMI" if $data(old(xtable)) do  quit
+	. do NullChange^HL7Common3(xtable)
+	if $get(xPDSDATA("PAPERSON",168))'="",$get(PatDetail(168))="" set PatDetail(i)=""""""
+	// check if address should be sent for outbound PDS message (for ZID.32)
+	set PDSCHANGE("ADDR")=$$PDSAddressCheck^HL7OutExtract1()
+	for xtable="PAPERSON","PAPATMAS" if $data(xPDSDATA(xtable)) do
+	. set i="" for  set i=$order(xPDSDATA(xtable,i)) quit:i=""  do
+	. . // no need to recheck address or name fields
+	. . if xtable="PAPERSON" do
+	. . . // ignore patient identifier fields
+	. . . if ",1,3,119,184,185,196,203,"[(","_i_",") quit
+	. . . // output of name/address fields dictated by flag so ignore
+	. . . if ",4,5,18,26,28,33,35,113,118,139,"[(","_i_",") quit
+	. . . // ignore OID's field
+	. . . if i=243 quit
+	. . . if xPDSDATA(xtable,i)=$get(PatDetail(i)) kill PatDetail(i) quit
+	. . . // set update status
+	. . . if xPDSDATA(xtable,i)="",$get(PatDetail(i))'="" set UpdatedField(xtable,i)="A"
+	. . . if xPDSDATA(xtable,i)'="",$get(PatDetail(i))'="" set UpdatedField(xtable,i)="U"
+	. . . // check for null field
+	. . . if xPDSDATA(xtable,i)'="",$get(PatDetail(i))="" set PatDetail(i)=""""""
+	. . if xtable="PAPATMAS" do
+	. . . // ignore patient identifier fields
+	. . . if ",2,98,106,109,111,112,113,114,115,144,146,"[(","_i_",") quit
+	. . . if xPDSDATA(xtable,i)=$get(PatDetailx(i)) kill PatDetailx(i) quit
+	. . . // check for null field
+	. . . if xPDSDATA(xtable,i)'="",$get(PatDetailx(i))="" set PatDetailx(i)=""""""
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+	
+	kill date
+	
+	set ForeignCity=$get(PatDetail(18)),nation=$get(PatDetail(22)),SocialStatus=$get(PatDetail(37)),EmployeeType=$get(PatDetail(90)),EmployeeDept=$get(PatDetail(95)),EmployeeComp=$get(PatDetail(101))
+	set region=$get(PatDetail(112)),PatientType=$get(PatDetail(144)),NationalResident=$get(PatDetail(156)),interpreter=$get(PatDetail(168)),EmploymentStatus=$get(PatDetail(171)),AusSthSeaIsl=$get(PatDetail(180))
+	set FreeTextOcc=$get(PatDetail(181)),name4=$get(PatDetail(188)),PrefContact=$get(PatDetail(198)),date("EMPFROM")=$get(PatDetail(204)),date("EMPTO")=$get(PatDetail(205)),SpecNeedStatus=$get(PatDetail(216))
+	set FreeTextPostCode=$get(PatDetail(220)),IDDocType=$get(PatDetail(221)),ReasonAtt=$get(PatDetail(241))
+	
+	kill comment set ctype="REM",comm=$get(PatDetail(73)),comment(ctype)="" if $listlength(comm) do
+	. for j=1:1:$listlength(comm) set line=$list(comm,j),line=$translate(line,$char(0)),comment(ctype)=$get(comment(ctype))_$select($length(comment(ctype)):HL7("LINEBK"),1:"")_$translate($$TextConversion^HL7Common12(line,"O"),$char(13,10),HL7("LINEBK"))
+	set Phone2=$get(PatDetailx(129)),VIP=$get(PatDetailx(138)),PensionType=$get(PatDetailx(144)),date("POLEXP")=$get(PatDetailx(146))
+	for datetype="EMPFROM","EMPTO","POLEXP" if $get(date(datetype))'="",$get(date(datetype))'="""""" set date(datetype)=$$Date^HL7(date(datetype))
+	
+	set DATA("ZID",1)=nation,DATA("ZID",2)=NationalResident,DATA("ZID",3)=AusSthSeaIsl,DATA("ZID",4)=name4,DATA("ZID",5)=SpecNeedStatus,DATA("ZID",6)=FreeTextPostCode
+	set DATA("ZID",7)=$get(comment("REM")),DATA("ZID",8)=PrefContact_$select($get(UpdatedField("PAPERSON",198))'="":"^^^"_$get(UpdatedField("PAPERSON",198)),1:"")
+	if interpreter'="" set DATA("ZID",9)=interpreter_$select($get(UpdatedField("PAPERSON",168))'="":"^^^"_$get(UpdatedField("PAPERSON",168)),1:"")
+	// send previous NHS Contact - outbound only
+	if $data(%request),$get(%request.Data("prevcontact",1))="on" set DATA("ZID",10)="Y"
+	// ZID.11 inbound only
+	set DATA("ZID",12)=VIP,DATA("ZID",13)=PatientType,DATA("ZID",14)=EmploymentStatus,DATA("ZID",15)=IDDocType,DATA("ZID",16)=FreeTextOcc,DATA("ZID",17)=region,DATA("ZID",18)=Phone2
+	set DATA("ZID",19)=SocialStatus,DATA("ZID",20)=PensionType,DATA("ZID",21)=EmployeeDept,DATA("ZID",22)=EmployeeComp,DATA("ZID",23)=date("EMPFROM"),DATA("ZID",24)=date("EMPTO")
+	set DATA("ZID",25)=EmployeeType,DATA("ZID",26)=date("POLEXP"),DATA("ZID",27)=ReasonAtt
+	// the following fields are not used in by PDS for the ZID segment: 28,29,30,31
+	// fields are used in standard ZID, but as the PDS ZID mirrors the standard ZID they need to be kept free
+	if PDSCHANGE("ADDR")=1 set DATA("ZID",32)=ForeignCity
+	kill PatDetail,PatDetailx,comment,PDSCHANGE,xPDSDATA,UpdatedField
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZPB ;; build DATA array - ZPB : PDS Baby Birth Details
+ZPB()	set intRegMrn=$get(intRegMrn),intBirthNum=$get(intBirthNum) kill DATA
+	// extract patient details
+	kill PatDetail set SQLCODE=$$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail)
+	if SQLCODE quit SQLCODE
+	// check for new null fields and change to ""
+	for xtable="PAPER","PAPMI" if $data(old(xtable)) do  quit
+	. do NullChange^HL7Common3(xtable)
+	
+	// extract code table detail
+	set mtable="PA_Person" do CodeTable^HL7OutExtract1A(mtable)
+	set sex=$get(PatDetail(15)),title=$get(PatDetail(139))
+	// adjust name
+	set name=$$BuildName^HL7Common3($get(PatDetail(4)),$get(PatDetail(5)),$get(PatDetail(118)))
+	set $piece(name,"^",5)=$piece(title,"^")_"^^L"
+	// check if baby delivery entry exists
+	if intBirthNum="",$data(^PAPRGi("BABY_Person_DR",intRegMrn)) do
+	. set intBirthNum=$$BabyDeliveryExist^HL7OutExtract7(intRegMrn)
+	if intBirthNum="" quit 0
+	// extract pregnancy detail
+	set intPregNum=$piece(intBirthNum,"||",1)
+	kill PregDetail if $$PregDetail^HL7OutExtract7(intPregNum,.PregDetail)
+	// extract pregnancy delivery detail
+	set intDelNum=$piece(intBirthNum,"||",1,2)
+	kill PregDelivery if $$PregDelivery^HL7OutExtract7(intDelNum,.PregDelivery)
+	// extract baby delivery detail
+	kill BirthDetail set SQLCODE=$$BabyDelivery^HL7OutExtract7(intBirthNum,.BirthDetail)
+	if SQLCODE quit 0
+	// check for national code for pregnancy outcome
+	set outcomeNatcode=""
+	set intOutcome=$get(BirthDetail(15)) if intOutcome'="" do
+	. &SQL(SELECT OPREG_NationalCode INTO :outcomeNatcode FROM PAC_OutcomeOfPregnancy WHERE OPREG_RowId = :intOutcome)
+	. if SQLCODE set outcomeNatcode=""
+	// check for national code for delivery place
+	set delplaceNatcode=""
+	set intDelPlace=$get(BirthDetail(22)) if intDelPlace'="" do
+	. &SQL(SELECT DELPL_NationalCode INTO :delplaceNatcode FROM PAC_DeliveryPlace WHERE DELPL_RowId = :intDelPlace)
+	. if SQLCODE set delplaceNatcode=""
+	// extract code table detail
+	for mtable="PA_PregDelBaby","PA_Pregnancy","PA_PregDelivery","PA_PrDelBabyDelMthd" do CodeTable^HL7OutExtract7(mtable)
+	// extract mothers registration number
+	set intMothNum=$get(PregDetail(2)) if intMothNum'="" set MotherNum=$$extRegMrn^HL7Common2(intMothNum)
+	set birthorder=$get(BirthDetail(3)),birthtime=$get(BirthDetail(4)),weight=$get(BirthDetail(6)),birthdate=$get(BirthDetail(7))
+	set outcome=$get(BirthDetail(15))_"^"_outcomeNatcode,gestweeks=$get(BirthDetail(19)),delplace=$get(BirthDetail(22))_"^"_delplaceNatcode,firstresp=$get(BirthDetail(52))
+	set AnonymousDel=$get(BirthDetail(117)),congenitalabnorm=$get(BirthDetail(236))
+	kill datetime
+	set datetime("BIRTH")="" if birthdate'="" set datetime("BIRTH")=$$Date^HL7(birthdate)_$select(birthtime="":"",1:$translate($$TimeConv^HL7Common2("IE",birthtime),":")_"00")
+	set plurality=$get(PregDetail(32))
+	set DATA("ZPB",1)=name,DATA("ZPB",2)=sex,DATA("ZPB",3)=datetime("BIRTH"),DATA("ZPB",4)=birthorder,DATA("ZPB",5)=weight
+	set DATA("ZPB",6)=gestweeks,DATA("ZPB",7)=plurality,DATA("ZPB",8)=delplace,DATA("ZPB",9)=outcome,DATA("ZPB",10)=congenitalabnorm
+	set DATA("ZPB",11)=AnonymousDel
+	if $data(%request),$get(%request.Data("IgnoreDupPDSMaternity",1))="on" set DATA("ZPB",12)="Y"
+	kill PatDetail,BirthDetail,PregDetail,PregDelivery,datetime
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+CheckZPM ;; build DATA array - ZPM : PDS Baby Mother Details
+ZPM()	set intRegMrn=$get(intRegMrn) kill DATA
+	if intRegMrn="" quit 0
+	set intMothNum=""
+	// extract babys mother number
+	&SQL(SELECT PAPER_Mother_DR INTO :intMothNum FROM PA_Person WHERE PAPER_RowId = :intRegMrn)
+	if intMothNum="" quit 0
+	// extract patient details
+	kill PatDetail,PatDetailx
+	set SQLCODE=$$PatDetail^HL7OutExtract1(intMothNum,.PatDetail,.PatDetailx)
+	if SQLCODE quit 0
+	set intDelAdm=""
+	// extract pregnancy deliver admission
+	set intDelNum=$piece(intBirthNum,"||",1,2)
+	if intDelNum'="" do
+	. &SQL(SELECT DEL_Adm_DR INTO :intDelAdm FROM PA_PregDelivery WHERE DEL_RowId = :intDelNum)
+	if SQLCODE set intDelAdm=""
+	set (intAdmWard,intAdmHosp)=""
+	// extract admission location and hospital
+	if intDelAdm'="" do
+	. &SQL(SELECT PAADM_CurrentWard_DR->WARD_LocationDR, PAADM_Hospital_DR INTO :intAdmWard, :intAdmHosp FROM PA_Adm WHERE PAADM_RowId = :intDelAdm)
+	set ChildHealthOrg=""
+	// extract child health organisation
+	if intAdmWard'="" do
+	. &SQL(SELECT CTLOC_ChildHealthOrganisation_DR -> CHORG_Code, CTLOC_ChildHealthOrganisation_DR -> CHORG_Desc, CTLOC_ChildHealthOrganisation_DR -> CHORG_NationalCode INTO :ChildHealthCode, :ChildHealthDesc, :ChildHealthNatcode FROM CT_Loc WHERE CTLOC_RowId = :intAdmWard)
+	. for var="ChildHealthCode","ChildHealthDesc","ChildHealthNatcode" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. set ChildHealthOrg=$get(ChildHealthCode)_"^"_$get(ChildHealthDesc)_"^"_$get(ChildHealthNatcode)
+	set AdmHospital=""
+	// extract hospital details
+	if intAdmHosp'="" do
+	. &SQL(SELECT HOSP_Code, HOSP_Desc, HOSP_NationalCode, HOSP_City -> CTCIT_Desc, HOSP_Province_DR -> PROV_Desc, HOSP_State -> CTSTT_Desc INTO :HospCode, :HospDesc, :HospNationalCode, :City, :Province, :County FROM CT_Hospital WHERE HOSP_RowId = :intAdmHosp)
+	. for var="HospCode","HospDesc","HospNationalCode","City","Province","County" set @var=$$TextConversion^HL7Common12(@var,"O")
+	. set AdmHospital=$get(HospCode)_"^"_$get(HospDesc)_"^"_$get(HospNationalCode)_"^"_$get(City)_"^"_$get(Province)_"^"_$get(County)
+	// extract code table detail
+	for mtable="PA_Person","PA_PatMas" do CodeTable^HL7OutExtract1A(mtable)
+	set dob=$get(PatDetail(11))
+	if dob'="" set dob=$$DateConv^HL7Common2(.reject,"IE",PatDetail(11),"B"),estdob=$get(PatDetail(152))
+	set NHSnumber=$get(PatDetail(3)),title=$get(PatDetail(139))
+	// adjust name
+	set name=$$BuildName^HL7Common3($get(PatDetail(4)),$get(PatDetail(5)),$get(PatDetail(118)))
+	set $piece(name,"^",5)=$piece(title,"^")_"^^L"
+	set intRefDr=$get(PatDetail(67)),intRefCln=$get(PatDetail(148)),VIPFlag=$piece($get(PatDetailx(138)),"^")
+	set ClinicDetail=""
+	if VIPFlag'="S" set ClinicDetail=$$ClinicDetail(intRefDr,intRefCln)
+	// find most recent dr from history if patient flagged as sensitive
+	if VIPFlag="S" do
+	. set (detail,found)=""
+	. set row="" for  set row=$order(^PAPER(intMothNum,"FAMD",row),-1,detail) quit:row="0"  quit:row=""  do  quit:found
+	. . // look for non-enddated entry only
+	. . if $piece(detail,"^",2)'="" quit
+	. . set intRefDr=$piece(detail,"^",3),intRefCln=$piece(detail,"^",4)
+	. . set ClinicDetail=$$ClinicDetail(intRefDr,intRefCln)
+	. . set found=1
+	set DATA("ZPM",1)=name,DATA("ZPM",2)=NHSnumber,DATA("ZPM",3)=$piece(dob,"^")_$select(estdob'="N":"^"_$select(estdob="Y":"Y",1:""),1:""),DATA("ZPM",4)=ClinicDetail
+	set DATA("ZPM",5)=ChildHealthOrg,DATA("ZPM",6)=AdmHospital
+	kill PatDetail
+	merge ^TMP("HL7-OUT",$job)=DATA kill DATA
+	quit 0
+	// extract clinic detail for referring doctor/referring clinic
+ClinicDetail(intRefDr,intRefCln) new (intRefDr,intRefCln)
+	set intRefDr=$get(intRefDr),intRefCln=$get(intRefCln)
+	set (Clinic,ClinicDesc,ClinicProvNum,ClinicDesc,ClinicDetail,GroupNum)=""
+	if intRefDr'="" do
+	. &SQL(SELECT REFD_Group INTO :GroupNum FROM PAC_RefDoctor WHERE REFD_RowId = :intRefDr)
+	if intRefCln'="" do
+	. &SQL(SELECT * INTO :RefClinic() FROM PAC_RefDoctorClinic WHERE CLN_RowId = :intRefCln)
+	. set intClinic=$get(RefClinic(18)) if intClinic'="" do
+	. . &SQL(SELECT CLN_Code, CLN_Desc, CLN_ProviderNo INTO :Clinic, :ClinicDesc, :ClinicProvNum FROM PAC_Clinic WHERE CLN_RowId = :intClinic)
+	. if Clinic="" set Clinic=$get(RefClinic(3)),ClinicProvNum=$get(RefClinic(9)),ClinicDesc=""
+	. set ClinicDetail=ClinicDesc_"^"_Clinic_"^"_ClinicProvNum_"^^^TCCLIN"_$select(GroupNum'="":"~"_GroupNum_"^^"_GroupNum_"^^^TCGROUP",1:"")
+	quit ClinicDetail
+
+
+

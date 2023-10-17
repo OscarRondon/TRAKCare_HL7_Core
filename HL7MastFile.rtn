@@ -1,0 +1,86 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7MastFile^MAC^^^0
+HL7MastFile // ML 19/10/2005 ; HL7 interface : master file notification categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7MastFile.rtn#1 $
+	quit
+	
+	// decide what MFN processing needs to occur
+Check(event) new (event,link,INT,HL7,ESC,msh,%,%1,%2,%3,%4,file,filedate,tracerowid,version,PatNum,Action,MaxNum,ActionMax,nakcount,forward,forwardnum)
+	set event=$get(event),(forward,forwardnum,forwardtable,ok,reject,reject("Detail"))="" kill forwardnum,old
+	
+	// check if master files allowed
+	if '$data(^SSHL7(link,"MAST-FILE-DEFAULT")) do  quit reject
+	. set reject="AR\Interface "_link_" is not configured to process MFN messages\MSH^^8\203"
+	// extract master file details
+	do MasterFile(link) if reject'="" quit reject
+	
+	// check if MFN type allowed
+	if '$data(MASTFILE("MSG-ALLOWED",$translate(event,"^","_"))) do  quit reject
+	. set reject="AR\Message type "_$translate(event,"^","_")_" received is not setup on interface "_link_" as an allowed master file update\MSH^^8\201"
+	if '$data(MASTFILE("MSG-ALLOWED",$translate(event,"^","_"),"TABLE")) do  quit reject
+	. set reject="AR\Message type "_$translate(event,"^","_")_" received on interface "_link_" does not have update table mapping defined\MSH^^8\201"
+	
+	// check for site specific code
+	set found="",routine="HL7Site"_HL7("INCODE")_"MastFile"_$piece(event,"^",2),LineRoutine="Check"_$piece(event,"^",2)_"^"_routine if $length($text(@LineRoutine),";;")=2 do
+	. xecute "s ok=$$"_$piece(event,"^",2)_"^"_routine_"()" set found=1
+	
+	if 'found do
+	. // MFN^M01 - general
+	. if event="MFN^M01" set ok=$$M01^HL7MastFileM01() quit
+	. // MFN^M02 - users & care providers
+	. if event="MFN^M02" set ok=$$M02^HL7MastFileM02() quit
+	. // MFN^M05 - locations
+	. if event="MFN^M05" set ok=$$M05^HL7MastFileM05() quit
+	. // MFN^M08 - order items
+	. if event="MFN^M08" set ok=$$M08^HL7MastFileM08() quit
+	. // MFN^M12 - order items : additional information
+	. if event="MFN^M12" set ok=$$M12^HL7MastFileM12() quit
+	
+	kill MASTFILE
+	quit ok
+	
+	// extract master file details
+MasterFile(link) set link=$get(link) kill MASTFILE,PLIST
+	set RowId=link_"||1"
+	
+	&SQL(SELECT * INTO :PLIST() FROM SS_HL7MasterFile WHERE HL7MFD_RowId = :RowId)
+	
+	if SQLCODE do  quit
+	. set reject="AR\Interface "_link_" is not configured to process MFN messages\MSH^^8\203"
+	
+	set MASTFILE("M05-DEFWARDTYPE")=PLIST(3),MASTFILE("M05-WARDINPAT")=PLIST(4),MASTFILE("M05-BEDAVAIL")=PLIST(5),MASTFILE("M05-BEDACTIVE")=PLIST(6)
+	set MASTFILE("M05-DEFBEDTYPE")=PLIST(7),MASTFILE("M05-DEFROOMTYPE")=PLIST(8),MASTFILE("M08-DEFSECGRP")=PLIST(9),MASTFILE("M08-DEFBILLSUBGRP")=PLIST(10)
+	set MASTFILE("M08-DEFACCESSPROF")=PLIST(11)
+	
+	set msg="" for  set msg=$order(^SSHL7(link,"MAST-FILE-MSG",msg)) quit:msg=""  do
+	. set table="" for  set table=$order(^SSHL7(link,"MAST-FILE-MSG",msg,"TABLE",table)) quit:table=""  do
+	. . set MASTFILE("MSG-ALLOWED",msg,"TABLE",table)=$get(^SSHL7(link,"MAST-FILE-MSG",msg,"TABLE",table))
+	
+	quit
+	
+	// check if table received can be updated
+TableCheck(event,table,reject) new (event,table,reject,MASTFILE) set event=$get(event),table=$get(table),reject=""
+	set ourtable=$get(MASTFILE("MSG-ALLOWED",$translate(event,"^","_"),"TABLE",table))
+	
+	if ourtable="" {
+		set reject="Update for type "_table_" is not setup/available for message "_event
+	} else {
+		// check if table is excluded from CCR
+		new CCClass,Excl,val
+		set val=1
+		set CCClass=##class(TC.ChangeControl.Interface).ChangeControlClassGet()
+		if (CCClass'="") {
+			set ExcludedList=##class(TC.ChangeControl.Interface).GetLocalExclusionList()
+			set val=$listfind(ExcludedList,"User."_ourtable)
+		}
+		// if not excluded, reject
+		if 'val {
+			set reject="TrakCare table 'User."_ourtable_"' (mapped to received table "_table_") is not available to update due to being included in Change Control.  Please contact your TrakCare administrator."
+		}
+	}
+	
+	quit ourtable
+
+
+

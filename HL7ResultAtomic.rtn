@@ -1,0 +1,304 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7ResultAtomic^MAC^^^0
+HL7ResultAtomic // ML 08/09/2003 ; HL7 Interface - Atomic result processing
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7ResultAtomic.rtn#1 $
+	quit
+	
+	// file atomic result
+FileAtomic(ExternalSystem) set ExternalSystem=$get(ExternalSystem)
+.
+	// update/insert episode
+	do BuildEpisode^HL7Common4(OrdNum)
+	
+	// update/insert test
+	kill VISTS set VISTS(1)=OrdNum_"||"_ts_"||"_seq
+	set SQLCODE=$$EpisodeTest("S")
+	// save VISTS for use as %old in lab.EPVisitTestSet UDF
+	kill oldVISTS merge oldVISTS=VISTS kill VISTS
+	set NewRes=$select(SQLCODE'=0:1,1:"")
+	
+	set VISTS(0)=OrdNum,VISTS(1)=OrdNum_"||"_ts_"||"_seq,VISTS(3)=ts,VISTS(2)=seq,VISTS(7)=$select(authdate="":+$h,1:authdate),VISTS(8)=$select(authdate="":$piece($h,",",2)/60,1:authtime)
+	set VISTS(33)=$piece(TEST(ts),"\",2),VISTS(49)=colldate,VISTS(50)=$select(colltime'="":colltime*60,1:" ")
+	if $$EpisodeTest($select(SQLCODE'=0:"I",1:"U"))
+	// save VISTS for use as %d in lab.EPVisitTestSet UDF
+	kill newVISTS merge newVISTS=VISTS kill VISTS
+	
+	if 'SQLCODE do  if updated="N" quit
+	. if '$$Compare(OrdNum,ts,seq) set updated="N"
+	// check if order is clinically significant
+	set ClinSignf=$$IsOrdClinSignf^COEOrdItem18(intOrdNum)
+	
+	// clear previous test item sequencing
+	if '$data(TestCodeSequence(ts,"TC-ANT")) do
+	. set tc="" for  set tc=$order(^TEPI(OrdNum,1,ts,seq,"DATA",tc)) quit:tc=""  do
+	. . set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",9)=""
+	. . if '$data(TEST(ts,"TC",tc)) set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",9)=$increment(tcseq)
+	
+	set tc="" for  set tc=$order(TEST(ts,"TC",tc)) quit:tc=""  do
+	. // extract ranges
+	. set range=$$Range($piece($get(TEST(ts,"TC",tc)),"\",3))
+	. // insert/update result
+	. kill VISTD set VISTD(1)=OrdNum_"||"_ts_"||"_seq_"||"_tc
+	. set SQLCODE=$$TestData("S") kill VISTD
+	. // set audit action type - 'I'nsert or 'U'pdate
+	. set mode=$select(SQLCODE'=0:"I",1:"U") if $get(TEST(ts,"TC",tc))'="" do
+	. . set datatype=$piece(TEST(ts,"TC",tc),"\",6)
+	. . if (datatype="NM") do
+	. . . set $piece(range,"|") = ##class(websys.Conversions).FloatHtmlToLogical($piece(range,"|"),0)
+	. . . set $piece(range,"|",2) = ##class(websys.Conversions).FloatHtmlToLogical($piece(range,"|",2),0)
+	. . . set TEST(ts,"TC",tc,"RES",1) = ##class(websys.Conversions).FloatHtmlToLogical(TEST(ts,"TC",tc,"RES",1),0)
+	. . set VISTD(0)=OrdNum_"||"_ts_"||"_seq,VISTD(1)=OrdNum_"||"_ts_"||"_seq_"||"_tc,VISTD(2)=tc,VISTD(3)=$select(datatype="CE":$piece($get(TEST(ts,"TC",tc,"RES",1)),"^",2),1:$get(TEST(ts,"TC",tc,"RES",1)))
+	. . merge VISTD(4)=TEST(ts,"TC",tc,"COM") set VISTD(7)=$piece(range,"|"),VISTD(8)=$piece(range,"|",2),VISTD(10)=ClinSignf,VISTD(11)=$piece(TEST(ts,"TC",tc),"\",4),VISTD(12)=$get(TestCodeSequence(ts,"TC",tc))
+	. . set VISTD(15)=$piece(TEST(ts,"TC",tc),"\",6),VISTD(16)=$select(datatype="CE":$piece($get(TEST(ts,"TC",tc,"RES",1)),"^"),1:""),VISTD(19)=$piece(TEST(ts,"TC",tc),"\",7),VISTD(20)=$piece(TEST(ts,"TC",tc),"\",8)
+	. . set VISTD(23)=$get(TEST(ts,"TC",tc,"PERFORMED-AT-LAB"))
+	. . if $$TestData($select(SQLCODE'=0:"I",1:"U"))
+	. kill VISTD
+	. // purge and add sensitivities
+	. kill ^TEPI(OrdNum,1,ts,seq,"DATA",tc,"ANT")
+	. if $data(TEST(ts,"TC",tc,"ANT")) do  quit
+	. . set antibiotic="" for  set antibiotic=$order(TEST(ts,"TC",tc,"ANT",antibiotic)) quit:antibiotic=""  do
+	. . . kill VISTA set VISTA(0)=OrdNum_"||"_ts_"||"_seq_"||"_tc,VISTA(2)=antibiotic
+	. . . set VISTA(3)=$piece(TEST(ts,"TC",tc,"ANT",antibiotic),"\"),VISTA(8)=$piece(TEST(ts,"TC",tc,"ANT",antibiotic),"\",2)
+	. . . set VISTA(5)=$piece(TEST(ts,"TC",tc,"ANT",antibiotic),"\",3),VISTA(6)=$piece(TEST(ts,"TC",tc,"ANT",antibiotic),"\",4)
+	. . . if $$TestDataAntibiotic
+	. . . kill VISTA
+	
+	. // perform test item result status checks
+	. set status=$piece(TEST(ts,"TC",tc),"\",5)
+	. set status=$$ResultStatus^HL7Common8(ExternalSystem,status)
+	. // revert to received status if no match found
+	. if status="" set status=$piece(TEST(ts,"TC",tc),"\",5)
+	. // perform site specific status check
+	. set routine="HL7Site"_HL7("INCODE")_"Res",LineRoutine="CheckStatus^"_routine
+	. if $length($text(@LineRoutine),";;")=2 do
+	. . xecute "s status=$$StatusCheck^"_routine_"("""_"ATOMIC"_""","""_OrdNum_"||"_ts_"||"_seq_"||"_tc_""","""_status_""")"
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",2)=status
+	. // s VISTD(1)=OrdNum_"||"_ts_"||"_seq_"||"_tc,VISTD(5)=status i $$TestData("U")
+	
+	. // update audit trail
+	. set comm="",x=0 for  set x=$order(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM",x)) quit:x=""  set comm=comm_$select($length(comm):"|",1:"")_^(x)
+	. kill NewAudit set NewAudit("VISTDComments")=comm
+	. for ii=1,2,4,5,8,9 do
+	. . set field=$select(ii=1:"VISTDTestData",ii=2:"VISTDResultStatus",ii=4:"VISTDResultRefRangeLow",ii=5:"VISTDResultRefRangeHigh",ii=8:"VISTDInstrumentFlags",1:"VISTDDisplaySequence")
+	. . set NewAudit(field)=$piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",tc)),"\",ii)
+	. set NewAudit("VISTDResultUnit")=$piece($get(^TTAB("TC",tc)),"\",2)
+	. kill VISTDRowId set VISTDRowId=OrdNum_"||"_ts_"||"_seq_"||"_tc
+	. // check if audit required of atomic results - EPVisitTestSetData does not exist in Audit CT's so flag driven
+	. if HL7("DO_NOT_AUDIT_ATOMIC")'="Y",$$Audit^HL7Common3(VISTDRowId,mode,HL7("USER"))
+	. do ##class(websys.DecisionSupport.Event).UpdateClass(OrdNum_"||"_ts_"||"_seq_"||"_tc,"L","lab.EPVisitTestSetData","OnAfter"_$select(NewRes:"Insert",1:"Update"))
+	
+	// update result exists against order
+	do OrderUpdate^HL7Common3(intOrdNum,"MF","Y",317)
+	// set clinically significant result flag
+	set $piece(^OEORD(+intOrdNum,"I",$piece(intOrdNum,"||",2),12),"^",31)=ClinSignf
+	// update oeorditem link to labtestset
+	if LabTestRowId'=(OrdNum_"||"_ts_"||"_seq) do
+	. do OrderUpdate^HL7Common3(intOrdNum,"LR",OrdNum_"||"_ts_"||"_seq,"",1)
+	// check for abnormal results
+	do Abnormal(intOrdNum,OrdNum,ts,seq)
+	// Log 74065 YC - save to index table, mark as read if required
+	do ##class(web.OEResult).UpdateIndexTable(intOrdNum,"","","","","","","",$select(HL7("MARKREAD")="Y":"Y",1:"N"))
+	// RTT - update stage (log 80708)
+	do ##class(web.PARefPathwayStage).SetStageToResulted(intOrdNum)
+	// UDF call to check fields on lab.EPVisitTestSet
+	do UDF("lab.EPVisitTestSet")
+	
+	quit
+	// check UDF for 'lab.' tables
+UDF(classname) set classname=$get(classname) kill %d,%old
+	if classname="lab.EPVisitTestSet" do
+	. merge %d=newVISTS,%old=oldVISTS kill newVISTS,oldVISTS
+	do ##class(websys.UserDefinedFunctions).Evaluate(classname,"OnSQLTrigger")
+	kill %d,%old
+	quit
+	// function - S : select episode
+	// 	     I : insert episode
+	//	     U : update episode
+	// select/insert/update episode
+Episode(function) new (function,VISIT) set function=$get(function)
+	
+	// select episode
+	if function="S" &SQL(SELECT * INTO :VISIT() FROM Lab.EP_VisitNumber WHERE EPVIS_RowId = :VISIT(1))
+	// insert episode
+	if function="I" &SQL(INSERT INTO Lab.EP_VisitNumber VALUES :VISIT())
+	// update episode
+	if function="U" &SQL(UPDATE Lab.EP_VisitNumber VALUES :VISIT() WHERE EPVIS_RowId = :VISIT(1))
+	
+	quit SQLCODE
+	
+	// extract test sequence number
+TestSequence(intOrdNum,OrdNum,ts) new (intOrdNum,OrdNum,ts) set intOrdNum=$get(intOrdNum),OrdNum=$get(OrdNum),ts=$get(ts),found=""
+	set seq="" for  set seq=$order(^TEPIi("MEDTRAKi",OrdNum,ts,seq)) quit:seq=""  do  quit:found
+	. if $piece(^TEPIi("MEDTRAKi",OrdNum,ts,seq),"\",5)=intOrdNum set found=1
+	if 'found set seq=$order(^TEPIi("MEDTRAKi",OrdNum,ts,""),-1)+1
+	quit seq
+	
+	// function - S : select test
+	// 	         I : insert test
+	//	         U : update test
+	// select/insert/update test
+EpisodeTest(function) new (function,VISTS) set function=$get(function),SQLCODE=0
+	
+	// select test
+	if function="S" &SQL(SELECT * INTO :VISTS() FROM Lab.EP_VisitTestSet WHERE VISTS_RowId = :VISTS(1))
+	
+	// insert test
+	if function="I" do
+	. set OrdNum=$piece(VISTS(0),"||"),ts=VISTS(3),seq=VISTS(2)
+	. set $piece(^TEPI(OrdNum,1,ts,seq),"\",4)=VISTS(7),$piece(^TEPI(OrdNum,1,ts,seq),"\",5)=VISTS(8),$piece(^TEPI(OrdNum,1,ts,seq),"\",31)=VISTS(33)
+	. set $piece(^TEPI(OrdNum,1,ts,seq),"\",44)=VISTS(49),$piece(^TEPI(OrdNum,1,ts,seq),"\",45)=VISTS(50)
+	. // k VISTS(1) &SQL(INSERT INTO Lab.EP_VisitTestSet VALUES :VISTS())
+	// update test
+	if function="U" do
+	. set OrdNum=$piece(VISTS(1),"||"),ts=$piece(VISTS(1),"||",2),seq=$piece(VISTS(1),"||",3)
+	. set $piece(^TEPI(OrdNum,1,ts,seq),"\",4)=VISTS(7),$piece(^TEPI(OrdNum,1,ts,seq),"\",5)=VISTS(8)
+	. set $piece(^TEPI(OrdNum,1,ts,seq),"\",31)=VISTS(33)
+	. set $piece(^TEPI(OrdNum,1,ts,seq),"\",44)=VISTS(49),$piece(^TEPI(OrdNum,1,ts,seq),"\",45)=VISTS(50)
+	. // k VISTS(0) &SQL(UPDATE Lab.EP_VisitTestSet VALUES :VISTS() WHERE VISTS_RowId = :VISTS(1))
+	
+	quit SQLCODE
+	
+	// function - S : select result
+	// 	     I : insert result
+	//	     U : update result
+	// select/insert/update result
+TestData(function) new (function,VISTD) set function=$get(function),SQLCODE=0
+	
+	// select result
+	if function="S" &SQL(SELECT * INTO :VISTD() FROM Lab.EP_VisitTestSetData WHERE VISTD_RowId = :VISTD(1))
+	
+	// translate ^\| to $c(16), $c(17), $c(18)
+	if function'="S" do
+	. set VISTD(3)=$translate(VISTD(3),"^\|",$char(16,17,18))
+	. if $data(VISTD(4))>1 do
+	. . set x="" for  set x=$order(VISTD(4,x)) quit:x=""  set VISTD(4,x)=$translate(VISTD(4,x),"^\|",$char(16,17,18))
+	
+	// insert result
+	if function="I" do
+	. set OrdNum=$piece(VISTD(0),"||"),ts=$piece(VISTD(0),"||",2),seq=$piece(VISTD(0),"||",3),tc=VISTD(2)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\")=VISTD(3),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",4)=VISTD(7),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",5)=VISTD(8)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",7)=VISTD(10),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",8)=VISTD(11)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",9)=VISTD(12),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",12)=VISTD(15)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",13)=VISTD(16)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",16)=VISTD(19),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",17)=VISTD(20)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",20)=VISTD(23)
+	. if $data(VISTD(4))>1 do
+	. . set (x,cntx)="" for  set x=$order(VISTD(4,x)) quit:x=""  set ^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM",$increment(cntx))=VISTD(4,x)
+	. . set ^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM",0)=cntx
+	. // k VISTD(1) &SQL(INSERT INTO Lab.EP_VisitTestSetData VALUES :VISTD())
+	// update result
+	if function="U" do
+	. set OrdNum=$piece(VISTD(1),"||"),ts=$piece(VISTD(1),"||",2),seq=$piece(VISTD(1),"||",3),tc=$piece(VISTD(1),"||",4)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\")=VISTD(3),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",4)=VISTD(7),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",5)=VISTD(8)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",7)=VISTD(10),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",8)=VISTD(11)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",9)=VISTD(12),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",12)=VISTD(15)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",13)=VISTD(16)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",16)=VISTD(19),$piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",17)=VISTD(20)
+	. set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc),"\",20)=VISTD(23)
+	. kill ^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM")
+	. if $data(VISTD(4))>1 do
+	. . set (x,cntx)="" for  set x=$order(VISTD(4,x)) quit:x=""  set ^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM",$increment(cntx))=VISTD(4,x)
+	. . set ^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM",0)=cntx
+	. // k VISTD(0) &SQL(UPDATE Lab.EP_VisitTestSetData VALUES :VISTD() WHERE VISTD_RowId = :VISTD(1))
+	
+	quit SQLCODE
+	
+	// insert antibiotic sensitivity
+TestDataAntibiotic() new (VISTA) set SQLCODE=0
+	set OrdNum=$piece(VISTA(0),"||"),ts=$piece(VISTA(0),"||",2),seq=$piece(VISTA(0),"||",3),tc=$piece(VISTA(0),"||",4)
+	set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"ANT",VISTA(2)),"\")=VISTA(3)
+	set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"ANT",VISTA(2)),"\",3)=VISTA(5)
+	set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"ANT",VISTA(2)),"\",4)=VISTA(6)
+	set $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"ANT",VISTA(2)),"\",6)=VISTA(8)
+	//&SQL(INSERT INTO Lab.EP_VisitTestSetDataAntibiotics VALUES :VISTA())
+	quit SQLCODE
+	
+	// extract result ranges
+Range(range) new (range) set range=$translate($get(range)," "),(rangeL,rangeH)="" do
+	. if $extract(range)="<" set rangeL="",rangeH=range quit
+	. if $extract(range)=">" set rangeL=range,rangeH="" quit
+	. if $extract(range)="-",range["/" set rangeL=$piece(range,"/"),rangeH=$piece(range,"/",2) quit
+	. if $extract(range)="-",$extract(range,2,99)["-" set rangeL="-"_$piece(range,"-",2),rangeH=$piece(range,"-",3,99) quit
+	. set rangeL=$piece(range,"-"),rangeH=$piece(range,"-",2)
+	quit rangeL_"|"_rangeH
+	// check for abnormal results
+Abnormal(intOrdNum,OrdNum,ts,seq) new (intOrdNum,OrdNum,ts,seq,OrdDetail,TEST)
+	set intOrdNum=$get(intOrdNum),OrdNum=$get(OrdNum),ts=$get(ts),seq=$get(seq),abnormal=""
+	set panic=""
+	set tc="" for  set tc=$order(^TEPI(OrdNum,1,ts,seq,"DATA",tc),1,detail) quit:tc=""  do  quit:((abnormal="Y")&&(panic="Y"))
+	. set result=$piece(detail,"\"),range=$piece(detail,"\",4,5),flag=$piece(detail,"\",8)
+	. if result="",$data(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM")) do  quit
+	. . // check for flag (excluding 'N'ormal) against comment to indicate abnormal
+	. . if flag'="",flag'="N" set abnormal="Y"
+	. if result="" quit
+	. // check for abnormal results which have no range
+	. if $translate(range,"\")="" do  quit
+	. . if flag'="",flag'="N" set abnormal="Y"
+	. set RangeL=$piece(range,"\"),RangeH=$piece(range,"\",2)
+	. for xrange="RangeL","RangeH","result" do
+	. . if @xrange[">" set @xrange=$translate(@xrange,">")+.00000001
+	. . if @xrange["<" set @xrange=$translate(@xrange,"<")-.00000001
+	. set abnormal=$select(result<RangeL&(RangeL'=""):"Y",result>RangeH&(RangeH'=""):"Y",1:abnormal)
+	. if (flag="HH")||(flag="LL") set panic="Y"
+	// update order if abnormal or panic result found
+	do OrderUpdate^HL7Common3(intOrdNum,"MF",$select(abnormal="Y":"Y",1:"N")_"^"_$select(panic="Y":"Y",1:"N"),191_"^"_328)
+	quit
+	// compare current results with new
+Compare(OrdNum,ts,seq) new (OrdNum,ts,seq,TEST) set OrdNum=$get(OrdNum),ts=$get(ts),seq=$get(seq),change=0
+	set tc="" for  set tc=$order(TEST(ts,"TC",tc)) quit:tc=""  do  quit:change
+	. // check standard result
+	. if '$data(^TEPI(OrdNum,1,ts,seq,"DATA",tc)) set change=1 quit
+	. if $piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",tc)),"\")'=$translate($get(TEST(ts,"TC",tc,"RES",1)),"^\|",$char(16,17,18)) set change=1 quit
+	. // check result range
+	. set range=$$Range($piece(TEST(ts,"TC",tc),"\",3)) do  quit:change
+	. . if $piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",tc)),"\",4)'=$piece(range,"|") set change=1 quit
+	. . if $piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",tc)),"\",5)'=$piece(range,"|",2) set change=1 quit
+	. // check flag
+	. if $piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",tc)),"\",8)'=$piece(TEST(ts,"TC",tc),"\",4) set change=1 quit
+	. // check antibiotic
+	. if $data(TEST(ts,"TC",tc,"ANT")) do  quit:change
+	. . set ant="" for  set ant=$order(TEST(ts,"TC",tc,"ANT",ant)) quit:ant=""  do  quit:change
+	. . . if '$data(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"ANT",ant)) set change=1 quit
+	. . . if $piece(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"ANT",ant),"\")'=$piece(TEST(ts,"TC",tc,"ANT",ant),"\") set change=1 quit
+	. // check comment
+	. if $data(TEST(ts,"TC",tc,"COM")) do  quit:change
+	. . set com="" for  set com=$order(TEST(ts,"TC",tc,"COM",com)) quit:com=""  do  quit:change
+	. . . if '$data(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM",com)) set change=1 quit
+	. . . if $get(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM",com))'=$translate($get(TEST(ts,"TC",tc,"COM",com)),"^\|",$char(16,17,18)) set change=1 quit
+	. // check status - ignored 'k'orrected status
+	. if $piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",tc)),"\",2)="K",($piece(TEST(ts,"TC",tc),"\",5)="A"!($piece(TEST(ts,"TC",tc),"\",5)="K")) quit
+	. if $piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",tc)),"\",2)'=$piece(TEST(ts,"TC",tc),"\",5) set change=1
+	
+	quit change
+	
+	// insert/update atomic transaction queue : status - 0 : queued, not sent
+	//						    1 : sent, no results
+	//					    	    2 : results available, not viewed
+	//						    3 : results viewed
+	//						    4 : results deauthorised
+AtomicTrans set (update,LabTestRowId)=""
+	set LabTestRowId=$$LabTestRowId^HL7Common2(intOrdNum)
+	set OrdNum=$piece(LabTestRowId,"||"),ts=$piece(LabTestRowId,"||",2),seq=$piece(LabTestRowId,"||",3),colltime=colltime*60
+	
+	// update atomic transaction queue
+	do  if update quit
+	. set date="" for  set date=$order(^TEPIi("MEDTRAK",intRegMrn,date)) quit:date=""  do  quit:update
+	. . set time="" for  set time=$order(^TEPIi("MEDTRAK",intRegMrn,date,time)) quit:time=""  do  quit:update
+	. . . if '$data(^TEPIi("MEDTRAK",intRegMrn,date,time,intAdmNum,intOrdNum)) quit
+	. . . set mcat="" for  set mcat=$order(^TEPIi("MEDTRAK",intRegMrn,date,time,intAdmNum,intOrdNum,mcat)) quit:mcat=""  do  quit:update
+	. . . . if '$data(^TEPIi("MEDTRAK",intRegMrn,date,time,intAdmNum,intOrdNum,mcat,ts,seq,OrdNum)) quit
+	. . . . // setup again as collect date/time may have changed
+	. . . . kill ^TEPIi("MEDTRAK",intRegMrn,date,time,intAdmNum,intOrdNum,mcat,ts,seq,OrdNum),^TEPIi("MEDTRAKi",OrdNum,ts,seq)
+	. . . . set ^TEPIi("MEDTRAKi",OrdNum,ts,seq)=intRegMrn_"\"_colldate_"\"_colltime_"\"_intAdmNum_"\"_intOrdNum_"\"_MedCat
+	. . . . set ^TEPIi("MEDTRAK",intRegMrn,colldate,colltime,intAdmNum,intOrdNum,MedCat,ts,seq,OrdNum)=2
+	. . . . set update=1
+	
+	// insert atomic transaction queue
+	set ^TEPIi("MEDTRAKi",OrdNum,ts,seq)=intRegMrn_"\"_colldate_"\"_colltime_"\"_intAdmNum_"\"_intOrdNum_"\"_MedCat
+	set ^TEPIi("MEDTRAK",intRegMrn,colldate,colltime,intAdmNum,intOrdNum,MedCat,ts,seq,OrdNum)=2
+	
+	quit
+
+
+

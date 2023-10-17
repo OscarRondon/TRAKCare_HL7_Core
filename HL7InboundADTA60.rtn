@@ -1,0 +1,34 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundADTA60^MAC^^^0
+HL7InboundADTA60	// ML 01/07/2010 ;  HL7 interface : patient event ADT_A60
+	quit
+	// A60 - update adverse reaction information
+A60()
+	set HL7Flag="Y"
+	set (reject,rejecthere)=""
+	set cnt1=0 for  {
+		if reject'="" quit
+		set cnt1=$order(^TMP("HL7",$job,cnt1)) if cnt1="" quit
+		if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+		if '$data(^TMP("HL7",$job,cnt1,"PID")) set reject="Required segment PID not received in message",reject("Detail")="PID^^^~"_100,rejecthere="Y" quit
+		// check if pre-existing patient
+		set numbers=$$RegNum^HL7Common2(.reject,"A31")
+		set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+		if reject'="" set rejecthere="Y" quit
+		// extract EVN information
+		do EVN^HL7InboundExtract0
+		kill ALERT,ALERTi,ALG,ALGi
+		// extract IAM information
+		do IAM^HL7InboundExtract1
+		set reject=""
+		// add or update alert and allergy information
+		do ALERTALLERGY^HL7InboundUpdate1
+		kill params,ALERT,ALERTi,ALG,ALGi
+	}
+	kill params,ALERT,ALERTi,ALG,ALGi
+	if rejecthere="Y" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

@@ -1,0 +1,282 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7MastFileM02^MAC^^^0
+HL7MastFileM02 // ML 19/10/2005 ; HL7 interface : master file notification categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7MastFileM02.rtn#1 $
+	quit
+	
+	// M02 - users and care providers
+M02()
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if '$data(^TMP("HL7",$job,cnt1,"MFI")) quit
+	. set mode=$get(^TMP("HL7",$job,cnt1,"MFI",3))
+	
+	. // only allow updates
+	. if mode="UPD" do
+	. . // extract table to update
+	. . set table=$piece($get(^TMP("HL7",$job,cnt1,"MFI",1)),"^")
+	. . // check if table set to update
+	. . set reject=""
+	. . set updtable=$$TableCheck^HL7MastFile(event,table,.reject) if reject'="" do  quit
+	. . . set reject("Detail")="MFI^^1~206"
+	
+	. . set tablename=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7MasterFileTables",updtable))
+	
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,"MFE"))!('$data(^TMP("HL7",$job,cnt1,cnt2,"STF"))) quit
+	. . . set updtype=$get(^TMP("HL7",$job,cnt1,cnt2,"MFE",1))
+	. . . set date=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"MFE",3)),1,8),date=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	. . . // force date if not exist for deactivation
+	. . . if date="",updtype="MDC" set date=+$h
+	
+	. . . // extract care provider detail
+	. . . set code=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"STF",1)),"^")
+	. . . set name=$get(^TMP("HL7",$job,cnt1,cnt2,"STF",3))
+	. . . set titleID=""
+	. . . set title=$piece(name,"^",5) if title'="" do
+	. . . . &SQL(SELECT TTL_RowId INTO :titleID FROM CT_Title WHERE TTL_Code = :title)
+	. . . set type=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"STF",4)),"^")
+	. . . set DateOfBirth=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"STF",6)),"^") if DateOfBirth'="" do
+	. . . . set DateOfBirth=$$DateConv^HL7Common2(.reject,"EI",DateOfBirth)
+	. . . set active=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"STF",7)),"^"),active=$select(active="I":"N",1:"Y")
+	. . . // force deactivation
+	. . . if updtype="MDC" set active="N"
+	
+	. . . kill CONTACT
+	. . . // extract phone details
+	. . . set phone=$get(^TMP("HL7",$job,cnt1,cnt2,"STF",10)) if $translate(phone,"~^")'="" do
+	. . . . for i=1:1:$length(phone,"~") do
+	. . . . . set detail=$piece(phone,"~",i)
+	. . . . . if $piece(detail,"^",2)="NET",$piece(detail,"^",3)="Internet" set CONTACT("Email")=$piece(detail,"^",4)
+	. . . . . if $piece(detail,"^",2)="PRN",$piece(detail,"^",3)="PH" set CONTACT("PhoneH")=$piece(detail,"^")
+	. . . . . if $piece(detail,"^",2)="ORN",$piece(detail,"^",3)="CP" set CONTACT("PhoneM")=$piece(detail,"^")
+	. . . . . if $piece(detail,"^",2)="WPN",$piece(detail,"^",3)="PH" set CONTACT("PhoneW")=$piece(detail,"^")
+	. . . . . if $piece(detail,"^",2)="WPN",$piece(detail,"^",3)="FX" set CONTACT("Fax")=$piece(detail,"^")
+	
+	. . . kill ADDRESS set address=$get(^TMP("HL7",$job,cnt1,cnt2,"STF",11)) for j=1:1:5 set ADDRESS(j)=$piece(address,"^",j)
+	. . . set value=$$Address^HL7Common7(.reject,"I","PCP",ADDRESS(3)_"|" _ADDRESS(5)_"|"_ADDRESS(4))
+	. . . set ADDRESS(3)=$piece(value,"|"),ADDRESS(5)=$piece(value,"|",2),ADDRESS(4)=$piece(value,"|",3)
+	
+	. . . set CONTACT("Email2")=$get(^TMP("HL7",$job,cnt1,cnt2,"STF",15))
+	
+	. . . kill DOCCLINIC
+	. . . set specialty="" if $data(^TMP("HL7",$job,cnt1,cnt2,"PRA")) do
+	. . . . set specialty=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PRA",5)),"^")
+	. . . . set DOCCLINIC("ProvNo")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"PRA",6)),"^")
+	. . . . // extract active and inactive dates
+	. . . . set datex=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"PRA",8)),1,8),DOCCLINIC("DateFrom")=$select(datex?8N:$$DateConv^HL7Common2(.reject,"EI",datex),1:"")
+	. . . . set datex=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"PRA",10)),1,8),DOCCLINIC("DateTo")=$select(datex?8N:$$DateConv^HL7Common2(.reject,"EI",datex),1:"")
+	
+	. . . kill CLINIC
+	. . . if $data(^TMP("HL7",$job,cnt1,cnt2,"ZPR")) do  if reject'="" quit
+	. . . . // clinic/practice details
+	. . . . set CLINIC("Code")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZPR",2)),"^"),CLINIC("Desc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZPR",3)),"^")
+	. . . . set (CLINrow,CLINcode,CLINdesc)=""
+	. . . . // check clinic exists
+	. . . . if '$$ClinicUnique(CLINIC("Code"),CLINIC("Desc")) do  quit
+	. . . . . set reject="Unable to "_$select(updtype="MAD":"add",updtype="MUP":"update",updtype="MDC":"deactivate",1:"reactivate")_" clinic code/desc "_CLINIC("Code")_"/"_CLINIC("Desc")_" received is not unique, table "_tablename
+	. . . . . set reject("Detail")="MFE^"_$get(^TMP("HL7",$job,cnt1,"MFE",2))_"^4~206"
+	. . . . set CLINcode=##class(%Collation).AlphaUp(CLINIC("Code")),CLINdesc=##class(%Collation).AlphaUp(CLINIC("Desc"))
+	. . . . &SQL(SELECT CLN_RowID INTO :CLINrow FROM PAC_Clinic WHERE CLN_Code = :CLINcode)
+	. . . . set CLINIC("RowId")=CLINrow
+	
+	. . . . // extract address details
+	. . . . set address=$get(^TMP("HL7",$job,cnt1,cnt2,"ZPR",5))
+	. . . . // can only store two addresses against referring doctor
+	. . . . if $translate(address,"~^")'="" do
+	. . . . . set AddLine1=$piece(address,"^"),AddLine2=$piece(address,"^",2)
+	. . . . . // check and replace any escape sequences for first two lines of address
+	. . . . . for var="AddLine1","AddLine2" if @var'="" set @var=$translate($$TextConversion^HL7Common12(@var,"I"),"^")
+	. . . . . set CLINIC("Address1")=AddLine1
+	. . . . . set CLINIC("Address2")=AddLine2
+	. . . . . set CLINIC("City")=$piece(address,"^",3)
+	. . . . . set CLINIC("Zip")=$piece(address,"^",5)
+	. . . . . // extract rowids for city and postcode
+	. . . . . set value=$$Address^HL7Common7(.reject,"I","PCP", CLINIC("City")_"|" _CLINIC("Zip"))
+	. . . . . set CLINIC("City")=$piece(value,"|"),CLINIC("Zip")=$piece(value,"|",2)
+	
+	. . . . // extract phone details
+	. . . . set phone=$get(^TMP("HL7",$job,cnt1,cnt2,"ZPR",6)) if $translate(phone,"~^")'="" do
+	. . . . . for i=1:1:$length(phone,"~") do
+	. . . . . . set detail=$piece(phone,"~",i)
+	. . . . . . if $piece(detail,"^",2)="NET",$piece(detail,"^",3)="Internet" set CLINIC("Email")=$piece(detail,"^",4)
+	. . . . . . if $piece(detail,"^",2)="PRN",$piece(detail,"^",3)="PH" set CLINIC("Phone")=$piece(detail,"^")
+	. . . . . . if $piece(detail,"^",2)="ORN",$piece(detail,"^",3)="CP" set CLINIC("PhoneM")=$piece(detail,"^")
+	. . . . . . if $piece(detail,"^",2)="WPN",$piece(detail,"^",3)="PH" set CLINIC("BusPhone")=$piece(detail,"^")
+	. . . . . . if $piece(detail,"^",2)="WPN",$piece(detail,"^",3)="FX" set CLINIC("Fax")=$piece(detail,"^")
+	
+	. . . . // extract active and inactive dates
+	. . . . set datex=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"ZPR",7)),1,8),CLINIC("DateFrom")=$select(datex?8N:$$DateConv^HL7Common2(.reject,"EI",datex),1:"")
+	. . . . set datex=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"ZPR",8)),1,8),CLINIC("DateTo")=$select(datex?8N:$$DateConv^HL7Common2(.reject,"EI",datex),1:"")
+	
+	. . . do UpdateTable(updtable,updtype,tablename,code,name,type,active,specialty,date,.ADDRESS,.CONTACT,.CLINIC,.DOCCLINIC)
+	
+	if mode'="UPD" do
+	. set reject="Master filed mode "_mode_" received is not catered for.  Only catering for mode 'UPD'",reject("Detail")="MFI^^3~206"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	// update code table entries
+UpdateTable(updtable,updtype,tablename,code,name,type,active,specialty,date,ADDRESS,CONTACT,CLINIC,DOCCLINIC) set updtable=$get(updtable),updtype=$get(updtype),tablename=$get(tablename)
+	set code=##class(%Collation).AlphaUp($get(code)),name=$get(name),type=$get(type),active=$get(active),specialty=$get(specialty),date=$get(date),(ProvTypeId,SpecId)=""
+	kill PLIST
+	
+	set SQLCODE=$$DynamicQuery^HL7Common12(updtable,"C","",code)
+	set Exists='(SQLCODE)
+	
+	kill xPLIST
+	merge xPLIST=PLIST
+	
+	// code already exists for add
+	if Exists,updtype="MAD" do  quit
+	. set reject="Unable to add code "_code_" ("_$translate(name,"^","_")_") to table "_tablename_", code already exists",reject("Detail")="MFE^^4~206"
+	// code does not exist for update
+	if 'Exists,updtype'="MAD" do  quit
+	. set reject="Unable to update code "_code_" ("_$translate(name,"^","_")_") for table "_tablename_", code does not exist",reject("Detail")="MFE^^4~103"
+	
+	if updtype="MAD",'Exists kill PLIST
+	
+	// check provider type
+	if type'="",updtable="CTCareProv" do
+	. &SQL(SELECT CTCPT_RowId INTO :ProvTypeId FROM CT_CarPrvTp WHERE CTCPT_Code = :type)
+	. if SQLCODE do
+	. . set reject="Provider type "_type_" does not exist in TrakCare" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	// check speciality
+	if specialty'="" do
+	. &SQL(SELECT CTSPC_RowId INTO :SpecId FROM CT_Spec WHERE CTSPC_Code = :specialty)
+	. if SQLCODE do
+	. . set reject="Specialty "_specialty_" does not exist in TrakCare" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+	
+	// insert/update clinic details
+	if $data(CLINIC) do Clinic
+	kill PLIST
+	merge PLIST=xPLIST
+	set name=$zstrip(name,"<>W")
+	
+	// insert new entry
+	if 'Exists do
+	. // add care provider
+	. if updtable="CTCareProv" do  quit
+	. . set PLIST(2)=code,PLIST(3)=$piece(name,"^",5)_" "_$piece(name,"^",2)_" "_$piece(name,"^"),PLIST(7)=ProvTypeId,PLIST(10)="" for i=1:1:2 set PLIST(10)=PLIST(10)_$listbuild(ADDRESS(i))
+	. . set PLIST(13)=ADDRESS(3),PLIST(14)=ADDRESS(4),PLIST(15)=ADDRESS(5),PLIST(16)=SpecId,PLIST(25)=active,PLIST(38)=date,PLIST(49)=$piece(name,"^",5),PLIST(72)=$piece(name,"^",2),PLIST(73)=$piece(name,"^",3),PLIST(75)=$piece(name,"^")
+	. . &SQL(INSERT INTO CT_CareProv VALUES :PLIST())
+	. . if SQLCODE quit
+	. . // update keywords
+	. . kill %d merge %d=PLIST set %d(1)=%ROWID
+	. . do POFILINS^at111
+	
+	. // add referring doctor
+	. if updtable="PACRefDoctor" do  quit
+	. . set PLIST(2)=code,PLIST(3)=$piece(name,"^"),PLIST(6)="" for i=1:1:2 set PLIST(6)=PLIST(6)_$listbuild(ADDRESS(i))
+	. . set PLIST(7)=ADDRESS(5),PLIST(8)=ADDRESS(3),PLIST(9)=ADDRESS(4),PLIST(10)=$get(CONTACT("PhoneH")),PLIST(14)=DateOfBirth,PLIST(17)=date,PLIST(39)=SpecId,PLIST(42)=$get(CONTACT("PhoneW")),PLIST(43)=$get(CONTACT("Fax")),PLIST(44)=$get(CONTACT("PhoneM"))
+	. . set PLIST(45)=$get(CONTACT("Email")),PLIST(51)=$piece(name,"^",2),PLIST(53)=titleID,PLIST(54)=$piece(name,"^",3),PLIST(55)=$get(CONTACT("Email2"))
+	. . &SQL(INSERT INTO PAC_RefDoctor VALUES :PLIST())
+	. . if SQLCODE quit
+	. . set DocRowId=%ROWID
+	. . // update keywords
+	. . kill %d merge %d=PLIST set %d(1)=%ROWID
+	. . do POFILINS^at1423
+	. . // add referring doctor clinic
+	. . if $data(CLINIC) do
+	. . . do DocClinic
+	
+	// update/reactivate/deactivate entry
+	if Exists do
+	. // update care provider
+	. if updtable="CTCareProv" do  quit
+	. . set DocRowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=$piece(name,"^",5)_" "_$piece(name,"^",2)_" "_$piece(name,"^"),PLIST(7)=ProvTypeId,PLIST(10)="" for i=1:1:2 set PLIST(10)=PLIST(10)_$listbuild(ADDRESS(i))
+	. . set PLIST(13)=ADDRESS(3),PLIST(14)=ADDRESS(4),PLIST(15)=ADDRESS(5),PLIST(16)=SpecId,PLIST(25)=active,PLIST(39)=$select(updtype="MUP":PLIST(39),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . set PLIST(49)=$piece(name,"^",5),PLIST(72)=$piece(name,"^",2),PLIST(73)=$piece(name,"^",3),PLIST(75)=$piece(name,"^")
+	. . &SQL(UPDATE CT_CareProv VALUES :PLIST() WHERE CTPCP_RowId = :DocRowId)
+	. . if SQLCODE quit
+	. . // update keywords
+	. . kill %d merge %d=PLIST set %d(1)=RowId
+	. . do POFILUPD^at111
+	
+	. // update referring doctor
+	. if updtable="PACRefDoctor" do  quit
+	. . // check if deactivating and set date
+	. . set DateDeactivated=$get(PLIST(18))
+	. . if active="N",$get(PLIST(18))="" set DateDeactivated=date
+	. . if active="Y",$get(PLIST(18))'="" set DateDeactivated=""
+	. . if updtype="MDC" set DateDeactivated=date
+	. . set DocRowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=$piece(name,"^"),PLIST(6)="" for i=1:1:2 set PLIST(6)=PLIST(6)_$listbuild(ADDRESS(i))
+	. . set PLIST(7)=ADDRESS(5),PLIST(8)=ADDRESS(3),PLIST(9)=ADDRESS(4),PLIST(10)=$get(CONTACT("PhoneH")),PLIST(14)=DateOfBirth,PLIST(18)=DateDeactivated,PLIST(39)=SpecId
+	. . set PLIST(42)=$get(CONTACT("PhoneW")),PLIST(43)=$get(CONTACT("Fax")),PLIST(44)=$get(CONTACT("PhoneM")),PLIST(45)=$get(CONTACT("Email"))
+	. . set PLIST(51)=$piece(name,"^",2),PLIST(53)=titleID,PLIST(54)=$piece(name,"^",3),PLIST(55)=$get(CONTACT("Email2"))
+	. . &SQL(UPDATE PAC_RefDoctor VALUES :PLIST() WHERE REFD_RowId = :DocRowId)
+	. . if SQLCODE quit
+	. . // update keywords
+	. . kill %d merge %d=PLIST set %d(1)=DocRowId
+	. . do POFILUPD^at1423
+	. . // add/update referring doctor clinic
+	. . if $data(CLINIC) do
+	. . . set DOCClinRow=""
+	. . . // check if already exists
+	. . . &SQL(SELECT CLN_RowId INTO :DOCClinRow FROM PAC_RefDoctorClinic WHERE CLN_ParRef = :DocRowId AND CLN_Code = :CLINIC("Code") AND CLN_Clinic_DR = :CLINIC("RowId"))
+	. . . if SQLCODE do  quit
+	. . . . // clinic does not exist against doctor so add
+	. . . . do DocClinic
+	. . . if 'SQLCODE do
+	. . . . // clinic exists so update with new details
+	. . . . kill PLIST
+	. . . . set PLIST(3)=$get(CLINIC("Code")),PLIST(4)=$get(CLINIC("Address1")),PLIST(5)=$get(CLINIC("Address2")),PLIST(6)=$get(CLINIC("City")),PLIST(7)=$get(CLINIC("Zip"))
+	. . . . set PLIST(8)=$get(CLINIC("Phone")),PLIST(9)=$get(DOCCLINIC("ProvNo")),PLIST(10)=$get(CLINIC("BusPhone")),PLIST(11)=$get(CLINIC("PhoneM")),PLIST(12)=$get(CLINIC("Fax"))
+	. . . . set PLIST(13)=$get(CLINIC("Email")),PLIST(16)=$get(DOCCLINIC("DateFrom")),PLIST(17)=$get(DOCCLINIC("DateTo")),PLIST(18)=CLINIC("RowId")
+	. . . . &SQL(UPDATE PAC_RefDoctorClinic VALUES :PLIST() WHERE CLN_RowId = :DOCClinRow)
+	if 'SQLCODE quit
+	
+	// set rejection message
+	set reject="Unable to "_$select(updtype="MAD":"add",updtype="MUP":"update",updtype="MDC":"deactivate",1:"reactivate")_" code "_code_" ("_$translate(name,"^","_")_"), table "_tablename
+	set reject("Detail")="MFE^"_$get(^TMP("HL7",$job,cnt1,"MFE",2))_"^4~206"
+	
+	quit
+	
+	// check if clinic is unique
+ClinicUnique(clcode,cldesc) new (clcode,cldesc) set clcode=$get(clcode),cldesc=$get(cldesc)
+	set (RowId1,RowId2)="",IsUnique=1
+	
+	// check if code and desc are unique to enable insert
+	set unique=##class(web.PACClinic).isUnique("",clcode,cldesc)
+	
+	if 'unique do
+	. // make sure rowids for code and desc match to enable update
+	. &SQL(SELECT CLN_RowID INTO :RowId1 FROM PAC_Clinic WHERE CLN_Code = %ALPHAUP(:clcode))
+	
+	. &SQL(SELECT CLN_RowID INTO :RowId2 FROM PAC_Clinic WHERE CLN_Desc = %ALPHAUP(:cldesc))
+	
+	. // allow update of description if it does not exist
+	. if RowId1'="",RowId2="" quit
+	
+	. if RowId1'=RowId2 set IsUnique=0
+	
+	quit IsUnique
+	
+	// insert/update clinic
+Clinic
+	if CLINIC("RowId")="" do  quit
+	. kill PLIST
+	. set PLIST(2)=$get(CLINIC("Code")),PLIST(3)=$get(CLINIC("Desc")),PLIST(4)=$get(CLINIC("Address1")),PLIST(5)=$get(CLINIC("Address2")),PLIST(6)=$get(CLINIC("City")),PLIST(7)=$get(CLINIC("Zip"))
+	. set PLIST(8)=$get(CLINIC("Phone")),PLIST(9)=$get(CLINIC("Fax")),PLIST(10)=$get(CLINIC("Email")),PLIST(12)=$get(CLINIC("DateFrom")),PLIST(13)=$get(CLINIC("DateTo")),PLIST(15)=$get(CLINIC("BusPhone"))
+	. &SQL(INSERT INTO PAC_Clinic VALUES :PLIST())
+	. set CLINIC("RowId")=%ROWID
+	
+	if CLINIC("RowId")'="" do
+	. kill PLIST
+	. set PLIST(2)=$get(CLINIC("Code")),PLIST(3)=$get(CLINIC("Desc")),PLIST(4)=$get(CLINIC("Address1")),PLIST(5)=$get(CLINIC("Address2")),PLIST(6)=$get(CLINIC("City")),PLIST(7)=$get(CLINIC("Zip"))
+	. set PLIST(8)=$get(CLINIC("Phone")),PLIST(9)=$get(CLINIC("Fax")),PLIST(10)=$get(CLINIC("Email")),PLIST(12)=$get(CLINIC("DateFrom")),PLIST(13)=$get(CLINIC("DateTo")),PLIST(15)=$get(CLINIC("BusPhone"))
+	. set row=CLINIC("RowId")
+	. &SQL(UPDATE PAC_Clinic VALUES :PLIST() WHERE CLN_RowId = :row)
+	quit
+	
+DocClinic
+	kill PLIST
+	set PLIST(0)=DocRowId,PLIST(3)=$get(CLINIC("Code")),PLIST(4)=$get(CLINIC("Address1")),PLIST(5)=$get(CLINIC("Address2")),PLIST(6)=$get(CLINIC("City")),PLIST(7)=$get(CLINIC("Zip"))
+	set PLIST(8)=$get(CLINIC("Phone")),PLIST(9)=$get(DOCCLINIC("ProvNo")),PLIST(10)=$get(CLINIC("BusPhone")),PLIST(11)=$get(CLINIC("PhoneM")),PLIST(12)=$get(CLINIC("Fax"))
+	set PLIST(13)=$get(CLINIC("Email")),PLIST(16)=$get(DOCCLINIC("DateFrom")),PLIST(17)=$get(DOCCLINIC("DateTo")),PLIST(18)=$get(CLINIC("RowId"))
+	&SQL(INSERT INTO PAC_RefDoctorClinic VALUES :PLIST())
+	quit
+
+
+

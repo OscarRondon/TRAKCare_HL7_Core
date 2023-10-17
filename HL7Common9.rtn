@@ -1,0 +1,151 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Common9^MAC^^^0
+HL7Common9	// ML 27/10/2004 ; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common9.rtn#1 $
+	quit
+ 
+	// add/update specimen code table details
+Specimen(code,desc,OrderedItem) new (code,desc,OrderedItem) set code=$get(code),desc=$get(desc),OrderedItem=$get(OrderedItem)
+	if code="" quit
+ 
+	kill SPEC
+ 
+	// update only desc for existing code
+	if desc'="",$data(^TTAB("SPEC",code)) set $piece(^TTAB("SPEC",code),"\")=desc
+	// add new specimen
+	if code'="",'$data(^TTAB("SPEC",code)) set ^TTAB("SPEC",code)=$select(desc'="":desc,1:code)_"\99999\Y\\\"_+$h
+ 
+	// add to ordered item
+	if OrderedItem="" quit
+	set item1=$piece(OrderedItem,"||"),item2=$piece(OrderedItem,"||",2),found=""
+	set row=0 for  set row=$order(^ARCIM(item1,item2,"SPEC",row)) quit:row=""  quit:found  do
+	.if $piece(^(row),"^")=code set found=1
+	if 'found do
+	.kill SPEC set SPEC(0)=OrderedItem,SPEC(3)=code
+	. &SQL(INSERT INTO ARC_ItemSpecimen VALUES :SPEC())
+ 
+	quit
+ 
+	// add/update specimen site
+SpecimenSite(code,desc) new (code,desc) set code=$get(code),desc=$get(desc)
+	if code="" quit
+	// update only desc for existing code
+	if $data(^TTAB("DB-SPEC",code)) set $piece(^TTAB("DB-SPEC",code),"\")=desc quit
+	// add new specimen site with start date
+	set $piece(^TTAB("DB-SPEC",code),"\")=desc,$piece(^TTAB("DB-SPEC",code),"\",5)=+$h
+	quit
+ 
+	// add/update specimen on order
+OrderSpec(intOrdNum,code,sitecode,date,time,order,new) new (intOrdNum,code,sitecode,date,time,order,new) set intOrdNum=$get(intOrdNum),code=$get(code),sitecode=$get(sitecode),date=$get(date),time=$get(time),order=$get(order),new=$get(new)
+	if code="" quit
+	set ord1=$piece(intOrdNum,"||"),ord2=$piece(intOrdNum,"||",2),RowId="" kill OrdSpec,OrdSpecDetail,OrdSpecSite
+ 
+	// check if specimen already exists on order
+	&SQL(SELECT SPEC_RowId INTO :RowId FROM OE_OrdSpecimen WHERE SPEC_ParRef = :intOrdNum AND SPEC_Code = :code)
+ 
+	// ignore update of order specimen if no match found
+	if RowId="",order="O",new'="Y" set order=""
+ 
+	set OrdSpecDetail(3)=code,OrdSpecDetail(4)="Y",OrdSpecDetail(6)=date,OrdSpecDetail(7)=time
+	// set specimen display
+	set display="" if order="" do  set OrdSpecDetail(17)=display if display="" kill OrdSpec
+	.kill OrdSpec,count
+	.set row=0 for  set row=$order(^OEORD(ord1,"I",ord2,"SPEC",row)) quit:row=""  set OrdSpec($increment(count))=ord1_"||"_ord2_"||"_row_"^"_$piece(^OEORD(ord1,"I",ord2,"SPEC",row),"^")_"^"_$piece(^OEORD(ord1,"I",ord2,"SPEC",row),"^",14)
+	. // display for both order and result profile
+	.if '$data(OrdSpec) set display="R" quit
+	.if RowId="",$order(OrdSpec(""),-1)=1 do  quit
+	..set count=$order(OrdSpec(""))
+	..if $piece(OrdSpec(count),"^",2)'=code set display="R",$piece(OrdSpec(count),"^",3)="O"
+	.if RowId'="",$order(OrdSpec(""),-1)=1 quit
+	. // display for just result profile
+	.if $order(OrdSpec(""),-1)>1 do
+	..set display="R"
+	.. // update other specimens to 'O'rder only
+	..set count="" for  set count=$order(OrdSpec(count)) quit:count=""  do
+	...if $piece(OrdSpec(count),"^",3)="O" quit
+	...if $piece(OrdSpec(count),"^",3)="" set $piece(OrdSpec(count),"^",3)="O" quit
+	...set $piece(OrdSpec(count),"^",3)="R"
+ 
+	// if order message force to 'O'rder display
+	if order'="",new="Y" set OrdSpecDetail(17)="O"
+ 
+	if RowId="" do
+	. // insert new specimen
+	.set OrdSpecDetail(0)=intOrdNum
+	. &SQL(INSERT INTO OE_OrdSpecimen VALUES :OrdSpecDetail())
+	.if SQLCODE quit
+	.if sitecode="" quit
+	.set OrdSpecSite(0)=$get(%ROWID),OrdSpecSite(3)=sitecode
+	. &SQL(INSERT INTO OE_OrdSpecimenSites VALUES :OrdSpecSite())
+ 
+	if RowId'="" do
+	. // update existing specimen
+	. &SQL(UPDATE OE_OrdSpecimen VALUES :OrdSpecDetail() WHERE SPEC_RowId = :RowId)
+	. // update specimen site
+	.if sitecode="" quit
+	.set seq=$order(^OEORD($piece(RowId,"||"),"I",$piece(RowId,"||",2),"SPEC",$piece(RowId,"||",3),"SITE",""),-1)
+	.set currsite="" do  if currsite quit
+	..if seq=""!(seq=0) quit
+	..if $piece(^OEORD($piece(RowId,"||"),"I",$piece(RowId,"||",2),"SPEC",$piece(RowId,"||",3),"SITE",seq),"^")=sitecode set currsite=1
+	. // insert new site code
+	.set OrdSpecSite(0)=RowId,OrdSpecSite(3)=sitecode
+	. &SQL(INSERT INTO OE_OrdSpecimenSites VALUES :OrdSpecSite())
+ 
+	set count="" for  set count=$order(OrdSpec(count)) quit:count=""  do
+	.if $piece(OrdSpec(count),"^")=RowId quit
+	. // update existing specimen
+	.kill OrdSpecDetail set RowIdx=$piece(OrdSpec(count),"^"),OrdSpecDetail(17)=$piece(OrdSpec(count),"^",3)
+	. &SQL(UPDATE OE_OrdSpecimen VALUES :OrdSpecDetail() WHERE SPEC_RowId = :RowIdx)
+ 
+	kill OrdSpec,OrdSpecDetail,OrdSpecSite
+	quit
+ 
+	// extract hospital - method : R - RowId
+	// 			      C - Code
+Hospital(coderow,method) new (coderow,method) set coderow=##class(%Collation).AlphaUp($get(coderow)),method=$get(method),value=""
+ 
+	if method="R" do
+	. &SQL(SELECT HOSP_RowId INTO :value FROM CT_Hospital WHERE HOSP_Code = :coderow)
+	if method="C" do
+	. &SQL(SELECT HOSP_Code INTO :value FROM CT_Hospital WHERE HOSP_RowId = :coderow)
+ 
+	quit value
+ 
+	// extract ward/room/bed rowid
+WardRoomBed(ward,room,bed,hosp) new (ward,room,bed,hosp) set ward=$get(ward),room=$get(room),bed=$get(bed),hosp=$get(hosp)
+	set (Wrow,Rrow,Brow,SQLCODE)=""
+ 
+	if ward'="",room'="",bed'="",hosp'="" do
+	. &SQL(SELECT WARD_RowId, ROOM_RowId, BED_RowId INTO :Wrow, :Rrow, :Brow
+	         FROM PAC_Ward, PAC_Room, PAC_Bed, CT_Loc, CT_Hospital
+	        WHERE WARD_Code = :ward AND ROOM_Code = :room
+	          AND BED_Code = :bed AND HOSP_Code = :hosp
+	          AND BED_Room_DR = ROOM_RowId AND BED_Ward_ParRef = WARD_RowId
+	          AND CTLOC_RowId = WARD_LocationDR AND CTLOC_Hospital_DR = HOSP_RowId)
+ 
+	if ward'="",room'="",bed'="",hosp="" do
+	. &SQL(SELECT WARD_RowId, ROOM_RowId, BED_RowId INTO :Wrow, :Rrow, :Brow
+	         FROM PAC_Ward, PAC_Room, PAC_Bed, CT_Loc, CT_Hospital
+	        WHERE WARD_Code = :ward AND ROOM_Code = :room AND BED_Code = :bed
+	          AND BED_Room_DR = ROOM_RowId AND BED_Ward_ParRef = WARD_RowId
+		  AND CTLOC_RowId = WARD_LocationDR AND CTLOC_Hospital_DR = HOSP_RowId)
+ 
+	if ward'="",room'="",bed="" do
+	. &SQL(SELECT WARD_RowId, ROOM_RowId INTO :Wrow, :Rrow
+	         FROM PAC_Ward, PAC_Room, PAC_Bed, CT_Loc, CT_Hospital
+	        WHERE WARD_Code = :ward AND ROOM_Code = :room AND HOSP_Code = :hosp
+	          AND CTLOC_RowId = WARD_LocationDR AND CTLOC_Hospital_DR = HOSP_RowId)
+	.if SQLCODE quit
+	. &SQL(SELECT ROOM_RowId INTO :wardroom FROM PAC_WardRoom WHERE ROOM_ParRef = :Wrow AND ROOM_Room_DR = :Rrow)
+ 
+	if ward'="",room="",bed="" do
+	. &SQL(SELECT WARD_RowId INTO :Wrow
+		 FROM PAC_Ward, CT_Loc, CT_Hospital
+		WHERE WARD_Code = :ward AND HOSP_Code = :hosp
+		  AND CTLOC_RowId = WARD_LocationDR AND CTLOC_Hospital_DR = HOSP_RowId)
+ 
+	quit Wrow_"^"_Rrow_"^"_Brow_"^"_SQLCODE
+
+
+

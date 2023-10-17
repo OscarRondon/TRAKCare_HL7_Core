@@ -1,0 +1,588 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7InboundExtract1^MAC^^^0
+HL7InboundExtract1	// ML 11/06/2010 : extract data from segments
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundExtract1.rtn#1 $
+	quit
+	// extract data from AL1 segment
+AL1
+	kill Allergy
+	set seg="AL1" for  {
+		set seg=$order(^TMP("HL7",$job,cnt1,seg)) if seg'["AL1" quit
+		set j=$increment(ALG)
+		if $piece($get(^TMP("HL7",$job,cnt1,seg,3)),"^")'="" {
+			// allergy, onset date
+			set ALG(j,"ALGDescCT")=$piece($get(^TMP("HL7",$job,cnt1,seg,3)),"^"),ALG(j,"AllergenRowId")=##class(web.PACAllergy).GetIdFromCodeOrDescription(ALG(j,"ALGDescCT"))
+			set ALG(j,"ALGOnsetDate")=$extract($piece($get(^TMP("HL7",$job,cnt1,seg,6)),"^"),1,8)
+			// default status to 'A'ctive
+			set ALG(j,"ALGStatus")="A"
+			// validate date field
+			set date=""
+			if ALG(j,"ALGOnsetDate")'="" set date=$$DateConv^HL7Common2(.reject,"EI",ALG(j,"ALGOnsetDate"))
+			if date="-1"!(reject'="") {
+				set reject="Invalid Allergy onset date "_ALG(j,"ALGOnsetDate")_" sent on Registration number "_RegMrn
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+				set date=""
+			}
+			set ALG(j,"ALGOnsetDate")=date,ALG(j,"table")="PACAllergy"
+			// update date, time, user, hosp
+			set ALG(j,"ALGLastUpdateDate")=$get(EVNupdate("DATE")),ALG(j,"ALGLastUpdateTime")=$get(EVNupdate("TIME"))
+			set ALG(j,"ALGUpdateUserDR")=$get(EVNupdate("USER")),ALG(j,"ALGLastUpdateHospitalDR")=$get(EVNupdate("HOSP"))
+			// indexed array for use in matching existing allergies to received allergies
+			set ALGi("CODE",$piece($get(^TMP("HL7",$job,cnt1,seg,3)),"^"),j)=""
+			set ALGi("CODE-ROW",ALG(j,"AllergenRowId"),j)=""
+		}
+	}
+	//; extract allergy
+	//.i HL7("INCODE")="SWARH" d  q
+	//..i $p($g(^TMP("HL7",$j,cnt1,segid,2)),"^")="MC" d  q
+	//...s Alert(segid,21)=$p($g(^TMP("HL7",$j,cnt1,segid,3)),"^"),Alert(segid,30)="A"
+	quit
+	// extract data from IAM segment
+IAM
+	set seg="IAM" for  {
+		set seg=$order(^TMP("HL7",$job,cnt1,seg)) if seg'["IAM" quit
+		set type=$piece($get(^TMP("HL7",$job,cnt1,seg,7)),"^",4),type=$select(type="ALERT":"ALT",1:"ALG")
+		// extract alerts
+		if type="ALT" {
+			set j=$increment(ALERT)
+			// category, alert, external id, expiry reason
+			set ALERT(j,"AlertCat")=$piece($get(^TMP("HL7",$job,cnt1,seg,2)),"^"),ALERT(j,"ALMAlertDR")=$piece($get(^TMP("HL7",$job,cnt1,seg,3)),"^")
+			set ALERT(j,"ALMExternalID")=$piece($get(^TMP("HL7",$job,cnt1,seg,7)),"^"),ALERT(j,"ALEXPDesc")=$piece($get(^TMP("HL7",$job,cnt1,seg,8)),"^")
+			// comments
+			set detail=$piece($get(^TMP("HL7",$job,cnt1,seg,10)),"^"),ALERT(j,"ALMMessage")=""
+			for i=1:1:$length(detail,"~") {
+				set ALERT(j,"ALMMessage")=$get(ALERT(j,"ALMMessage"))_$select($length(ALERT(j,"ALMMessage")):$char(13,10),1:"")_$$TextConversion^HL7Common12($piece(detail,"~",i),"I")
+			}
+			// onset date, status, action required
+			set ALERT(j,"ALMOnsetDate")=$piece($get(^TMP("HL7",$job,cnt1,seg,11)),"^"),ALERT(j,"ALMStatus")=$piece($get(^TMP("HL7",$job,cnt1,seg,17)),"^")
+			set ALERT(j,"Action")=$select($piece($get(^TMP("HL7",$job,cnt1,seg,6)),"^")'="":$piece($get(^TMP("HL7",$job,cnt1,seg,6)),"^"),1:"A")
+			// validate date field
+			set date=""
+			if ALERT(j,"ALMOnsetDate")'="" set date=$$DateConv^HL7Common2(.reject,"EI",ALERT(j,"ALMOnsetDate"))
+			if date="-1"!(reject'="") {
+				set reject="Invalid Alert onset date "_ALERT(j,"ALMOnsetDate")_" sent on Registration number "_RegMrn
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+				set date=""
+			}
+			set ALERT(j,"ALMOnsetDate")=date
+			// update date, time, user, hosp
+			set ALERT(j,"LastUpdateDate")=$get(EVNupdate("DATE")),ALERT(j,"LastUpdateTime")=$get(EVNupdate("TIME"))
+			set ALERT(j,"LastUpdateUserID")=$get(EVNupdate("USER")),ALERT(j,"LastUpdateHospital")=$get(EVNupdate("HOSP"))
+			// indexed array for use in processing actions in appropriate order
+			set ALERTi("ACTION",ALERT(j,"Action"),j)=""
+		}
+		// extract allergies
+		if type="ALG" {
+			set j=$increment(ALG)
+			// category, allergy, severity, nature of reaction
+			set ALG(j,"MRCATDesc")=$piece($get(^TMP("HL7",$job,cnt1,seg,2)),"^"),ALG(j,"CategoryRowId")=##class(web.MRCAllType).GetIdFromCodeOrDescription(ALG(j,"MRCATDesc"))
+			set ALG(j,"ALGDescCT")=$piece($get(^TMP("HL7",$job,cnt1,seg,3)),"^"),ALG(j,"ALRGSEVDesc")=$piece($get(^TMP("HL7",$job,cnt1,seg,4)),"^")
+			set ALG(j,"ALRGCATDesc")=$piece($get(^TMP("HL7",$job,cnt1,seg,5)),"^")
+			// action required, external id, allergy area, reason for change
+			set ALG(j,"Action")=$piece($get(^TMP("HL7",$job,cnt1,seg,6)),"^"),ALG(j,"ALGExternalID")=$piece($get(^TMP("HL7",$job,cnt1,seg,7)),"^")
+			set ALGArea=$piece($get(^TMP("HL7",$job,cnt1,seg,7)),"^",4),ALG(j,"ReasForChange")=$piece($get(^TMP("HL7",$job,cnt1,seg,8)),"^")
+			// comments
+			set detail=$piece($get(^TMP("HL7",$job,cnt1,seg,10)),"^"),ALG(j,"ALGComments")=""
+			for i=1:1:$length(detail,"~") {
+				set ALG(j,"ALGComments")=$get(ALG(j,"ALGComments"))_$select($length(ALG(j,"ALGComments")):$char(13,10),1:"")_$$TextConversion^HL7Common12($piece(detail,"~",i),"I")
+			}
+			// onset date, status
+			set ALG(j,"ALGOnsetDate")=$piece($get(^TMP("HL7",$job,cnt1,seg,11)),"^"),ALG(j,"ALGStatus")=$piece($get(^TMP("HL7",$job,cnt1,seg,17)),"^")
+			// use correct code table for allergy
+			set ALG(j,"table")=""
+			if ALGArea="DRUG_GEN" set ALG(j,"AllergenRowId")=##class(web.PHCGeneric).GetIdFromCodeOrDescription(ALG(j,"ALGDescCT")),ALG(j,"table")="PHCGeneric"
+			if ALGArea="DRUG_MST" set ALG(j,"AllergenRowId")=##class(web.PHCDrgMast).GetIdFromCodeOrDescription(ALG(j,"ALGDescCT")),ALG(j,"table")="PHCDrgMast"
+			if ALGArea="INGRED" set ALG(j,"AllergenRowId")=##class(web.PHCIngredient).GetIdFromCodeOrDescription(ALG(j,"ALGDescCT")),ALG(j,"table")="PHCIngredient"
+			if ALG(j,"table")="" set ALG(j,"AllergenRowId")=##class(web.PACAllergy).GetIdFromCodeOrDescription(ALG(j,"ALGDescCT")),ALG(j,"table")="PACAllergy"
+			// validate date field
+			set date=""
+			if ALG(j,"ALGOnsetDate")'="" set date=$$DateConv^HL7Common2(.reject,"EI",ALG(j,"ALGOnsetDate"))
+			if date="-1"!(reject'="") {
+				set reject="Invalid Alert onset date "_ALG(j,"ALGOnsetDate")_" sent on Registration number "_RegMrn
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+				set date=""
+			}
+			set ALG(j,"ALGOnsetDate")=date
+			// update date, time, user, hosp
+			set ALG(j,"ALGLastUpdateDate")=$get(EVNupdate("DATE")),ALG(j,"ALGLastUpdateTime")=$get(EVNupdate("TIME"))
+			set ALG(j,"ALGUpdateUserDR")=$get(EVNupdate("USER")),ALG(j,"ALGLastUpdateHospitalDR")=$get(EVNupdate("HOSP"))
+			// indexed array for use in processing actions in appropriate order
+			set ALGi("ACTION",ALG(j,"Action"),j)=""
+		}
+	}
+	quit
+	// extract data from MRG segment
+MRG
+	if ",A34,A40,"[(","_$piece(msgtype,"^",2)_",") {
+		do NumTypeDetail^HL7Common2($get(PatNum("REG")),"","","","","","",.usetype,.usecode)
+		set found="",detail=^TMP("HL7",$job,cnt1,"MRG",1)
+		for i=1:1:$length(detail,"~") {
+			if reject'="" quit
+			if $piece($piece($piece(detail,"~",i),"^",usetype),"&")=usecode {
+				set RegMrnFrom=$piece($piece(detail,"^"),"~",i) if RegMrnFrom="",found="" set reject="No registration number supplied for merge",reject("Detail")="MRG^^1~101" quit
+				set intRegFrom=$$intRegMrn^HL7Common2(RegMrnFrom) if intRegFrom="" set reject="Registration number "_RegMrnFrom_" supplied for merge does not exist",reject("Detail")="MRG^^1~204" quit
+				set found=1
+			}
+		}
+		if found set MERGE("FROMPatientID")=intRegFrom,MERGE("FROMPAPMIRegNo")=RegMrnFrom
+	}
+	if ",A45,"[(","_$piece(msgtype,"^",2)_",") {
+		set MERGE("EpisodeIDString")=$piece($get(^TMP("HL7",$job,cnt1,"MRG",5)),"^")
+	}
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit
+	// extract data from NK1 segment
+NK1
+	set seg="NK1" for  {
+		set seg=$order(^TMP("HL7",$job,cnt1,seg)) if seg'["NK1" quit
+		
+		set j=$increment(NOK)
+		
+		// name detail - surname, given, middle, title
+		set detail=$get(^TMP("HL7",$job,cnt1,seg,2))
+		set NOK(j,"NOKName")=$piece(detail,"^"),NOK(j,"NOKName2")=$piece(detail,"^",2),NOK(j,"NOKName3")=$piece(detail,"^",3),NOK(j,"NOKTTLDesc")=$piece(detail,"^",5)
+		for var="NOKName","NOKName2","NOKName3" set NOK(j,var)=$translate($$TextConversion^HL7Common12(NOK(j,var),"I"),"^")
+		// relation
+		set NOK(j,"NOKRelation")=$piece($get(^TMP("HL7",$job,cnt1,seg,3)),"^")
+		// address
+		kill NOKAdd
+		set detail=$get(^TMP("HL7",$job,cnt1,seg,4)) for i=1:1 quit:$piece(detail,"~",i)=""  set NOKAdd(i)=$piece(detail,"~",i)
+		set (found,NOKAddLine1,NOKAddLine2,NOKSuburb,NOKState,NOKPostCode,NOKForCity,NOKForPost,NOKForCountry)=""
+		set i="" for  {
+			if found'="" quit
+			set i=$order(NOKAdd(i)) if i="" quit
+			if $piece(NOKAdd(i),"^",7)="P" {
+				set NOKAddLine1=$piece(NOKAdd(i),"^"),NOKAddLine2=$piece(NOKAdd(i),"^",2),NOKSuburb=$piece(NOKAdd(i),"^",3),NOKState=$piece(NOKAdd(i),"^",4),NOKPostCode=$piece(NOKAdd(i),"^",5)
+				set found=1
+				if $translate($piece(NOKAdd(i),"^",8),"&")'="" {
+					set ForeignAdd=$piece(NOKAdd(i),"^",8)
+					set NOKForCity=$piece(ForeignAdd,"&"),NOKForPost=$piece(ForeignAdd,"&",2),NOKForCountry=$piece(ForeignAdd,"&",3)
+				}
+			}
+		}
+		if 'found {
+			set i=$order(NOKAdd(i)) if i="" continue
+			set NOKAddLine1=$piece(NOKAdd(i),"^"),NOKAddLine2=$piece(NOKAdd(i),"^",2),NOKSuburb=$piece(NOKAdd(i),"^",3),NOKState=$piece(NOKAdd(i),"^",4),NOKPostCode=$piece(NOKAdd(i),"^",5)
+			if $translate($piece(NOKAdd(i),"^",8),"&")'="" {
+				set ForeignAdd=$piece(NOKAdd(i),"^",8)
+				set NOKForCity=$piece(ForeignAdd,"&"),NOKForPost=$piece(ForeignAdd,"&",2),NOKForCountry=$piece(ForeignAdd,"&",3)
+			}
+		}
+		for var="NOKAddLine1","NOKAddLine2" set @var=$translate($$TextConversion^HL7Common12(@var,"I"),"^")
+		set NOK(j,"NOKStNameLine1")=NOKAddLine1,NOK(j,"NOKAddress2")=NOKAddLine2,NOK(j,"NOKCTCITDesc")=NOKSuburb,NOK(j,"NOKPROVDesc")=NOKState,NOK(j,"NOKCTZIPCode")=NOKPostCode
+		set NOK(j,"NOKForeignCity")=NOKForCity,NOK(j,"NOKForeignPostCode")=NOKForPost,NOK(j,"NOKCTCOUDesc")=NOKForCountry
+		// phone and email
+		set (NOKEmail,NOKPhoneH,NOKPhoneW,NOKPhoneM)=""
+		if HL7("VER")'="2.4" {
+			set NOKPhoneH=$piece($get(^TMP("HL7",$job,cnt1,seg,5)),"^")
+			set NOKEmail=$piece($get(^TMP("HL7",$job,cnt1,seg,5)),"^",4) if NOKEmail="" set NOKEmail=$piece($get(^TMP("HL7",$job,cnt1,seg,6)),"^",4)
+		}
+		if HL7("VER")="2.4"!(HL7("VER")="2.5") {
+			for i=1:1:$length($get(^TMP("HL7",$job,cnt1,seg,5)),"~") {
+				set found=""
+				set detail=$piece($get(^TMP("HL7",$job,cnt1,seg,5)),"~",i)
+				if $piece(detail,"^",2)="NET",$piece(detail,"^",3)="Internet" set NOKEmail=$piece(detail,"^",4),found=1
+				if $piece(detail,"^",2)="PRN",$piece(detail,"^",3)="PH",$piece(detail,"^",9)="P" set NOKPhoneH=$piece(detail,"^"),found=1
+				if $piece(detail,"^",2)="ORN",$piece(detail,"^",3)="CP",$piece(detail,"^",9)="P" set NOKPhoneM=$piece(detail,"^"),found=1
+				// unable to update NOK phone
+				if $piece(detail,"^")'="",$piece(detail,"^",9)="",'found {
+					set phoneaction="update" if $piece(detail,"^")=""""""!($piece(detail,"^")="""") set phoneaction="nullify"
+					set reject="Unable to "_phoneaction_" NOK phone number "_$select(phoneaction="update":$piece(detail,"^")_" ",1:"")_"as no phone type was received for Patient Id "_RegMrn
+					do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+				}
+			}
+		}
+		set NOKPhoneW=$piece($get(^TMP("HL7",$job,cnt1,seg,6)),"^")
+		set NOK(j,"NOKTelH")=NOKPhoneH,NOK(j,"NOKTelO")=NOKPhoneW,NOK(j,"NOKMobPhone")=NOKPhoneM,NOK(j,"NOKEmail")=NOKEmail
+		// contact type
+		set NOK(j,"NOKContactType")=$piece($get(^TMP("HL7",$job,cnt1,seg,7)),"^")
+		// date from and date to
+		set NOK(j,"NOKDateFrom")=$extract($piece($get(^TMP("HL7",$job,cnt1,seg,8)),"^"),1,8),NOK(j,"NOKDateTo")=$extract($piece($get(^TMP("HL7",$job,cnt1,seg,9)),"^"),1,8)
+		// sex, dob
+		set NOK(j,"NOKCTSEXDesc")=$piece($get(^TMP("HL7",$job,cnt1,seg,15)),"^"),NOK(j,"NOKDateOfBirth")=$extract($piece($get(^TMP("HL7",$job,cnt1,seg,16)),"^"),1,8)
+		// first contact
+		set NOK(j,"NOKFirstContact")=$select($piece($get(^TMP("HL7",$job,cnt1,seg,29)),"^")="FC":"Y",1:"")
+		// validate date fields
+		for var="NOKDateFrom","NOKDateTo","NOKDateOfBirth" {
+			set date=""
+			if NOK(j,var)'="" set date=$$DateConv^HL7Common2(.reject,"EI",NOK(j,var))
+			if date="-1"!(reject'="") {
+				set reject="Invalid Next Of Kin "_$select(var="NOKDateFrom":"Date From",var="NOKDateTo":"Date To",1:"DOB")_" "_NOK(j,var)_" sent on Registration number "_RegMrn
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+				set date=""
+			}
+			set NOK(j,var)=date
+		}
+		// update date and time, user and hosp
+		set NOK(j,"NOKUpdateDate")=$get(EVNupdate("DATE")),NOK(j,"NOKUpdateTime")=$get(EVNupdate("TIME"))
+		set NOK(j,"SSUSRInitials")=$get(EVNupdate("USER")),NOK(j,"HOSPDesc")=$get(EVNupdate("HOSP"))
+	}
+	quit
+.
+	// extract data from PD1 segment
+PD1
+	kill REFER
+.
+	if $data(^TMP("HL7",$job,cnt1,"PD1")) {
+.
+		set detail=$get(^TMP("HL7",$job,cnt1,"PD1",3))
+		for i=1:1:$length(detail,"~") {
+			if $get(REFER("PRAC-GRP"))="",$piece($piece(detail,"^",6),"~",i)="TCGROUP" set REFER("PRAC-GRP")=$piece($piece(detail,"^",3),"~",i)
+			if $get(REFER("REF-PRAC"))="",$piece($piece(detail,"^",6),"~",i)'="TCGROUP" set REFER("REF-PRAC")=$piece($piece(detail,"^"),"~",i)
+			if $get(REFER("CLIN-CODE"))="",$piece($piece(detail,"^",6),"~",i)="" set REFER("CLIN-CODE")=$piece($piece(detail,"^",2),"~",i)
+		}
+.
+		set detail=$get(^TMP("HL7",$job,cnt1,"PD1",4))
+		set REFER("DR-CODE")=$piece(detail,"^")
+		set REFER("DR-DESC")=$piece(detail,"^",2)
+.
+		// search for referring doctor code
+		set (drcode,drcodex,intRefDr,found)=""
+		if REFER("DR-CODE")'="""",(REFER("DR-CODE")'="""""") {
+			for i=1:1:4 {
+				if found quit
+				set drcode=$select(i=1:$get(REFER("DR-CODE")),i=2:$get(REFER("REF-PRAC")),i=3:$get(REFER("DR-CODE"))_$get(REFER("REF-PRAC")),i:$get(REFER("REF-PRAC"))_$get(REFER("DR-CODE")))
+				set drcodex=##class(%Collation).AlphaUp(drcode)
+				if drcodex'="",$data(^PAC("REFD",0,"Code",drcodex)) set intRefDr=$order(^PAC("REFD",0,"Code",drcodex,"")),found=1
+			}
+		}
+		if found set PERSON("REFDDesc")=REFER("DR-DESC"),PERSON("PAPERFamilyDoctorDR")=intRefDr,PERSON("doctorCode")=intRefDr
+		if REFER("DR-CODE")=""""!(REFER("DR-CODE")="""""") set PERSON("REFDDesc")=""""
+		if $get(PERSON("REFDDesc"))="",REFER("DR-CODE")'="" {
+			set reject="Referring doctor "_$get(REFER("DR-CODE"))_" received for Patient Id "_RegMrn_" does not exist in TrakCare"
+			do Reject^HL7Reject(reject,"N") kill reject set (reject,SQLCODE)=""
+		}
+		// search for clinic
+		set intClinic=""
+		if $get(REFER("CLIN-CODE"))'="",($get(REFER("CLIN-CODE"))'=""""),($get(REFER("CLIN-CODE"))'="""""") {
+			set intClinic=$$Clinic^HL7Common5(intRefDr,$get(REFER("CLIN-CODE")))
+			if intClinic="" {
+				set reject="Clinic/Referring doctor combination "_$get(REFER("CLIN-CODE"))_"/"_$get(REFER("DR-CODE"))_" received for Patient Id "_RegMrn_" does not exist in TrakCare"
+				// set clinic to be removed so as to not have incorrect clinic against a valid dr
+				set (REFER("CLIN-CODE"),REFER("PRAC-GRP"),REFER("REF-PRAC"))=""""""
+				do Reject^HL7Reject(reject,"N") kill reject set (reject,SQLCODE)=""
+			}
+		}
+		if intClinic'="" set PERSON("PAPERFamilyDoctorClinicDR")=intClinic
+		if ($get(REFER("CLIN-CODE"))="""")||($get(REFER("CLIN-CODE"))="""""") {
+			set (PERSON("PAPERFamilyDoctorClinicDR"),PERSON("CLNCode"),PERSON("CLNAddress1"))=""""""
+		}
+		set PERSON("PAPERFamDocPractice")=$get(REFER("PRAC-GRP"))
+	}
+.
+	kill REFER
+	quit
+	
+	// extract data from PID segment
+PID
+	kill OID
+	
+	// extract hospital numbers
+	kill HOSPMRN
+	if $data(PatNum("HOSP")) {
+		do NumTypeDetail^HL7Common2(PatNum("HOSP"),.seg,.field,.asstype,"","",.idmrtype,.usetype,.usecode)
+		set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+		for i=1:1:$length(numbers,"~") {
+			set detail=$piece(numbers,"~",i)
+			if $piece(detail,"^")'="" {
+				set found=""
+				if idmrtype="Y" {
+					set usecode=$piece($piece(detail,"^",usetype),"&")
+					if usecode'="",$data(^RTC("TYPE",0,"Code",usecode)) set found=1
+				}
+				if idmrtype'="Y",$piece($piece(detail,"^",usetype),"&")=usecode set found=1
+				if found {
+					set HospMrn=$piece(detail,"^"),MRcode=$piece($piece(detail,"^",asstype),"&")
+					// check if med record type can be located
+					set MRType=$$MedRecType^HL7Common5(.reject,MRcode,idmrtype,usecode,HospMrn,RegMrn)
+					
+					if reject="" {
+						set MRType=##class(web.RTCMRecordType).GetCodeDescriptionFromId(MRType)
+						set MRType=$list(MRType,1)
+						set HOSPMRN(i,"RTMASMRNo")=$piece(detail,"^")
+						set HOSPMRN(i,"TYPDesc")=MRType
+						set HOSPMRN(i,"RTMASUserCreateDR")=$get(EVNupdate("USER"))
+						set HOSPMRN(i,"ActiveType")=1
+					}
+					if reject'="" {
+						if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+					}
+				}
+			}
+		}
+	}
+	
+	// extract other numbers
+	kill number
+	for type="CHINHS","MC","DVA","GOV","SN","HC","PDS","PP" {
+		set number(type)="" if $data(PatNum(type)) {
+			do NumTypeDetail^HL7Common2(PatNum(type),.seg,.field,"","","","",.usetype,.usecode,.expfield,"",.cardtype)
+			set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+			if field'=2,field'=3 set number(type)=$piece(numbers,"^") quit
+			for i=1:1:$length(numbers,"~") {
+				if $piece($piece($piece(numbers,"~",i),"^",usetype),"&")=usecode {
+					set number(type)=$piece($piece($piece(numbers,"~",i),"^"),"&")
+					if type="DVA"!(type="GOV") if cardtype="Y" set number(type,"CARD")=$piece($piece($piece(numbers,"~",i),"^",5),"&")
+					if type="DVA",HL7("INCODE")="SWARH" set number(type,"CARD")=$piece($get(^TMP("HL7",$job,cnt1,"PID",27)),"^")
+					if expfield'="" set number(type,"EXPDATE")=$piece($piece(numbers,"~",i),"^",expfield)
+				}
+			}
+		}
+	}
+	set number("CHINHS")=$select(##class(%Collation).AlphaUp(number("CHINHS"))="":"",1:number("CHINHS"))
+	
+	// check number format
+	for type="MC","DVA","GOV","SN","HC" {
+		if $get(number(type))'="" {
+			if number(type)=""""""!(number(type)=""""),type="MC" set number(type,"IND-REF")="""""" quit
+			set reject="" if $piece(PatNum(type),"^",9)="Y" do ValidateNumber^HL7Common6(.reject,type,$get(number(type)))
+			if reject'="" kill number(type) do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)="" quit
+			if type="MC" set number(type,"IND-REF")=$extract(number(type),11),number(type)=$extract(number(type),1,10)
+		}
+	}
+	
+	// check and convert expiry dates for patient number
+	kill reject set reject=""
+	set type="" for  {
+		set type=$order(number(type)) if type="" quit
+		set expdate=$get(number(type,"EXPDATE"))
+		if expdate'="""""",(expdate'=""""),(expdate'="") {
+			// expected date format
+			do NumTypeDetail^HL7Common2(PatNum(type),"","","","","","","","","",.expformat)
+			// convert yyyy
+			if $length(expformat)=4 {
+				if expdate?4N set expdate=expdate_"1231"
+				else  set reject(expformat,type)=expdate,expdate=""
+			}
+			// convert yyyymm
+			if $length(expformat)=6 {
+				if expdate?6N {
+					set mth=$extract(expdate,5,6),day=$select(mth="01":31,mth="03":31,mth="04":30,mth="05":31,mth="06":30,mth="07":31,mth="08":31,mth="09":30,mth="10":31,mth="11":30,mth="12":31,1:"")
+					if mth="02" set day=$select($$LEAP^%DATE($extract(expdate,1,4))=1:29,1:28)
+					set expdate=$select(day'="":expdate_day,1:"")
+				}
+				if expdate'?6N set reject(expformat,type)=expdate,expdate=""
+			}
+			// convert yyyymmdd
+			if $length(expformat)=8!(expformat=""),expdate'?8N set reject(expformat,type)=expdate,expdate=""
+			
+			set number(type,"EXPDATE")=$select(expdate'="":$$DateConv^HL7Common2(.reject,"EI",expdate),1:"")
+			
+			if $data(reject(expformat,type)) {
+				set reject="Expiry date received "_reject(expformat,type)_" for number type "_type_" does not match expected format "_expformat
+				do Reject^HL7Reject(reject,"N") kill reject set (reject,SQLCODE)=""
+			}
+		}
+	}
+	
+	// set patient numbers
+	for type="CHINHS","MC","DVA","GOV","SN","HC","PDS","PP" {
+		if $data(number(type)) {
+			if type="CHINHS" set PERSON("PAPERID")=$get(number(type))
+			if type="MC" set PERSON("PAPMIMedicare")=$get(number(type)),PERSON("MEDSUFDesc")=$get(number("MC","SUFFIX")),PERSON("PAPMIMedicareCode")=$get(number("MC","IND-REF")),PERSON("MedicareExpDate")=$get(number(type,"EXPDATE"))
+			if type="DVA" set PERSON("DVANumber")=$get(number(type)),PERSON("DVACardType")=$get(number(type,"CARD")),PERSON("PAPERDVAExpiryDate")=$get(number(type,"EXPDATE"))
+			if type="GOV" set PERSON("PAPERGovernCardNo")=$get(number(type)),PERSON("PENSTYPEDesc")=$get(number(type,"CARD")),PERSON("PAPERPensionCardExpiryDate")=$get(number(type,"EXPDATE"))
+			if type="SN" set PERSON("SafetyCardNo")=$get(number(type)),PERSON("SafetyCardExp")=$get(number(type,"EXPDATE"))
+			if type="HC" set PERSON("ConcessionCardNo")=$get(number(type)),PERSON("ConcessionExpDate")=$get(number(type,"EXPDATE"))
+			if type="PDS" set (PERSON("HIDDENPDSSerialNumber1"),PERSON("PAPERPDSSerialNumber"))=$get(number(type))
+			if type="PP" set PERSON("PAPERPassportNumber")=$get(number(type))
+		}
+	}
+	
+	// name detail - surname, given, middle, title, name OID
+	set detail=$get(^TMP("HL7",$job,cnt1,"PID",5))
+	set PERSON("PAPERName")=$piece(detail,"^"),PERSON("PAPERName2")=$piece(detail,"^",2),PERSON("PAPERName3")=$piece(detail,"^",3),PERSON("TTLDesc")=$piece(detail,"^",5)
+	for var="PAPERName","PAPERName2","PAPERName3" set PERSON(var)=$translate($$TextConversion^HL7Common12(PERSON(var),"I"),"^")
+	set OID("NAME")=$piece($piece(detail,"^",9),"&")
+	
+	// dob with validation
+	set PERSON("PAPERDob")=$extract($piece($get(^TMP("HL7",$job,cnt1,"PID",7)),"^"),1,8) if PERSON("PAPERDob")'="" set date=$$DateConv^HL7Common2(.reject,"EI",PERSON("PAPERDob"))
+	if date="-1"!(reject'="") set reject="Invalid DOB "_PERSON("PAPERDob")_" sent on Registration number "_RegMrn_". "_reject,reject("Detail")="PID^"_$get(^TMP("HL7",$job,cnt1,"PID",1))_"^7~207",^TMP("HL7",$job,cnt1,"PID",7)=""
+	if reject'="" do Reject^HL7Reject(reject,"R") quit
+	set PERSON("PAPERDob")=date
+	
+	// estimated dob
+	set PERSON("PAPEREstDOB")=$piece($get(^TMP("HL7",$job,cnt1,"PID",7)),"^",2),PERSON("PAPEREstDOB")=$select(PERSON("PAPEREstDOB")="Y":"Y",1:"N")
+	
+	// sex
+	set PERSON("CTSEXDesc")=$piece($get(^TMP("HL7",$job,cnt1,"PID",8)),"^")
+	
+	// extract alias
+	kill ALIAS
+	set alias=$get(^TMP("HL7",$job,cnt1,"PID",9)) for i=1:1:$length(alias,"~") {
+		set detail=$piece(alias,"~",i) if $translate(detail,"^")'="" {
+			// alias surname, given name, other name
+			set ALIAS(i,"SURName")=$piece(detail,"^"),ALIAS(i,"GivenName")=$piece(detail,"^",2),ALIAS(i,"OtherName")=$piece(detail,"^",3)
+			for var="SURName","GivenName","OtherName" set ALIAS(i,var)=$translate($$TextConversion^HL7Common12(ALIAS(i,var),"I"),"^")
+			// active
+			set ALIAS(i,"Active")=$select($piece($piece(detail,"^",7),"&",2)'="I":"on",1:"")
+			// update date and time, user and hosp
+			set ALIAS(i,"UDate")=$get(EVNupdate("DATE")),ALIAS(i,"UTime")=$get(EVNupdate("TIME"))
+			set ALIAS(i,"UserCode")=$get(EVNupdate("USER")),ALIAS(i,"UserHospital")=$get(EVNupdate("HOSP"))
+		}
+	}
+	// extract phone numbers and email
+	set (PhoneH,PhoneW,PhoneM,email)="" kill Phone
+	if HL7("VER")'="2.3.1",(HL7("VER")'="2.4"),(HL7("VER")'="2.5") {
+		set PhoneH=$piece($get(^TMP("HL7",$job,cnt1,"PID",13)),"^")
+		set email=$piece($get(^TMP("HL7",$job,cnt1,"PID",13)),"^",4) set:email="" email=$piece($get(^TMP("HL7",$job,cnt1,"PID",14)),"^",4)
+	}
+	if HL7("VER")="2.3.1" {
+		set phone=$get(^TMP("HL7",$job,cnt1,"PID",13)) for i=1:1:$length(phone,"~") {
+			set detail=$piece(phone,"~",i)
+			if $piece(detail,"^",2)="NET",$piece(detail,"^",3)="Internet" set email=$piece(detail,"^",4)
+			if $piece(detail,"^",2)="PRN",$piece(detail,"^",3)="PH" set PhoneH=$piece(detail,"^")
+			if $piece(detail,"^",2)="ORN",$piece(detail,"^",3)="CP" set PhoneM=$piece(detail,"^")
+		}
+	}
+	if HL7("VER")="2.4"!(HL7("VER")="2.5") {
+		set phone=$get(^TMP("HL7",$job,cnt1,"PID",13)) for i=1:1:$length(phone,"~") {
+			set detail=$piece(phone,"~",i)
+			// reject phone number if no phone type
+			if $piece(detail,"^")'="",$piece($piece(detail,"^",9),"&")="",$piece(detail,"^",2)'="NET" {
+				if $piece($piece(detail,"^",9),"&")="" set reject="Unable to add phone number "_$piece(detail,"^")_" as phone type not received for Patient Id "
+				if $piece(detail,"^")="""""" set reject="Unable to nullify phone number as phone type not received for Patient Id "
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+			}
+			// process phone if phone and phone type not empty or email
+			if (($piece(detail,"^")'="")&&($piece($piece(detail,"^",9),"&")'=""))!($piece(detail,"^",2)="NET") {
+				if $piece(detail,"^",2)="NET",$piece(detail,"^",3)="Internet" set email=$piece(detail,"^",4),OID("EMAIL")=$piece($piece(detail,"^",9),"&",2)
+				if $piece(detail,"^",2)="PRN",$piece(detail,"^",3)="PH" {
+					if $piece($piece(detail,"^",9),"&")'="P" set phcnt=$order(Phone($piece($piece(detail,"^",9),"&"),""),-1)+1
+					set var=$select($piece($piece(detail,"^",9),"&")="P":"PhoneH",1:"Phone("_""""_$piece($piece(detail,"^",9),"&")_""""_","_phcnt_")"),@var=$piece(detail,"^")
+					if $piece($piece(detail,"^",9),"&")="P" set OID("PHONEH")=$piece($piece(detail,"^",9),"&",2)
+				}
+				if $piece(detail,"^",2)="ORN",$piece(detail,"^",3)="CP" {
+					if $piece($piece(detail,"^",9),"&")'="P" set phcnt=$order(Phone($piece($piece(detail,"^",9),"&"),""),-1)+1
+					set var=$select($piece($piece(detail,"^",9),"&")="P":"PhoneM",1:"Phone("_""""_$piece($piece(detail,"^",9),"&")_""""_","_phcnt_")"),@var=$piece(detail,"^")
+					if $piece($piece(detail,"^",9),"&")="P" set OID("PHONEM")=$piece($piece(detail,"^",9),"&",2)
+				}
+			}
+		}
+	}
+	set detail=$get(^TMP("HL7",$job,cnt1,"PID",14)),PhoneW=$piece(detail,"^"),OID("PHONEW")=$piece($piece(detail,"^",9),"&",2)
+	set PERSON("PAPERTelH")=PhoneH,PERSON("PAPERTelO")=PhoneW,PERSON("PAPERMobPhone")=PhoneM,PERSON("PAPEREmail")=email
+.
+	// extract address
+	kill TEMPADDRESS
+	set address=$get(^TMP("HL7",$job,cnt1,"PID",11)) for i=1:1 {
+		if $piece(address,"~",i)="" quit
+		set detail=$piece(address,"~",i)
+		set AddLine1=$piece(detail,"^"),AddLine2=$piece(detail,"^",2)
+		// check and replace any escape sequences for first two lines of address
+		for var="AddLine1","AddLine2" if @var'="" set @var=$translate($$TextConversion^HL7Common12(@var,"I"),"^")
+		// extract address type
+		set atype=$piece(detail,"^",7)
+		// force the current address into TEMP address and reset permanent address to null if patient marked as sensitive (PDS only)
+		if $get(PERSON("PAPMIVIPFlag"))="S",$piece($get(^CF("SM",1)),"^",67)="Y",atype="P" {
+			set atype="T"
+			// mark permanent address as blank
+			set PERSON("PAPERStName")="""""",PERSON("PAPERForeignAddress")="""""",PERSON("CTCITDesc")="""""",PERSON("PROVDesc")=""""""
+			set PERSON("CTZIPCode")="""""",PERSON("PAPERAddress2")="""""",OID("ADDR")=""
+		}
+		
+		// extract permanent address
+		if atype="P" {
+			// first line address, second line address, suburb, state
+			set PERSON("PAPERStName")=AddLine1,PERSON("PAPERForeignAddress")=AddLine2,PERSON("CTCITDesc")=$piece(detail,"^",3),PERSON("PROVDesc")=$piece(detail,"^",4)
+			// postcode, other geographic info, address OID
+			set PERSON("CTZIPCode")=$piece(detail,"^",5),PERSON("PAPERAddress2")=$piece($piece(detail,"^",8),"&")
+			if PERSON("CTZIPCode")'="",PERSON("CTCITDesc")'="" {
+				set PERSON("zipCodeID")=##class(web.CTZip).GetIdFromZipAndCity(PERSON("CTZIPCode"),PERSON("CTCITDesc"))
+			}
+			set OID("ADDR")=$piece($piece(detail,"^",8),"&",4)
+			// date from
+			set date=$extract($piece($piece(detail,"^",12),"&"),1,8)
+			if date'="" set date=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+			set PERSON("PAPEREffDateCurrAddress")=$select(date="":+$h,date="-1":+$h,1:date)
+		}
+		
+		// extract other addresses
+		if atype'="P",atype'="" {
+			// check if valid address type
+			set type=$$Address^HL7Common7(.reject,"I","TYP",atype)
+			if type'="" {
+				set j=$increment(TEMPADDRESS)
+				// check for matching other phone
+				set TempAddPhone="" if $data(Phone(atype)) set phcnt=$order(Phone(atype,"")) set TempAddPhone=$get(Phone(atype,phcnt)) kill Phone(atype,phcnt)
+				set TEMPADDRESS(atype,j,"ADDRStreet")=AddLine1,TEMPADDRESS(atype,j,"ADDRStreet2")=AddLine2,TEMPADDRESS(atype,j,"CTCITDesc")=$piece(detail,"^",3)
+				// extract province description for temp address comparison in HL7InboundUpdate1
+				set ProvinceDesc=""
+				if $piece(detail,"^",4)'="" {
+					set AddRowIds=$$Address^HL7Common7(.reject,"I","PCP","||"_$piece(detail,"^",4))
+					set ProvinceDesc=$$Address^HL7Common7(.reject,"O","PRV",$piece(AddRowIds,"|",3))
+				}
+				set TEMPADDRESS(atype,j,"PROVDesc")=$piece(detail,"^",4)
+				set TEMPADDRESS(atype,j,"PROVDescComparison")=$piece(ProvinceDesc,"|",2)
+				set TEMPADDRESS(atype,j,"CTZIPCode")=$piece(detail,"^",5)
+				set TEMPADDRESS(atype,j,"ADDRForeignCity")=$piece($piece(detail,"^",8),"&"),TEMPADDRESS(atype,j,"ADDRForeignZip")=$piece($piece(detail,"^",8),"&",2)
+				set TEMPADDRESS(atype,j,"CTCOUDesc")=$select($piece($piece(detail,"^",8),"&",3)'="":$piece($piece(detail,"^",8),"&",3),1:$piece(detail,"^",6))
+				// extract country description for temp address comparison in HL7InboundUpdate1
+				set CountryDesc=""
+				if TEMPADDRESS(atype,j,"CTCOUDesc")'="" {
+					set CountryRowId=$$Address^HL7Common7(.reject,"I","COU",TEMPADDRESS(atype,j,"CTCOUDesc"))
+					set CountryDesc=$$Address^HL7Common7(.reject,"O","COU",CountryRowId)
+				}
+				set TEMPADDRESS(atype,j,"CTCOUDescComparison")=$piece(CountryDesc,"|",2)
+				set TEMPADDRESS(atype,j,"ADDRPhone")=TempAddPhone,TEMPADDRESS(atype,j,"CTADRDesc")=atype
+				// extract temporary address date from
+				set datefield=$select($get(RULES(10))="EVN2":2,$get(RULES(10))="EVN6":6,1:"")
+				if datefield'="" set datetime=$get(^TMP("HL7",$job,"EVN",datefield)),date=$extract(datetime,1,8)
+				set date=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+				set TEMPADDRESS(atype,j,"ADDRDateFrom")=$select(date="":+$h,date="-1":+$h,1:date)
+				
+				set TEMPADDRESS(atype,j,"ADDRUpdateDate")=$get(EVNupdate("DATE")),TEMPADDRESS(atype,j,"ADDRUpdateTime")=$get(EVNupdate("TIME"))
+				set TEMPADDRESS(atype,j,"SSUSRName")=$get(EVNupdate("USER")),TEMPADDRESS(atype,j,"HOSPDesc")=$get(EVNupdate("HOSP"))
+			}
+			if type="" set reject=$get(reject("TYP"))
+		}
+		// no address type received
+		if atype="" set reject="Unable to add temporary address "_AddLine1_", "_AddLine2_", "_$piece(detail,"^",3)_" as no address type was received on Patient Id "_RegMrn
+		if reject'="" do Reject^HL7Reject(reject,"N") kill reject set (reject,SQLCODE)=""
+	}
+	
+	// indigenous status, language, marital, religion, birth place
+	set PERSON("INDSTDesc")=$piece($get(^TMP("HL7",$job,cnt1,"PID",10)),"^"),PERSON("PREFLDesc")=$piece($get(^TMP("HL7",$job,cnt1,"PID",15)),"^")
+	set PERSON("CTMARDesc")=$piece($get(^TMP("HL7",$job,cnt1,"PID",16)),"^"),PERSON("CTRLGDesc")=$piece($get(^TMP("HL7",$job,cnt1,"PID",17)),"^")
+	set PERSON("CTCOUDesc")=$piece($get(^TMP("HL7",$job,cnt1,"PID",23)),"^")
+	
+	// date and time of death, deceased flag
+	set PERSON("PAPERDeceasedDate")=$extract($get(^TMP("HL7",$job,cnt1,"PID",29)),1,8),PERSON("PAPERDeceasedTime")=$extract($get(^TMP("HL7",$job,cnt1,"PID",29)),9,13)
+	set PERSON("PAPERDeceased")=$get(^TMP("HL7",$job,cnt1,"PID",30))
+.
+	set date=PERSON("PAPERDeceasedDate"),time=PERSON("PAPERDeceasedTime")
+	if (date="""")||(date="""""") set time=""""""
+.
+	if (date'="")&&(date'="""")&&(date'="""""") {
+		set date=$$DateConv^HL7Common2(.reject,"EI",PERSON("PAPERDeceasedDate"))
+	}
+	if date="-1"!(reject'="") {
+		set reject="Invalid Deceased Date "_PERSON("PAPERDeceasedDate")_" sent on Registration number "_RegMrn_". "_reject
+		if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+		set date=""
+	}
+	set PERSON("PAPERDeceasedDate")=date
+.
+	if (time'="")&&(time'="""")&&(time'="""""") {
+		set time=$$TimeConv^HL7Common2("EI",$extract(PERSON("PAPERDeceasedTime"),1,2)_":"_$extract(PERSON("PAPERDeceasedTime"),3,4))
+	}
+	if time="-1"!(time="ERROR!") {
+		set reject="Invalid Deceased Time "_PERSON("PAPERDeceasedTime")_" sent on Registration number "_RegMrn_"."
+		if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+		set time=""
+	}
+	set PERSON("PAPERDeceasedTime")=time
+	
+	// setup external oid's
+	if $data(OID) set PERSON("PAPERExternalOIDs")=$listbuild($get(OID("NAME")),$get(OID("ADDR")),$get(OID("PHONEH")),$get(OID("PHONEW")),$get(OID("PHONEM")),$get(OID("EMAIL")))
+	kill OID
+	
+	// update date and time, user and hosp
+	set PERSON("PAPERUpdateDate")=$get(EVNupdate("DATE")),PERSON("PAPERUpdateTime")=$get(EVNupdate("TIME"))
+	set PERSON("PAPERUserUpdate")=$get(EVNupdate("USER")),PERSON("HOSPDesc")=$get(EVNupdate("HOSP"))
+	
+	quit
+
+
+

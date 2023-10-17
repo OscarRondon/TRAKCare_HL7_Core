@@ -1,0 +1,133 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7Common8^MAC^^^0
+HL7Common8	// ML 29/09/2004 ; HL7 interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common8.rtn#1 $
+	quit
+	
+	// extract/update/delete temporary address
+TempAddress(TAddRowId,action,TempAddress) new (TAddRowId,action,TempAddress) set TAddRowId=$get(TAddRowId),action=$get(action)
+	set HL7Flag="Y"
+	
+	// select temporary address
+	if action="S" do
+	. &SQL(SELECT * INTO :TempAddress() FROM PA_TempAddress WHERE ADDR_RowId = :TAddRowId)
+	// insert temporary address
+	if action="I" do
+	. &SQL(INSERT INTO PA_TempAddress VALUES :TempAddress())
+	// update temporary address
+	if action="U" do
+	. &SQL(UPDATE PA_TempAddress VALUES :TempAddress() WHERE ADDR_RowId = :TAddRowId)
+	// delete temporary address
+	if action="D" do
+	. &SQL(DELETE FROM PA_TempAddress WHERE ADDR_RowId = :TAddRowId)
+	
+	quit SQLCODE
+	
+	// address processing - method : P - Permanent Address
+	// 				T - Temporary Address
+	//
+AddressRules(intRegMrn,method,updatedetail) new (intRegMrn,method,updatedetail,link,PAPER,PTADD) set intRegMrn=$get(intRegMrn),method=$get(method),updatedetail=$get(updatedetail),link=$get(link)
+	set upduser=$piece(updatedetail,"^"),upddate=$piece(updatedetail,"^",2),updtime=$piece(updatedetail,"^",3),updhosp=$piece(updatedetail,"^",4)
+	set enddate=upddate
+	kill PatDetail,TempAddress
+	
+	if $$Rules^HL7Common7(link)
+	
+	// process permanent address
+	if method="P",$get(RULES(5))="Y" do
+	. if $$PatDetail^HL7OutExtract1(intRegMrn,.PatDetail)
+	. // check for address match on all fields
+	. if $listlength(PatDetail(28))'="0" do  else  set PatDetail(28)=$listbuild($list(PatDetail(28)))
+	. . set PatDetail(28)=$listbuild($list(PatDetail(28),$listlength(PatDetail(28))))
+	. set found="" for i=26,28,33,35,113 do
+	. . // not passed so no change to address - assume same as current
+	. . if '$data(PAPER(i)) set found=found+1 quit
+	. . if $get(PAPER(i))=$get(PatDetail(i)) set found=found+1
+	. if found=5 do  quit
+	. . // remove address if matching so as to not update 'date from' of permanent address
+	. . for i=26,28,33,35,113,178,195 kill PAPER(i)
+	. set foundos=""
+	. if $get(RULES(7))="Y" do
+	. . // check for current overseas address
+	. . set x=0 for  set x=$order(^PAPER(intRegMrn,"TADDR",x)) quit:x=""  do
+	. . . set TAddRowId=intRegMrn_"||"_x
+	. . . kill TempAddress
+	. . . if $$TempAddress(TAddRowId,"S",.TempAddress)
+	. . . // ignore if already end-dated address
+	. . . if $get(TempAddress(12))'="" quit
+	. . . // not overseas address
+	. . . if $get(TempAddress(15))'=$get(RULES(8)) quit
+	. . . set foundos=1
+	. . . // update temporary address
+	. . . set TempAddress(12)=enddate,TempAddress(15)=$get(RULES(6)),TempAddress(21)=upddate,TempAddress(22)=updtime
+	. . . set TempAddress(23)=upduser,TempAddress(24)=updhosp
+	. . . if $$TempAddress(TAddRowId,"U",.TempAddress)
+	
+	. // add previous permanent address if no overseas address found
+	. kill TempAddress
+	. set TempAddress(0)=intRegMrn,TempAddress(3)=$get(PatDetail(28)),TempAddress(6)=$get(PatDetail(33)),TempAddress(7)=$get(PatDetail(113))
+	. set TempAddress(9)=$get(PatDetail(35)),TempAddress(11)=$select($get(PatDetail(178))'="":$get(PatDetail(178)),1:+$h),TempAddress(12)=+$h,TempAddress(15)=$get(RULES(6)),TempAddress(16)=$listbuild($get(PatDetail(26)))
+	. set TempAddress(21)=upddate,TempAddress(22)=updtime,TempAddress(23)=upduser,TempAddress(24)=updhosp
+	. if $$TempAddress("","I",.TempAddress)
+	. kill TempAddress
+	
+	// process temporary addresses
+	if method="T" do
+	. // extract current temporary address
+	. set x=0 for  set x=$order(^PAPER(intRegMrn,"TADDR",x)) quit:x=""  do
+	. . set TAddRowId=intRegMrn_"||"_x
+	. . kill TempAddress
+	. . if $$TempAddress(TAddRowId,"S",.TempAddress)
+	. . // ignore if already end-dated address
+	. . if $get(TempAddress(12))'="" quit
+	. . // ignore previous permanent address
+	. . if $get(RULES(6))'="",$get(TempAddress(15))=$get(RULES(6)) quit
+	
+	. . set type=$get(TempAddress(15)),found=""
+	. . set cnt="" for  set cnt=$order(PTADD(type,cnt)) quit:cnt=""  do  if found=9 quit
+	. . . // check for address match on all fields
+	. . . set found="" for i=3,4,6,7,9,13,14,16,19 do
+	. . . . if $get(PTADD(type,cnt,i))=$get(TempAddress(i)) set found=found+1
+	. . // remove matches from list
+	. . if found=9 kill PTADD(type,cnt) quit
+	
+	. . // end-date temporary addresses
+	. . if $get(RULES(9))="E" do  quit
+	. . . // change overseas address to previous permanent address
+	. . . if type=$get(RULES(8)),$get(RULES(7))="Y" set TempAddress(15)=$get(RULES(6))
+	. . . // update temporary address
+	. . . set TempAddress(12)=enddate,TempAddress(21)=upddate,TempAddress(22)=updtime,TempAddress(23)=upduser,TempAddress(24)=updhosp
+	. . . if $$TempAddress(TAddRowId,"U",.TempAddress)
+	
+	. . // delete temporary addresses (exclude previous permanent)
+	. . if $get(RULES(9))="D",$get(TempAddress(15))'=$get(RULES(6)) do  quit
+	. . . if $$TempAddress(TAddRowId,"D")
+	
+	quit
+	
+	// extract anaethetist method
+AnaeType(code) new (code) set code=##class(%Collation).AlphaUp($get(code)),value=""
+	&SQL(SELECT ANMET_RowId INTO :value FROM ORC_AnaestMethod WHERE ANMET_Code = :code)
+	quit value
+	
+	// extract result status
+ResultStatus(ExternalSys,ExternalStatus) new (link,ExternalSys,ExternalStatus) set ExternalSys=$get(ExternalSys),ExternalStatus=$get(ExternalStatus)
+	set status=""
+	
+	if ExternalStatus="" quit ""
+	
+	if ExternalSys="" set status=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("ResultType",ExternalStatus)
+	
+	if ExternalSys'="" {
+		// check for translation against interface
+		if $data(^SSHL7(link,"RES-STATUS",ExternalSys,ExternalStatus)) set status=$get(^SSHL7(link,"RES-STATUS",ExternalSys,ExternalStatus))
+		
+		// check for system translation
+		if '$data(^SSHL7(link,"RES-STATUS",ExternalSys,ExternalStatus)) set status=##class(websys.StandardTypeItem).GetIdFromCodeOrDescription("ResultType",ExternalStatus)
+	}
+	
+	quit status
+
+
+

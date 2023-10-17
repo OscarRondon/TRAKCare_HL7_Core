@@ -1,0 +1,419 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7^MAC^^^0
+HL7	; ML 17/9/01 ; HL7 interface - bi-directional control
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7.rtn#1 $
+	q
+	
+	; start link
+Start(link) k (link),^TMP($zn,$j),^TMP("HL7-OUT",$j)
+	i $g(link)="" q
+	
+	l +^SSHL7(link,"LOCK"):5 e  d trace^HL7Trace("*****",$h,"Locked - Interface already running","","","INF") q
+	
+	; restart message count
+	k ^SSHL7(link,"COUNT")
+	
+	i '$$Init q
+	
+	s $zt="Error^"_$zn
+	
+	; data transfer by file - switch
+	i INT("DEVTYPE")="F" d  q
+	. l -^SSHL7(link,"LOCK"):5 e  d trace^HL7Trace("*****",$h,"Unlocking - starting 'file transfer' version","","","INF") q
+	. j Start^HL7File(link)
+	
+	s port="|TCP|"_INT("DEV")
+	
+	d trace^HL7Trace("*****",$h,"Starting as job "_$j_".  Device - "_INT("DEV")_", Socket - "_port_$s(INT("IP")="":"",1:", IP Address - "_INT("IP")),"","","INF")
+	
+	; wait before connect
+	s StopNow="" i TIMEOUT("BEF-CON")>0 d
+	. d trace^HL7Trace("*****",$h,"Wait before connection timeout set - attempt to open port in "_TIMEOUT("BEF-CON")_" seconds","","","INF")
+	. f i=1:1:TIMEOUT("BEF-CON") d  q:StopNow
+	. . i $$CheckStop(link) s flagstop=1,StopNow=1 q
+	. . h 1
+	i StopNow d Shutdown(1)
+	
+	; open device - if ip is not "", we are the client
+	i $$CheckStop(link) d trace^HL7Trace("*****",$h,"Flag Stopped","","","INF") d Shutdown(1) q
+	d trace^HL7Trace("*****",$h,"Attempting to open Device - "_INT("DEV")_", Socket - "_port_$s(INT("IP")="":"",1:", IP Address - "_INT("IP")),"","","INF")
+	o port:(INT("IP"):INT("DEV"):$s(INT("IP")="":"A",1:"")_"S":$c(13)):TIMEOUT("PORT-CON") e  d trace^HL7Trace("*****",$h,"Unable to open Device - "_INT("DEV")_", Socket - "_port_$s(INT("IP")="":"",1:", IP Address - "_INT("IP"))_".  Checking for interface restart or stop","","","INF") h 20 d Restart
+	
+	d trace^HL7Trace("*****",$h,"Device - "_INT("DEV")_", Socket - "_port_$s(INT("IP")="":"",1:", IP Address - "_INT("IP"))_" opened","","","INF")
+	
+	; record start date/time
+	d StartStop($h)
+	
+	u port
+	
+	; check for character set
+	i INT("CS")'="" d SetIO^%NLS(INT("CS")) d trace^HL7Trace("*****",$h,"Using character set "_INT("CS"),"","","INF")
+	
+	; wait for the client to connect - restart if no connection received
+	i INT("IP")="" d  i restart d Restart
+	. s (char,restart,Connected)=""
+	. d trace^HL7Trace("*****",$h,"Awaiting connection from client.  Timeout will occur after "_TIMEOUT("CLI-CON")_" seconds.","","","INF")
+	. s char="" f i=1:1:TIMEOUT("CLI-CON") d  q:Connected
+	. . i $$CheckStop(link) s flagstop=1 d Shutdown(1)
+	. . r char:1 i  d trace^HL7Trace("*****",$h,"Client connected","","","INF") s Connected=1
+	. i 'Connected d trace^HL7Trace("*****",$h,"No connection from client after "_TIMEOUT("CLI-CON")_" seconds.  Restarting interface","","","INF") s restart=1
+	
+	s (readcount,msgtimeout,failtimeout,failack)=""
+	f  q:$$CheckStop(link)  d Main  q:readcount=MaxNum("read")
+	
+	; check response action
+	s (action,actionmessage)=""
+	i readcount=MaxNum("read") d
+	. s actionmessage="Nothing received from client for "_(MaxNum("read")*TIMEOUT("CLI-SEND"))_" seconds."
+	. s actiontype=ActionMax("read")
+	. i actiontype'="" s action=$$Action(actiontype,actionmessage)
+	i msgtimeout=MaxNum("read") d
+	. s actionmessage=MaxNum("read")_" consecutive message timeouts have occurred."
+	. s actiontype=ActionMax("read")
+	. i actiontype'="" s action=$$Action(actiontype,actionmessage)
+	i action'="" x action
+	
+	s flagstop="" i $$CheckStop(link) s flagstop=1
+	d Shutdown(1)
+	q
+	
+	; shutdown interface
+Shutdown(halt,email,actionmessage) s halt=$g(halt),email=$g(email),actionmessage=$g(actionmessage)
+	c port
+	s flagstop=$g(flagstop) d trace^HL7Trace("*****",$h,$s(flagstop=1:"Interface stopped from workbench",1:"Interface stopped"),"","","INF")
+.
+	; record shutdown date/time
+	d StartStop("",$h,halt)
+	k ^TMP($zn,$j),^TMP("HL7-OUT",$j)
+.
+	; release all locks
+	l
+.
+	// cleanup API session license
+	i $g(HL7("USER-CODE"))'="" {
+		s token=##class(TC.api.Logon).Request(HL7("USER-CODE"),HL7("USER-PWD"),1)
+		i ##class(TC.api.Logon).Terminate(token)
+	}
+.
+	i 'halt q
+	
+	; remove screen error notifications for link
+	i $d(^TMP("HL7-ERR-LINK",link)) d
+	. s job="" f  s job=$o(^TMP("HL7-ERR-LINK",link,job)) q:job=""  k ^TMP("HL7-ERR",$j),^TMP("HL7-ERR-LINK",link,$j)
+	
+	; email notification required
+	i email d
+	. i $g(INT("EMAILF"))=""!(INT("EMAILT")="") q
+	. s EmailMsg=""
+	. s EmailMsg="Date: "_##class(websys.Conversions).DateLogicalToHtml(+$h)_$c(13,10)_"Time: "_##class(websys.Conversions).TimeLogicalToHtml($p($h,",",2))_$c(13,10)
+	. s EmailMsg=EmailMsg_$c(13,10)_"Reason: "_actionmessage
+	. d ##class(websys.Mail).AddItem(INT("EMAILF"),INT("EMAILT"),"","Interface Shutdown: "_link,EmailMsg,"")
+	
+	; clean remaining temporary globals - only on workbench shutdown
+	k ^SSHL7(link,"QUERY-DETAIL")
+.
+	halt
+	
+	; restart interface
+Restart s flagstop="" i $$CheckStop(link) s flagstop=1
+	d Shutdown(flagstop)
+	i $g(action)="" d trace^HL7Trace("*****",$h,"Restarting interface","","","INF")
+	h 5 k (link)
+	j Start^HL7(link)
+	halt
+	
+Main	h 0.2 k ^TMP("HL7-REPLAY",$j)
+	
+	; check for outbound messages
+	i INT("DIRECT")="O" d  q
+	. ; do not continue if queuing of messages not used
+	. i HL7("SEND-NOW")="Y" q
+	. ; regular outbound messages
+	. s action=$$Send^HL7Send i $l(action) x action
+	
+	; check for replay message
+	s Replay=$$Replay^HL7Replay(link,.trace)
+	
+	; check for inbound message
+	s ReadStatus="" i 'Replay d  i ReadStatus="RDERR" q
+	. s ReadStatus=$$Read(,TIMEOUT("CLI-SEND"))
+	i 'Replay,ReadStatus="" q
+	
+	; reset 'read' counter for data coming in
+	s readcount=""
+	
+	; record message in trace
+	i $d(trace) d trace^HL7Trace("E-->M",$h,"","","Y")
+	
+	; check for read timeouts
+	i 'Replay,'T d  g Restart
+	. d AckNak^HL7AckNak("AR","Timeout reading packet, segment terminator ASCII 13 not received. Unable to process partially received message","MSH^^",100)
+	. k trace
+	
+	; check for incomplete message
+	s (tcnt,j)="" f  s j=$o(trace(j)) q:j=""  s tcnt=tcnt+1
+	i tcnt=1 d  g Restart
+	. d AckNak^HL7AckNak("AR","Unable to process message, incomplete - only one segment received","MSH^^",100)
+	. k trace
+	
+	; build segment data
+	s (cnt1,cnt2,cnt3,cnt4,cnt5,plevel,previd)="" k cnt
+	k tracecopy m tracecopy=trace
+	s j="" f  s j=$o(trace(j)) q:j=""  s seg=trace(j) d Data^HL7Data
+	
+	k trace
+	
+	; count number of messages received
+	i $i(^SSHL7(link,"COUNT"))
+	
+	; reset message timeout
+	s msgtimeout=""
+	
+	; merge DATA array in ^TMP("HL7",$j)
+	k ^TMP($zn,$j) m ^TMP($zn,$j)=DATA k DATA
+	i Replay s ^TMP($zn_"-REPLAY",$j)=1
+	
+	; check for MSH segment
+	i '$d(^TMP($zn,$j,"MSH")) d AckNak^HL7AckNak("AR","No MSH segment received in message - unable to process message","MSH^^",100) q
+	
+	; check for version match
+	s version("MSH")=$p($g(^TMP($zn,$j,"MSH",11)),"^")
+	i version("MSH")'=HL7("VER") d AckNak^HL7AckNak("AR","Version received "_version("MSH")_" does not match interface version "_HL7("VER"),"MSH^"_version("MSH")_"^12",203) q
+	
+	; check for control id
+	i $g(^TMP($zn,$j,"MSH",9))="" d AckNak^HL7AckNak("AR","Blank message control id received","MSH^^10",203) q
+	
+	; if not production mode, no updates
+	i ^TMP($zn,$j,"MSH",10)'="P" d AckNak^HL7AckNak("AR","Message processing type received is not 'P'roduction","MSH^^10",203) q
+	
+	; extract event type - ignore if acknowledgment
+	s event=$p($g(^TMP($zn,$j,"MSH",8)),"^",1,2),ok=""
+	i event="" d AckNak^HL7AckNak("AR","No event type received in MSH segment","MSH^"_version("MSH")_"^9",203) q
+	i event["ACK" q
+	
+	s (forward,forwardnum)=""
+	
+	d
+	. ; process message received
+	. s ok=$$MsgProcess^HL7Inbound(event)
+	. ; if ok is null, ACK already sent
+	. i ok="" q
+	
+	. k tracecopy
+	
+	. ; send response if needed
+	. i $p(ok,"\")'="SKIP" d
+	. . ; rejection required
+	. . i $p(ok,"\")'="AA",ok'="" d AckNak^HL7AckNak("AR",$p(ok,"\",2),$p(ok,"\",3),$p(ok,"\",4)) q
+	. . ; 'ack'nowledgement required
+	. . d AckNak^HL7AckNak("AA")
+	
+	; check if need to forward message
+	s fwdcnt="" f  s fwdcnt=$o(forwardnum(fwdcnt)) q:fwdcnt=""  d
+	. s num="" f  s num=$o(forwardnum(fwdcnt,num)) q:num=""  d
+	. . s table=forwardnum(fwdcnt,num)
+	. . m curr(table)=forwardnum(fwdcnt,num,"curr")
+	. . i $p(num,"||")'="" d MsgForward(link,event,num)
+	k forward,forwardnum,old s (forward,forwardtable)=""
+	
+	q
+	
+	; read module
+Read(ack,time) s ack=$g(ack),time=$g(time),T="",readcount=$g(readcount)+1 i ack'="Y" k tracerowid
+	
+	s char=""
+	; wait for message
+	s StopNow="" f i=1:1:time d  q:char>""  q:StopNow
+	. i $$CheckStop(link) s flagstop=1,StopNow=1 q
+	. r *char:1
+	i StopNow q ""
+	
+	i char'>"" q ""
+	i char'=$a(ESC("VT")) q "RDERR"
+	
+	k trace,DATA s (cnt1,cnt2,cnt3,cnt4)=0
+	s terminate="" f j=1:1 r record:TIMEOUT("COMPLETE") s T=$T q:'T  q:record=ESC("FS")  d  q:terminate
+	. ; check for blank record due to extra $c(13)
+	. i record="" q
+	. ; check if packet contains $c(28),$c(13) terminating sequence
+	. i record[ESC("FS") s terminate=1
+	. s trace=$g(trace)+1,trace(trace)=$tr(record,$c(10,28))
+	i 'T d
+	. s trace=$g(trace)+1,trace(trace)=$tr(record,$c(10,28))
+	. s msgtimeout=$g(msgtimeout)+1
+	q "OK"
+	
+	; forward received message to other interfaces
+MsgForward(link,msgtype,intNum) n (link,msgtype,intNum,table,curr,old,forwardnum,fwdcnt,version) s link=$g(link),msgtype=$tr($g(msgtype),"^","_"),intNum=$g(intNum)
+	
+	s newlink="" f  s newlink=$o(^SSHL7(link,"MSG-FWD",msgtype,"INT",newlink)) q:newlink=""  d
+	. i msgtype["ADT" d  q
+	. . i ",A02,A12,"[(","_$p(msgtype,"_",2)_",") s TransactionEdit="Y"
+	. . d ADT^HL7Create(intNum,newlink,msgtype)
+	
+	. i msgtype["ORU" d  q
+	. . i version("MSH")'="2.1",$p(msgtype,"_",2)'="R01" k forwardnum(fwdcnt,intNum) q
+	. . d Results^HL7OutboundORU(intNum,"",newlink)
+	
+	. i msgtype["ORM" d  q
+	. . d Order^HL7OutboundORM(intNum,newlink)
+	
+	q
+	
+	; check response action
+Action(actiontype,actionmessage) s actiontype=$g(actiontype),actionmessage=$g(actionmessage),action="" k trace,tracerowid
+	i actiontype'="" d
+	. ; shutdown the interface
+	. i actiontype="SH" s action="d Shutdown(1)",actionmessage=actionmessage_$s($l(actionmessage):"  ",1:"")_"Shutting down interface" q
+	. ; restart the interface
+	. i actiontype="RT" s action="d Restart",actionmessage=actionmessage_$s($l(actionmessage):"  ",1:"")_"Restarting interface" q
+	. ; resend current message
+	. i actiontype="RS" s action="s x1=x1-1",actionmessage=actionmessage_$s($l(actionmessage):"  ",1:"")_"Resending current message" q
+	. ; remove current message
+	. i actiontype="RM" s action="l -^SSHL7("""_$g(link)_""",""QUEUE"","""_$g(x1)_""") d DelQueue^HL7Queue("""_$g(link)_""","""_$g(x1)_""")",actionmessage=actionmessage_$s($l(actionmessage):"  ",1:"")_"Removing current message from queue" q
+	. ; skip current message
+	. i actiontype="SK" s actionmessage=actionmessage_$s($l(actionmessage):"  ",1:"")_"Sending next message in queue" q
+	. ; shutdown the interface and email notification
+	. i actiontype="SE" s action="d Shutdown(1,1,$g(actionmessage))",actionmessage=actionmessage_$s($l(actionmessage):"  ",1:"")_"Shutting down interface" q
+	
+	i $l(actionmessage) d trace^HL7Trace("*****",$h,actionmessage,"","","INF")
+	q action
+	
+	; date/time format (from $h) yyyymmddhhmmss
+Date(x) q $tr($zdt($g(x,$h),8)," :")
+	
+	; convert delimiters
+Esc(line) s line=$g(line)
+	f  q:$l(line,"|")<2  s line=$p(line,"|")_%3_"F"_%3_$p(line,"|",2,999)
+	f  q:$l(line,%1)<2  s line=$p(line,%1)_%3_"S"_%3_$p(line,%1,2,999)
+	f  q:$l(line,%2)<2  s line=$p(line,%2)_%3_"R"_%3_$p(line,%2,2,999)
+	n i,j
+	s j=$l(line,%3)-1
+	f i=j:-1:1  s line=$p(line,%3,i)_%3_"E"_%3_$p(line,%3,i+1,999)
+	f  q:$l(line,%4)<2  s line=$p(line,%4)_%3_"T"_%3_$p(line,%4,2,999)
+	q line
+	
+	; extract link details
+Init()	s introw=$$Interface(link)
+	i introw="" d trace^HL7Trace("*****",$h,link_" not setup","","","INF") q 0
+	
+	k PLIST
+	&SQL(SELECT * INTO :PLIST() FROM SS_Interface WHERE INT_RowId = :introw)
+	i SQLCODE q 0
+	s PLIST=$o(PLIST(""),-1) f i=1:1:PLIST s PLIST(i)=$p($g(PLIST(i)),$c(1))
+	
+	k INT
+	s INT("DEVTYPE")=PLIST(4),INT("DIRECT")=PLIST(5),INT("IP")=PLIST(11),INT("DEV")=PLIST(12),INT("FILE")=PLIST(18),INT("INDIR")=PLIST(19),INT("DIRPOLL")=PLIST(20)
+	s INT("FILEACT")=PLIST(22),INT("MOVEDIR")=PLIST(23),INT("EMAILF")=PLIST(36),INT("EMAILT")=PLIST(37),INT("UNIX")=PLIST(38),INT("MAXNUMFILE")=PLIST(42),INT("CS")=PLIST(43)
+	i INT("DEV")="",INT("INDIR")="" d trace^HL7Trace("*****",$h,"No device defined","","","INF") q 0
+	
+	k TIMEOUT
+	f time="14^BEF-CON","15^BEF-SEND","16^RESPONSE","17^COMPLETE","39^PORT-CON","40^CLI-CON","41^CLI-SEND" s TIMEOUT($p(time,"^",2))=$g(PLIST($p(time,"^")))
+	
+	; check for response conditions
+	s respcond="" k Action,MaxNum,ActionMax
+	f i="26^noresp","29^nak" s Action($p(i,"^",2))=PLIST($p(i,"^"))
+	f i="27^noresp","30^nak","32^naksend","34^read" s MaxNum($p(i,"^",2))=PLIST($p(i,"^"))
+	f i="28^noresp","31^nak","33^naksend","35^read" s ActionMax($p(i,"^",2))=PLIST($p(i,"^"))
+	
+	k PLIST
+	&SQL(SELECT * INTO :PLIST() FROM SS_HL7 WHERE HL7_RowId = :link)
+	i SQLCODE d trace^HL7Trace("*****",$h,link_" has no HL7 detail setup","","","INF") q 0
+	s PLIST=$o(PLIST(""),-1) f i=1:1:PLIST s PLIST(i)=$p($g(PLIST(i)),$c(1))
+	
+	k HL7
+	s HL7("PORT-LOW")=PLIST(3),HL7("PORT-HIGH")=PLIST(4),HL7("SENDAPP")=PLIST(6),HL7("SENDFAC")=PLIST(7),HL7("RECAPP")=PLIST(8),HL7("RECFAC")=PLIST(9),HL7("PT")=PLIST(12),HL7("USER")=PLIST(14),HL7("ACKREQ")=PLIST(15),HL7("MARKREAD")=PLIST(16)
+	s HL7("NAMEFORM")=$tr(PLIST(17),"*","^"),HL7("INCODE")=PLIST(18),HL7("OUTCODE")=PLIST(19),HL7("DEFADMTYPE")=PLIST(20),HL7("DEFADMDEPT")=PLIST(21)
+	s HL7("DEFREFDR")=PLIST(22),HL7("CHAPPFACIN")=PLIST(23),HL7("CHAPPFACOUT")=PLIST(24),HL7("ALTFEED")=PLIST(27),HL7("LINEBK")=$s(HL7("ALTFEED")="Y":"\.br\",1:"~")
+	s HL7("ACKSENDAPP")=PLIST(26),HL7("ACKSENDFAC")=PLIST(28),HL7("VER")=PLIST(30),HL7("TRACEDAYS")=PLIST(37),HL7("QUERY")=PLIST(42),HL7("AUTOSTARTOUT")=PLIST(43),HL7("SEND-NOW")=PLIST(44)
+	s HL7("INT-ADM-NUM")=PLIST(45)
+.
+	s HL7("DO_NOT_AUDIT_ATOMIC")=""
+.
+	k hl7 s hl7=##Class(User.CFSM).%OpenId(1,0)
+	i hl7 {
+		s HL7("DO_NOT_AUDIT_ATOMIC")=hl7.SMCFDoNotAuditHL7AtomicResults
+		d hl7.%Close()
+	}
+	k hl7
+.
+	// extract user details for api token
+	s (HL7("USER-CODE"),HL7("USER-PWD"))=""
+	i HL7("USER")'="" {
+		k HL7user s HL7user=##Class(User.SSUser).%OpenId(HL7("USER"))
+		i HL7user {
+			s HL7("USER-CODE")=HL7user.SSUSRInitials
+			s HL7("USER-PWD")=HL7user.SSUSRPassword
+			d HL7user.%Close()
+		}
+		k HL7user
+	}
+.
+	k PLIST
+	
+	k EB
+	s detail=$g(^SSHL7(link,"EB",1))
+	s EB("DAYSTOSEND")=$p(detail,"^"),EB("WLTYPE")=$p(detail,"^",2),EB("WLPRIO")=$p(detail,"^",3),EB("WLREASON")=$p(detail,"^",4)
+	s EB("IDFROM")=$lg(##Class(websys.StandardTypeItem).GetDescriptionPlus("HL7AppointmentID",$p(detail,"^",5)),1),EB("BOOKMETH")=$p(detail,"^",6)
+	s EB("SENDALL")=$p(detail,"^",7),EB("PATNUMBER")=$p(detail,"^",8),EB("APPTFORMAT")=$p(detail,"^",9)
+	
+	s msh="|^~\&",%=$e(msh),%1=$e(msh,2),%2=$e(msh,3),%3=$e(msh,4),%4=$e(msh,5)
+	s ESC("VT")=$c(11),ESC("FS")=$c(28),ESC("CR")=$c(13)
+	; setup patient number types
+	k PatNum s type="" f  s type=$o(^SSHL7(link,"PAT-NUM",type)) q:type=""  s PatNum(type)=^(type)
+	; setup order number types
+	k OrderNum s seg="" f  s seg=$o(^SSHL7(link,"ORD-NUM",seg)) q:seg=""  d
+	. s field="" f  s field=$o(^SSHL7(link,"ORD-NUM",seg,field)) q:field=""  s OrderNum(seg,field)=^(field)
+	; setup referral number types
+	k RefNum s type="" f  s type=$o(^SSHL7(link,"REF-NUM",type)) q:type=""  s RefNum(type)=^(type)
+.
+	k PLIST
+	q 1
+	
+	; check if interface should stop
+CheckStop(link) n (link) s link=$g(link)
+	s introw=$$Interface(link)
+	i introw="" q 0
+	s active=""
+	&SQL(SELECT INTMON_Active INTO :active FROM SS_InterfaceMonitor WHERE INTMON_RowId = :introw)
+	q $s(active'="N":0,1:1)
+	
+	; record start & stop date/times
+StartStop(start,stop,shutdown) n (start,stop,shutdown,link) s start=$g(start),stop=$g(stop),shutdown=$g(shutdown) k PLIST
+	
+	i $l(start) s PLIST(29)=$p(start,","),PLIST(32)=$p(start,",",2)
+	i $l(stop) s PLIST(31)=$p(stop,","),PLIST(33)=$p(stop,",",2)
+	&SQL(UPDATE SS_HL7 VALUES :PLIST() WHERE HL7_RowId = :link)
+	
+	k PLIST s introw=$$Interface(link)
+	i 'shutdown s PLIST(3)="U",PLIST(6)="Y"
+	i shutdown s PLIST(3)="D",PLIST(6)="N"
+	&SQL(UPDATE SS_InterfaceMonitor VALUES :PLIST() WHERE INTMON_RowId = :introw)
+	q
+	
+	; extract interface rowid
+Interface(link) n (link) s link=$g(link),introw=""
+	&SQL(SELECT INT_RowId INTO :introw FROM SS_Interface WHERE INT_Code = :link)
+	q introw
+	
+	; update interface monitor active flag
+UpdIntMon(link) n (link,PLIST) s link=$g(link)
+	s introw=$$Interface(link)
+	q:introw=""
+	s PLIST(1)=introw
+	&SQL(UPDATE SS_InterfaceMonitor VALUES :PLIST() WHERE INTMON_RowId = :introw)
+	q
+	
+	; log errors and restart process
+Error
+	; stop process if protect error occurs
+	i $ze["PROTECT" halt
+	i $ze'["READ",$ze'["WRITE" d trace^HL7Trace("*****",$h,$ze,"","","ERR")
+	e  d trace^HL7Trace("*****",$h,$s(INT("DIRECT")="I":"Client disconnected",1:"Disconnected from server"),"","","INF")
+	; will allow closure of device required from 'write/read' errors in other routines
+Error1	d trace^HL7Trace("*****",$h,"Stopping and restarting connection","","","INF") s $zt="Error^"_$zn
+	g Restart
+
+
+

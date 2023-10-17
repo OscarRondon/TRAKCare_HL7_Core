@@ -1,0 +1,653 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7OutboundSCH^MAC^^^0
+HL7OutboundSCH // ML 13/11/2006 ; HL7 Interface - Outbound SIU message creation decision
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutboundSCH.rtn#1 $
+	quit
+	
+check(table,rowid,trigger) new (table,rowid,trigger,%d,%e,%old,%before,%after,%session,insert,ScreenForm,TFORM)
+	set table=$get(table),rowid=$get(rowid),trigger=$get(trigger),insert=$get(insert),ScreenForm=$get(ScreenForm),TFORM=$get(TFORM)
+	set (type,ok,statuschange)="" kill old,curr
+	
+	set intNum=$select(rowid'="":rowid,1:$get(%d(1)))
+	merge curr(table)=%d,old(table)=%old
+.
+	// check for OT bookings
+	if table="RBOPERATINGROOM" {
+		kill ^TMP("HL7-TRACK-SCH",$job,table)
+		// setup tracking to send out complete record when updating is complete
+		if trigger="Insert",$piece($get(%d(30)),$char(1))'="" {
+			set ^TMP("HL7-TRACK-SCH",$job,table)=trigger_"^"_intNum_"^S12"
+		}
+		if trigger="Update" {
+			// check status changes
+			if ($piece($get(%d(13)),$char(1))="B")&&($piece($get(%old(13)),$char(1))="R") set ok=1,type="S12"
+			if ('ok)&&($piece($get(%d(13)),$char(1))="A")&&($piece($get(%old(13)),$char(1))'="A") set ok=1,type="S14"
+			if ('ok)&&($piece($get(%d(13)),$char(1))="D")&&($piece($get(%old(13)),$char(1))'="D") set ok=1,type="S14"
+			if ('ok)&&($piece($get(%d(13)),$char(1))="X")&&($piece($get(%old(13)),$char(1))'="X") set ok=1,type="S15"
+			if ('ok)&&($piece($get(%d(13)),$char(1))="R")&&($piece($get(%old(13)),$char(1))="B") set ok=1,type="S15"
+			if ok set statuschange=1
+			// other modifications
+			if 'ok {
+				for i=7,9,15,17,18,25,28,35,36,46 if $data(%d(i))&&($piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1))) set ok=1,type="S14" continue
+			}
+			// delay message until RBAppointment updated from ORAnaesthesia.Edit if status changed
+			if (ScreenForm="ORAnaesthesia.Edit")&&(statuschange=1) {
+				set ^TMP("HL7-TRACK-SCH",$job,table)=trigger_"^"_intNum_"^"_type
+				set ok=""
+			}
+			// RBOP_Appoint_DR removed upon cancellation so extract from %old
+			if ok=1,type="S15" {
+				set intNum=intNum_"~"_$piece($get(%old(30)),$char(1))
+			}
+		}
+	}
+.
+	// check for deletion of secondary procedures
+	if table="RBOPERROOMSECPROC" {
+		// ignore if part of new OT booking
+		if $data(^TMP("HL7-TRACK-SCH",$job,"RBOPERATINGROOM")) quit
+		// new secondary procedure on existing ot booking
+		if trigger="Insert" set ok=1,type="S14"
+		// delete secondary procedure
+		if trigger="Delete" set ok=1,type="S14"
+	}
+.
+	// check for appointment changes
+	if table="RBAPPOINTMENT" do
+	. if trigger="Update",ScreenForm="RBOperatingRoom.Edit",$data(^TMP("HL7-TRACK-SCH",$job,"RBOPERATINGROOM")) do  quit
+	. . set table="RBOPERATINGROOM"
+	. . set intNum=$piece(^TMP("HL7-TRACK-SCH",$job,table),"^",2)
+	. . set ok=1,type=$piece(^TMP("HL7-TRACK-SCH",$job,table),"^",3)
+	. . kill ^TMP("HL7-TRACK-SCH",$job,table)
+.
+	. if trigger="Update",ScreenForm="ORAnaesthesia.Edit",$data(^TMP("HL7-TRACK-SCH",$job,"RBOPERATINGROOM")) do  quit
+	. . set table="RBOPERATINGROOM"
+	. . set intNum=$piece(^TMP("HL7-TRACK-SCH",$job,table),"^",2)
+	. . set ok=1,type=$piece(^TMP("HL7-TRACK-SCH",$job,table),"^",3)
+	. . kill ^TMP("HL7-TRACK-SCH",$job,table)
+.
+	. // wait for RBOPERATINGROOM to be updated
+	. if ScreenForm="RBOperatingRoom.Edit" quit
+.
+	. // wait for order item before generating new appointment message
+	. set intOrdNum=$$ApptOrder^HL7OutExtract11(intNum)
+	. if intOrdNum="" quit
+	. // extract USRN
+	. set FillerID=$$ApptFillerID^HL7OutExtract11(intNum)
+	. set sendon=$$sendon^HL7Outbound(intOrdNum)
+	. if sendon'="APPT",(sendon'="APC"),(sendon'="NRA"),(sendon'="PA"),FillerID="" quit
+	. if sendon="APPT"!(sendon="APC")!(sendon="NRA") do  if ok quit
+	. . if $get(%d(24))'="",$get(%old(24))="",$piece($get(%d(10)),$char(1))="" set ok=1,type="S12~"_intNum_"^S23~"_intNum
+	
+	. // check for appointment changes
+	. if trigger="Update" do
+	. . // appointment cancelled
+	. . if $piece($get(%d(5)),$char(1))="X",$piece($get(%old(5)),$char(1))'="X" set ok=1,type="S15" quit
+	. . // notify did not attend
+	. . if $piece($get(%d(5)),$char(1))="N",$piece($get(%old(5)),$char(1))'="N" set ok=1,type="S26" quit
+	. . // rescheduling of appointment - cancel old and send new
+	. . if $piece($get(%d(10)),$char(1))'="",$piece($get(%old(10)),$char(1))="" set ok=1,type="S15~"_intNum_"^S12~"_$piece($get(%d(10)),$char(1)) quit
+	. . // other modifications
+	. . if $piece($get(%d(3)),$char(1))'=$piece($get(%old(3)),$char(1)),$piece($get(%old(3)),$char(1))'="" set ok=1,type="S14" quit
+	. . if $piece($get(%d(18)),$char(1))'=$piece($get(%old(18)),$char(1)),$piece($get(%old(18)),$char(1))'="" set ok=1,type="S14" quit
+	. . if $piece($get(%d(5)),$char(1))="P",$piece($get(%old(5)),$char(1))'="P" set ok=1,type="S14" quit
+	. . if $piece($get(%d(5)),$char(1))="A",$piece($get(%old(5)),$char(1))'="A" set ok=1,type=$select(sendon="PA":"S12",1:"S14") quit
+	. . if $piece($get(%d(5)),$char(1))="H",$piece($get(%old(5)),$char(1))'="H" set ok=1,type="S14" quit
+	. . if $piece($get(%d(5)),$char(1))="S",$piece($get(%old(5)),$char(1))'="S" set ok=1,type="S14" quit
+	. . if $piece($get(%d(5)),$char(1))="D",$piece($get(%old(5)),$char(1))'="D" set ok=1,type="S14" quit
+	. . for i=37,39,66,116,118 if $piece($get(%d(i)),$char(1))'=$piece($get(%old(i)),$char(1)) set ok=1,type="S14" quit
+	. . // check list fields separately
+	. . if 'ok for i=117 do  if ok quit
+	. . . set (dx,oldx)=""
+	. . . if $listlength($get(%d(i))) for jj=1:1:$listlength($get(%d(i))) set dx=dx_$select($length(dx):"^",1:"")_$list(%d(i),jj)
+	. . . if $listlength($get(%old(i))) for jj=1:1:$listlength($get(%old(i))) set oldx=oldx_$select($length(oldx):"^",1:"")_$list(%old(i),jj)
+	. . . if dx'=oldx set ok=1,type="S14"
+	
+	// check for slot changes
+	if table="RBNOTAVAIL" do
+	. // slots made unavailable
+	. if trigger="Insert" set ok=1,type="S23"
+	. // slots made available
+	. if trigger="Delete" set ok=1,type="S24"
+	
+	// after e-booking send not available
+	if table="EBOOK-RBNOTAVAIL" do
+	. set ok=1,type="S23"
+	// check if session made not available for ebooking
+	if table="RBRESEFFDATESESSION" do
+	. if $piece($get(%d(46)),$char(1))="0",$piece($get(%old(46)),$char(1))="1" set ok=1,type="S23"
+	
+	// check if slot made not available for ebooking
+	if table="RBSERVICEOVERRIDE" do
+	. if $piece($get(%d(23)),$char(1))="N",$piece($get(%old(23)),$char(1))'="N" set ok=1,type="S23"
+	. if ScreenForm="RBAppointment.MultiSlotOverride" do
+	. . if trigger="Insert",$piece($get(%d(15)),$char(1))'="",$piece($get(%d(7)),$char(1))'="" set ok=1,type="S23"
+	. . if trigger="Insert",$piece($get(%d(15)),$char(1))'="",$piece($get(%d(20)),$char(1))'="" set ok=1,type="S23"
+	. . // slots made available
+	. . if trigger="Delete" set ok=1,type="S24"
+	
+	// check if service deleted from session
+	if table="RBRESEFFDATESESSSERVICES" do
+	. set SessRowId=$piece(intNum,"||",1,3),SessionEBooking=""
+	. &SQL(SELECT SESS_EBooking INTO :SessionEBooking FROM RB_ResEffDateSession WHERE SESS_RowId = :SessRowId)
+	. // only send if session marked as available for ebooking
+	. if SessionEBooking'=1 quit
+	. set ok=1,type="S23"
+.
+	// check session availability
+	if table="RBRESEFFDATESESSNOTAVAIL" {
+		set SessRowId=$piece(intNum,"||",1,3),SessionEBooking=""
+		&SQL(SELECT SESS_EBooking INTO :SessionEBooking FROM RB_ResEffDateSession WHERE SESS_RowId = :SessRowId)
+		// only send if session marked as available for ebooking
+		if SessionEBooking=1 {
+			// session made not available
+			if trigger="Insert" set ok=1,type="S23"
+			// session availability updated
+			if trigger="Update" {
+				set change=""
+				if $piece($get(%d(3)),$char(1))'=$piece($get(%old(3)),$char(1)) if $increment(change)
+				if $piece($get(%d(4)),$char(1))'=$piece($get(%old(4)),$char(1)) if $increment(change)
+				if change'="" set ok=1,type="S24~"_intNum_"^S23~"_intNum
+			}
+			// session made available
+			if trigger="Delete" set ok=1,type="S24"
+		}
+	}
+	
+	// check effective date overlaps
+	if table="RBRESEFFDATE" {
+		// check for overlap in schedule dates
+		set effdate=$get(^RB("RES",$piece(intNum,"||"),"DATE",$piece(intNum,"||",2)))
+		
+		if (trigger="Insert")||(trigger="Delete") {
+			// find rowid for previous effective date
+			set preveffdate=$order(^RB("RES",$piece(intNum,"||"),"DATE",0,"Date",effdate),-1)
+			if preveffdate="" quit
+			set row=$order(^RB("RES",$piece(intNum,"||"),"DATE",0,"Date",preveffdate,""),-1)
+			if 'row quit
+			set prevSchedId=$piece(intNum,"||")_"||"_row
+			set sessdate=$order(^RBAS($piece(intNum,"||"),0,"DateSess",effdate),-1)
+			if sessdate="" quit
+			if $order(^RBAS($piece(intNum,"||"),0,"DateSess",sessdate,prevSchedId))="" quit
+			set intNum=intNum_"^"_prevSchedId
+			set ok=1,type=$select(trigger="Insert":"S23",1:"S24")
+		}
+	}
+	
+	if 'ok quit
+	
+	set (LogonUser,roleprofile,rolecode,logonGroupID)=""
+	if $data(%session) do
+	. // extract user who created 'update' - extract now to pass through for 'jobbed' message creation
+	. set LogonUser=$select($data(%session):$get(%session.Data("LOGON.USERID")),1:"")
+	. // extract role details
+	. if $get(%session.Data("SPINEPROFILE"))'="" set roleprofile=$get(%session.Data("SPINEPROFILE"))
+	. if $get(%session.Data("LOGON.GROUPID"))'="" do
+	. . set logonGroupID = %session.Data("LOGON.GROUPID")
+	. . &SQL(SELECT ExternalGroupID INTO :rolecode FROM epr.GroupSettings WHERE GroupDR = :logonGroupID)
+	
+	set SQLCODE=""
+	
+	// merge curr and old into tmp global
+	for i="CURR","OLD" kill ^TMP("HL7-ARR",$job,i)
+	merge ^TMP("HL7-ARR",$job,"CURR")=curr,^TMP("HL7-ARR",$job,"OLD")=old
+	// remove E-BOOK reference for generating S23 after receiving SRM_S01
+	set tablex=table if $piece(tablex,"-")="EBOOK" set tablex=$piece(tablex,"-",2)
+	
+	set typex=type
+	
+	// send only required message
+	if $length(typex,"^")<2 do
+	. set type="SIU_"_typex
+	
+	. // extract links to send message to
+	. kill SendTo if '$$sendto^HL7Outbound(type,tablex) if $order(SendTo(""))="" quit
+	
+	. set cnt="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do
+	. . set link=SendTo(cnt)
+	. . // job SIU^S23 to prevent hanging while extracting all slots marked not available
+	. . if type["S23",table'="RBRESEFFDATESESSSERVICES" job Schedule(intNum,link,type,LogonUser,$job,table,roleprofile,rolecode,trigger) quit
+	. . // do not job if service deleted as it will not exist
+	. . if type["S23",table="RBRESEFFDATESESSSERVICES" do Schedule(intNum,link,type,LogonUser,$job,table,roleprofile,rolecode,trigger) quit
+	. . do Schedule(intNum,link,type,LogonUser,$job,table,"","",trigger)
+	
+	// send multiple messages
+	if $length(typex,"^")>1 do
+	. for typecnt=1:1:$length(typex,"^") set type=$piece(typex,"^",typecnt),intNum=$piece(type,"~",2),type=$piece(type,"~") do
+	. . set type="SIU_"_type
+	. . // extract links to send message to
+	. . kill SendTo if '$$sendto^HL7Outbound(type,tablex) if $order(SendTo(""))="" quit
+	
+	. . set cnt="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do
+	. . . set link=SendTo(cnt)
+	. . . do Schedule(intNum,link,type,LogonUser,$job,table,"","",trigger)
+	
+	// if appointment is cancelled and GUIDs in use, reassign GUID to new USRN as USRN can no longer be used
+	if ($length(typex,"^")<2)&&($piece(typex,"^")="S15")&&($order(SendTo(""))'="") do
+	. set GUIDUsed=""
+	. set cnt="" for  set cnt=$order(SendTo(cnt)) quit:cnt=""  do  if GUIDUsed quit
+	. . set link=SendTo(cnt)
+	. . set detail=$get(^SSHL7(link,"EB",1))
+	. . if $piece(detail,"^",9)="G" set GUIDUsed=1
+	. if 'GUIDUsed quit
+	. do ReassignGUID(intNum)
+	
+	kill old,curr,array
+	quit
+	
+	// build segments and message
+Schedule(intNum,link,msgtype,LogonUser,job,table,roleprofile,rolecode,trigger) new (intNum,link,table,msgtype,LogonUser,job,roleprofile,rolecode,trigger,curr,old)
+	set intNum=$get(intNum),link=$get(link),table=$get(table),msgtype=$get(msgtype),LogonUser=$get(LogonUser),job=$get(job)
+	set roleprofile=$get(roleprofile),rolecode=$get(rolecode),trigger=$get(trigger)
+	kill queue,^TMP("HL7-OUT",$job),^TMP("EBOOK-NOT-AVAIL-SLOTS",$job),^TMP("EBOOK-NOT-AVAIL-BOOKED-SLOTS",$job)
+	
+	// merge curr and old back out of tmp global
+	merge curr=^TMP("HL7-ARR",job,"CURR"),old=^TMP("HL7-ARR",job,"OLD")
+	for i="CURR","OLD" kill ^TMP("HL7-ARR",job,i)
+	
+	// remove error messages for job
+	if $data(^TMP("HL7-ERR-LINK",link,$job)) do
+	. kill ^TMP("HL7-ERR",$job),^TMP("HL7-ERR-LINK",link,$job)
+	
+	// check link status
+	if '$$Init^HL7Create quit
+	
+	if msgtype["S23" do  if $order(^TMP("EBOOK-NOT-AVAIL-SLOTS",$job,""))="" quit
+	. if table="RBNOTAVAIL" do ##class(web.RBNotAvail).GetUSRNs(intNum) quit
+	. if table="EBOOK-RBNOTAVAIL" do ##class(web.RBNotAvail).GetUSRNs("",intNum) quit
+	. if table="RBAPPOINTMENT",$piece($get(^CF("RB",1)),"^",90)="Y" do ##class(web.RBNotAvail).GetUSRNs("",intNum) quit
+	. if table="RBRESEFFDATESESSION" do ##class(web.RBNotAvail).GetUSRNs("","",intNum) quit
+	. if table="RBSERVICEOVERRIDE" do ##class(web.RBNotAvail).GetUSRNs("","","",intNum) quit
+	. if table="RBRESEFFDATESESSSERVICES" do ##class(web.RBNotAvail).GetUSRNs("","","","",intNum) quit
+	. if table="RBRESEFFDATESESSNOTAVAIL" do ##class(web.RBNotAvail).GetUSRNs("","","","","",intNum)
+	. if table="RBRESEFFDATE" do ##class(web.RBNotAvail).GetUSRNs("","","","","","",intNum)
+	
+	if msgtype["S24" {
+		set i="" for  {
+			set i=$order(old(table,i))
+			if i="" quit
+			set ^||TMP("HL7-UNBLOCKED-SLOTS",$job,intNum,i)=$get(old(table,i))
+		}
+		if table="RBNOTAVAIL" do GetUnblockedUSRNs(intNum)
+		if table="RBSERVICEOVERRIDE" do GetUnblockedUSRNs("",intNum)
+		if table="RBRESEFFDATESESSNOTAVAIL" do GetUnblockedUSRNs("","",intNum)
+		if table="RBRESEFFDATE" do GetUnblockedUSRNs("","","",intNum)
+		
+		kill ^||TMP("HL7-UNBLOCKED-SLOTS",$job,intNum)
+	}
+	
+	// send cancellation messages for appointments in not available range
+	if table'="EBOOK-RBNOTAVAIL",$data(^TMP("EBOOK-NOT-AVAIL-BOOKED-SLOTS",$job)) do
+	. set tablex=table,table="RBAPPOINTMENT"
+	. set msgtype="SIU_S15"
+	. set j="" for  set j=$order(^TMP("EBOOK-NOT-AVAIL-BOOKED-SLOTS",$job,j),1,intApptNum) quit:j=""  do
+	. . if intApptNum="" quit
+	
+	. . // extract required external/internal numbers
+	. . set (intRegMrn,intAdmNum)=""
+	. . if $$ApptAdmPat^HL7OutExtract11(intApptNum,.intAdmNum,.intRegMrn)
+	. . if intRegMrn="" quit
+	
+	. . // extract segments required
+	. . kill SEG if '$$Segment^HL7Create(msgtype)
+	. . if $order(SEG(""))="" quit
+	. . set msgtype=$translate(msgtype,"_","^")
+	
+	. . // build segment information
+	. . do BuildSegment^HL7Create if fail kill ^TMP("HL7-OUT",$job) quit
+	. . if $length(queue) do Queue^HL7Queue(link,msgtype)
+	. . kill queue,^TMP("HL7-OUT",$job)
+	
+	. set msgtype="SIU_S23",table=tablex
+	
+	if ",S23,S24,"'[(","_$piece(msgtype,"_",2)_",") set intApptNum=intNum
+	
+	// check link status
+	if '$$Init^HL7Create quit
+	
+	// extract required external/internal numbers
+	set (intRegMrn,intAdmNum)=""
+	if ",S23,S24,"'[(","_$piece(msgtype,"_",2)_",") do  if intRegMrn="" quit
+	. if ",RBOPERATINGROOM,RBOPERROOMSECPROC,"'[(","_table_",") do
+	. . set intApptNum=intNum
+	. . if $$ApptAdmPat^HL7OutExtract11(intApptNum,.intAdmNum,.intRegMrn)
+	. if ",RBOPERATINGROOM,RBOPERROOMSECPROC,"[(","_table_",") do
+	. . if $piece(msgtype,"_",2)'="S15" set intOperNum=$piece(intNum,"||")
+	. . if $piece(msgtype,"_",2)="S15" set intOperNum=$piece($piece(intNum,"||"),"~")
+	. . if table="RBOPERROOMSECPROC" set intSecProc=intNum
+	. . if $$OperAdmPat^HL7OutExtract16(intOperNum,.intAdmNum,.intRegMrn,.intApptNum)
+	. . if $piece(msgtype,"_",2)="S15",intApptNum="" do
+	. . . set intApptNum=$piece(intNum,"~",2)
+	
+	// extract segments required
+	kill SEG if '$$Segment^HL7Create(msgtype)
+	if $order(SEG(""))="" quit
+	set msgtype=$translate(msgtype,"_","^")
+	
+	// build segment information
+	do BuildSegment^HL7Create if fail kill ^TMP("HL7-OUT",$job) quit
+	
+	if $length(queue) do Queue^HL7Queue(link,msgtype)
+	
+	kill queue,^TMP("HL7-OUT",$job),^TMP("EBOOK-NOT-AVAIL-SLOTS",$job),^TMP("EBOOK-NOT-AVAIL-BOOKED-SLOTS",$job)
+	quit
+	
+	// extract external code for item (called from ##class(web.RBNotAvail).GetUSRNs)
+FindExternalCode(arcim,loc,date)
+	set EXTCode=""
+	&SQL(
+		SELECT EXT_Code
+		INTO :EXTCode
+		FROM SQLUser.ARC_ItemExternalCodes
+		WHERE (EXT_ParRef = :arcim)
+		AND ((:date >= EXT_DateFrom) OR (EXT_DateFrom IS NULL))
+		AND ((:date <= EXT_DateTo) OR (EXT_DateTo IS NULL))
+	)
+	quit EXTCode
+.
+	// find unblocked USRNs for HL7 when 'Not Available' is deleted
+GetUnblockedUSRNs(NAid,SlotOverrideID,SessNotAvailID,SchedIDs)
+	new Res,FrDtTm,ToDtTm,DOW,DtFm,DtTo,TmFm,TmTo,LocID,ServID,SL,sess,ser,sch,slt,j,s,timeext,qty,s1,numserov,numsergrov,ap,a,USRN,load,RR,apServID
+	set (Res,FrDtTm,ToDtTm,DOW,DtFm,DtTo,TmFm,TmTo,LocID,ServID,SL,sess,ser,sch,s,timeext,s1,a,USRN,load,apServID)=""
+	set (ser,slt,j,qty,numserov,ap)=0
+	if ($get(NAid)="")&&($get(SlotOverrideID)="")&&($get(SessNotAvailID)="")&&($get(SchedIDs)="") quit
+	kill ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job),^TMP("EBOOK-NOW-AVAIL-BOOKED-SLOTS",$job)
+	
+	// extract all slots not available from NotAvailble rowid
+	if $get(NAid)'="" {
+		set Res=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,NAid,2)),FrDtTm=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,NAid,8)),ToDtTm=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,NAid,9))
+		set DOWs=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,NAid,21))
+		set DtFm=$piece(FrDtTm,"Z"),TmFm=$piece(FrDtTm,"Z",2)
+		set DtTo=$piece(ToDtTm,"Z"),TmTo=$piece(ToDtTm,"Z",2)-60 //if the end time is on the hour or half hour, don't want to include available slots that may start at that time.
+		set LocID=$piece($get(^RB("RES",Res)),"^")
+		
+		if $$open^MVBRBAS(Res,DtFm,DtTo,TmFm,TmTo,DOWs,"","","","Y")
+		do {
+			set (stdt,eddt,sttm,edtm,dow,sch,qty,sergroup,numserov)=""
+			set code=$$fetch^MVBRBAS(Res)
+			if code=0 {
+				set stdt=PLIST(5),eddt=PLIST(5),dow=stdt+3#7+1,sch=PLIST(3),qty=PLIST(9)
+				set sttm=PLIST(7),edtm=PLIST(8),sess=$piece($get(PLIST(20)),$char(1),1),load=$piece(PLIST(10),$char(1))
+				set ser=0 for  {
+					set ser=$order(^RB("RES",+sess,"DATE",+$piece(sess,"||",2),"SESS",+$piece(sess,"||",3),"SER",ser))
+					quit:ser=""
+					set ServID=$piece($get(^RB("RES",+sess,"DATE",+$piece(sess,"||",2),"SESS",+$piece(sess,"||",3),"SER",ser)),"^")
+					set arcim=$piece($get(^RBC("SER",ServID)),"^")
+					if '$order(^ARCIM(+arcim,1,"EXT",0)) continue
+					set sergroup=$piece($get(^RBC("SER",+ServID)),"^",9)
+					set numserov=$$numserov1^CWEBRBRE5(dow,ServID,Res,sttm,stdt,sess)
+					if numserov="" set numserov=$$numserov^CWEBRBRE5(dow,sergroup,Res,sttm,stdt,sess)
+					if numserov'="" set qty=numserov
+					if qty=0 continue
+					set numbook=0
+					set ap=0 for  {
+						set ap=$order(^RBAS(+sch,+$piece(sch,"||",2),"APPT",ap))
+						quit:ap=""
+						set a=^(ap)
+						set apServID=$piece(a,"^",15)
+						if arcim'=$piece($get(^RBC("SER",apServID)),"^") continue
+						if "TX"'[$piece(a,"^",3){
+							set numbook=numbook+1
+							if $piece(a,"^",75)'="" set RR($piece(a,"^",75))=$piece(sch,"||",1,2)_"||"_ap
+						}
+					}
+					if 'numbook set numbook=1
+					for a=1:1:qty {
+						quit:a>load
+						set USRN=sch_"-"_stdt_"-"_$translate($ztime(sttm,2),":")_"-"_ServID_"-"_a
+						if '$data(RR(USRN)) {
+							set cntUSRN=$increment(^TMP("EBOOK-NOW-AVAIL-SLOTS",$job))
+							set ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,cntUSRN)=USRN
+							set ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,cntUSRN,"DETAIL")=stdt_"^"_sttm_"^"_edtm_"^"_ServID
+						}
+					}
+				}
+			}
+		} while code=0
+		if $$close^MVBRBAS()
+	}
+	if $get(SlotOverrideID)'="" {
+		set datetime=$h
+		set DOWs=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SlotOverrideID,3))
+		set DtFm=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SlotOverrideID,4))
+		set TmFm=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SlotOverrideID,5))
+		set SessID=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SlotOverrideID,9))
+		set DtTo=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SlotOverrideID,12))
+		set TmTo=TmFm
+		set (MultiServOv,ServiceID,ServGrpID)=""
+.
+		if +SessID=0 {
+			set ServGrpID=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SlotOverrideID,7))
+			set SessID=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SlotOverrideID,15))
+			set ServiceID=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SlotOverrideID,20))
+			set DtTo=DtFm
+			set MultiServOv=1
+		}
+		set Res=+SessID
+		set LocID=$piece($get(^RB("RES",Res)),"^")
+		
+		if $$open^MVBRBAS(Res,DtFm,DtTo,TmFm,TmTo,DOWs,"","","","Y")
+		do {
+			set (stdt,eddt,sttm,edtm,dow,sch,qty,sergroup,numserov)=""
+			set code=$$fetch^MVBRBAS(Res)
+			if code=0 {
+				set stdt=PLIST(5),eddt=PLIST(5),dow=stdt+3#7+1,sch=PLIST(3),qty=PLIST(9)
+				set sttm=PLIST(7),edtm=PLIST(8),sess=$piece($get(PLIST(20)),$char(1),1),load=$piece(PLIST(10),$char(1))
+				// only return slots for the time specified
+				if sttm'=TmFm continue
+				set ser=0 for  {
+					set ser=$order(^RB("RES",+SessID,"DATE",+$piece(SessID,"||",2),"SESS",+$piece(SessID,"||",3),"SER",ser))
+					quit:ser=""
+					set ServID=$piece($get(^RB("RES",+SessID,"DATE",+$piece(SessID,"||",2),"SESS",+$piece(SessID,"||",3),"SER",ser)),"^")
+					if (ServID'=ServiceID)&&(ServGrpID="") continue
+					set arcim=$piece($get(^RBC("SER",ServID)),"^"),arcim1=arcim_"&"
+					if '$order(^ARCIM(+arcim,1,"EXT",0)) continue
+					set sergroup=$piece($get(^RBC("SER",+ServID)),"^",9)
+					if (ServGrpID'="")&&(ServGrpID'=sergroup) continue
+					// if multislotoverride get original service load level
+					set (serviceload,serviceSOV)=""
+					if MultiServOv {
+						set serviceSOV=$order(^RB("SOV",0,"Sess",SessID,serviceSOV))
+						if serviceSOV="" continue
+						set detail=$get(^RB("SOV",serviceSOV))
+						set serviceload=$piece(detail,"^",9)
+					}
+					if MultiServOv,serviceSOV="" continue
+					if MultiServOv,serviceload<1 continue
+					set numserov=$$numserov1^CWEBRBRE5(dow,ServID,Res,sttm,stdt,SessID)
+					if numserov="" set numserov=$$numserov^CWEBRBRE5(dow,sergroup,Res,sttm,stdt,SessID)
+					if numserov'="" set qty=numserov
+					
+					if 'MultiServOv,qty=0 continue
+					if MultiServOv {
+						if serviceload'=numserov set serviceload=serviceload-numserov
+.
+					}
+					set numbook=0
+					set ap=0 for  {
+						set ap=$order(^RBAS(+sch,+$piece(sch,"||",2),"APPT",ap))
+						quit:ap=""
+						set a=^(ap)
+						set apServID=$piece(a,"^",15)
+						if arcim'=$piece($get(^RBC("SER",apServID)),"^") continue
+						if "TX"'[$piece(a,"^",3){
+							set numbook=numbook+1
+							// if USRN is cancelled do not include in list of active USRNs to be ignored, allow cancelled USRNs in TC to be output
+							// to external systems as they may be active elsewhere (eg Choose & Book)
+							if $piece(a,"^",75)'="" set RR($piece(a,"^",75))=$piece(sch,"||",1,2)_"||"_ap
+						}
+					}
+					if 'numbook set numbook=1
+					for a=1:1 {
+						if 'MultiServOv,(a>load) quit
+						if MultiServOv,(a>serviceload) quit
+						set USRN=sch_"-"_stdt_"-"_$translate($ztime(sttm,2),":")_"-"_ServID_"-"_a
+						if '$data(RR(USRN)) {
+							set cntUSRN=$increment(^TMP("EBOOK-NOW-AVAIL-SLOTS",$job))
+							set ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,cntUSRN)=USRN
+							set ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,cntUSRN,"DETAIL")=stdt_"^"_sttm_"^"_edtm_"^"_ServID
+						}
+					}
+				}
+			}
+		} while code=0
+		if $$close^MVBRBAS()
+	}
+	if $get(SessNotAvailID)'="" {
+		set DtFm=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SessNotAvailID,3))
+		set DtTo=$get(^||TMP("HL7-UNBLOCKED-SLOTS",$job,SessNotAvailID,4))
+		set SessID=$piece(SessNotAvailID,"||",1,3),DOWs=DtFm+3#7+1
+		set (TmFm,TmTo)=""
+		set Res=+SessID
+		set LocID=$piece($get(^RB("RES",Res)),"^")
+		
+		if $$open^MVBRBAS(Res,DtFm,DtTo,TmFm,TmTo,DOWs,"","","","Y")
+		do {
+			set (stdt,eddt,sttm,edtm,dow,sch,qty,sergroup,numserov)=""
+			set code=$$fetch^MVBRBAS(Res)
+			if code=0 {
+				set stdt=PLIST(5),eddt=PLIST(5),dow=stdt+3#7+1,sch=PLIST(3),qty=PLIST(9)
+				set sttm=PLIST(7),edtm=PLIST(8),sess=$piece($get(PLIST(20)),$char(1),1),load=$piece(PLIST(10),$char(1))
+				set ser=0 for  {
+					set ser=$order(^RB("RES",+SessID,"DATE",+$piece(SessID,"||",2),"SESS",+$piece(SessID,"||",3),"SER",ser))
+					quit:ser=""
+					set ServID=$piece($get(^RB("RES",+SessID,"DATE",+$piece(SessID,"||",2),"SESS",+$piece(SessID,"||",3),"SER",ser)),"^")
+					if ServID'="" {
+						set arcim=$piece($get(^RBC("SER",ServID)),"^")
+						if '$order(^ARCIM(+arcim,1,"EXT",0)) continue
+						set sergroup=$piece($get(^RBC("SER",+ServID)),"^",9)
+						set numserov=$$numserov1^CWEBRBRE5(dow,ServID,Res,sttm,stdt,SessID)
+						if numserov="" set numserov=$$numserov^CWEBRBRE5(dow,sergroup,Res,sttm,stdt,SessID)
+						if numserov'="" set qty=numserov
+						if qty=0 continue
+						set numbook=0
+						set ap=0 for  {
+							set ap=$order(^RBAS(+sch,+$piece(sch,"||",2),"APPT",ap))
+							quit:ap=""
+							set a=^(ap)
+							set apServID=$piece(a,"^",15)
+							if arcim'=$piece($get(^RBC("SER",apServID)),"^") continue
+							if "TX"'[$piece(a,"^",3){
+								set numbook=numbook+1
+								if $piece(a,"^",75)'="" set RR($piece(a,"^",75))=$piece(sch,"||",1,2)_"||"_ap
+							}
+						}
+						if 'numbook set numbook=1
+						for a=1:1 {
+							quit:a>load
+							set USRN=sch_"-"_stdt_"-"_$translate($ztime(sttm,2),":")_"-"_ServID_"-"_a
+							if '$data(RR(USRN)) {
+								set cntUSRN=$increment(^TMP("EBOOK-NOW-AVAIL-SLOTS",$job))
+								set ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,cntUSRN)=USRN
+								set ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,cntUSRN,"DETAIL")=stdt_"^"_sttm_"^"_edtm_"^"_ServID
+							}
+						}
+					}
+				}
+			}
+		} while code=0
+		if $$close^MVBRBAS()
+	}
+.
+	if $get(SchedIDs)'="" {
+.
+		set newSchedID=$piece(SchedIDs,"^"),prevSchedID=$piece(SchedIDs,"^",2)
+		// date from is the effective date of the new schedule
+		set DtFm=$get(^RB("RES",+newSchedID,"DATE",+$piece(newSchedID,"||",2)))
+.
+		set sessRow=0 for  {
+			set sessRow=$order(^RB("RES",+prevSchedID,"DATE",+$piece(prevSchedID,"||",2),"SESS",sessRow))
+			if sessRow="" quit
+.
+			set Res=+prevSchedID
+			set LocID=$piece($get(^RB("RES",Res)),"^")
+			
+			set detail=$get(^RB("RES",$piece(prevSchedID,"||"),"DATE",$piece(prevSchedID,"||",2),"SESS",sessRow))
+			set DOWs=$piece(detail,"^",2),TmFm=$piece(detail,"^",4),TmTo=$piece(detail,"^",5),DtTo=$piece(detail,"^",13)
+.
+			set SessID=prevSchedID_"||"_sessRow
+			
+			if $$open^MVBRBAS(Res,DtFm,DtTo,TmFm,TmTo,DOWs,"","","","Y")
+			do {
+				set (stdt,eddt,sttm,edtm,dow,sch,qty,sergroup,numserov)=""
+				set code=$$fetch^MVBRBAS(Res)
+				if code=0 {
+					set stdt=PLIST(5),eddt=PLIST(5),dow=stdt+3#7+1,sch=PLIST(3),qty=PLIST(9)
+					set sttm=PLIST(7),edtm=PLIST(8),sess=$piece($get(PLIST(20)),$char(1),1),load=$piece(PLIST(10),$char(1))
+.
+					if sess'=SessID continue
+					
+					set ser=0 for  {
+						set ser=$order(^RB("RES",+SessID,"DATE",+$piece(SessID,"||",2),"SESS",+$piece(SessID,"||",3),"SER",ser))
+						quit:ser=""
+						set ServID=$piece($get(^RB("RES",+SessID,"DATE",+$piece(SessID,"||",2),"SESS",+$piece(SessID,"||",3),"SER",ser)),"^")
+						if ServID'="" {
+							set arcim=$piece($get(^RBC("SER",ServID)),"^")
+							if '$order(^ARCIM(+arcim,1,"EXT",0)) continue
+							set sergroup=$piece($get(^RBC("SER",+ServID)),"^",9)
+							set numserov=$$numserov1^CWEBRBRE5(dow,ServID,Res,sttm,stdt,SessID)
+							if numserov="" set numserov=$$numserov^CWEBRBRE5(dow,sergroup,Res,sttm,stdt,SessID)
+							if numserov'="" set qty=numserov
+							if qty=0 continue
+							set numbook=0
+							set ap=0 for  {
+								set ap=$order(^RBAS(+sch,+$piece(sch,"||",2),"APPT",ap))
+								quit:ap=""
+								set a=^(ap)
+								set apServID=$piece(a,"^",15)
+								if arcim'=$piece($get(^RBC("SER",apServID)),"^") continue
+								if "TX"'[$piece(a,"^",3){
+									set numbook=numbook+1
+									if $piece(a,"^",75)'="" set RR($piece(a,"^",75))=$piece(sch,"||",1,2)_"||"_ap
+								}
+							}
+							if 'numbook set numbook=1
+							for a=1:1 {
+								quit:a>load
+								set USRN=sch_"-"_stdt_"-"_$translate($ztime(sttm,2),":")_"-"_ServID_"-"_a
+								if '$data(RR(USRN)) {
+									set cntUSRN=$increment(^TMP("EBOOK-NOW-AVAIL-SLOTS",$job))
+									set ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,cntUSRN)=USRN
+									set ^TMP("EBOOK-NOW-AVAIL-SLOTS",$job,cntUSRN,"DETAIL")=stdt_"^"_sttm_"^"_edtm_"^"_ServID
+								}
+							}
+						}
+					}
+				}
+			} while code=0
+			if $$close^MVBRBAS()
+		}
+	}
+.
+	quit
+.
+	// reassign GUID from cancelled USRN to next available USRN for slot polling and slot override
+	// keeps downstream systems using GUIDs updated correctly
+ReassignGUID(intApptNum) set intApptNum=$get(intApptNum)
+.
+	// extract patient details
+	kill Appointment if $$Appointment^HL7OutExtract11(intApptNum,.Appointment) quit
+	
+	// extract appointment schedule
+	set intApptSch=$$ApptSchExist^HL7OutExtract11(intApptNum)
+	
+	set oldUSRN=$get(Appointment(82))
+	set listUSRN=$$USRN^CRBAppointment4(intApptSch,$get(Appointment(18)))
+	// find new USRN generated that does not yet have a GUID
+	set newUSRN="" for i=1:1:$length(listUSRN,"~") do  if newUSRN'="" quit
+	. if $piece(listUSRN,"~",i)="" quit
+	. if $data(^RBASi("USRN-GUID",$piece(listUSRN,"~",i))) quit
+	. set newUSRN=$piece(listUSRN,"~",i)
+	if newUSRN="" quit
+	
+	// reassign GUID to new slot USRN
+	set GUID=$order(^RBASi("USRN-GUID",oldUSRN,""))
+	if GUID="" quit
+	set ^RBASi("USRN-GUID",newUSRN,GUID)="",^RBASi("GUID-USRN",GUID,newUSRN)=""
+	kill ^RBASi("USRN-GUID",oldUSRN,GUID),^RBASi("GUID-USRN",GUID,oldUSRN)
+	
+	quit
+
+
+

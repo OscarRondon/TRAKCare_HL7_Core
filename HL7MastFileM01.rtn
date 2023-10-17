@@ -1,0 +1,250 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^UTF8
+%RO
+HL7MastFileM01^MAC^^^0
+HL7MastFileM01 // ML 19/10/2005 ; HL7 interface : master file notification categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7MastFileM01.rtn#1 $
+	quit
+	
+	// M01 - general
+M01()
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	. if '$data(^TMP("HL7",$job,cnt1,"MFI")) quit
+	. set mode=$get(^TMP("HL7",$job,cnt1,"MFI",3))
+	
+	. // only allow updates
+	. if mode="UPD" do
+	. . // extract table to update
+	. . set table=$piece($get(^TMP("HL7",$job,cnt1,"MFI",1)),"^")
+	. . // check if table set to update
+	. . set reject=""
+	. . set updtable=$$TableCheck^HL7MastFile(event,table,.reject) if reject'="" do  quit
+	. . . set reject("Detail")="MFI^^1~206"
+	
+	. . // extract code and desc
+	. . set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	. . . if '$data(^TMP("HL7",$job,cnt1,cnt2,"MFE")) quit
+	. . . set updtype=$get(^TMP("HL7",$job,cnt1,cnt2,"MFE",1))
+	. . . set date=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"MFE",3)),1,8),date=$select(date?8N:$$DateConv^HL7Common2(.reject,"EI",date),1:"")
+	. . . // force date if not exist for deactivation
+	. . . if date="",updtype="MDC" set date=+$h
+	. . . set detail=$get(^TMP("HL7",$job,cnt1,cnt2,"MFE",4))
+	. . . set code=$piece(detail,"^"),desc=$piece(detail,"^",2)
+	
+	. . . do UpdateTable(updtable,updtype,code,desc,date)
+	
+	if mode'="UPD" do
+	. set reject="Master file mode "_mode_" received is not catered for.  Only catering for mode 'UPD'",reject("Detail")="MFI^^3~206"
+	
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece(reject("Detail"),"~")_"\"_$piece(reject("Detail"),"~",2))
+	
+	// update code table entries
+UpdateTable(updtable,updtype,code,desc,date) set updtable=$get(updtable),updtype=$get(updtype),code=$get(code)
+	set desc=$get(desc),date=$get(date)
+	kill PLIST,OTHER
+	
+	set tablename=$list(##class(websys.StandardTypeItem).GetDescriptionPlus("HL7MasterFileTables",updtable))
+	
+	// check for required extra info
+	set SQLCODE=$$Extra^HL7MastFileExtraInfo(updtable,code,desc)
+	set Exists='(SQLCODE)
+	
+	if reject'="" quit
+	
+	if updtype="MAD",'Exists kill PLIST
+	
+	if ",PACAllergyReasonForChang,PACAllergyCategory,PACAllergy,PACAllergySeverity,MRCAllType,ORCOperation,MRCICDDx,"[(","_updtable_",") do UpdateTable^HL7MastFileM01a(updtable,updtype,code,desc,date,Exists) quit
+	if ",PACQuestion,ARCInsuranceType,ARCAuxilInsurType,CTDBSpecimen,CTCity,CTZip,RBCEquipment,PACNonGovOrg,"[(","_updtable_",") do UpdateTable^HL7MastFileM01a(updtable,updtype,code,desc,date,Exists) quit
+	if ",PACSpecialNeedsStatus,"[(","_updtable_",") do UpdateTable^HL7MastFileM01a(updtable,updtype,code,desc,date,Exists) quit
+	
+	// insert new entry
+	if 'Exists do
+	. set PLIST(2)=code,PLIST(3)=desc
+	. // add marital status
+	. if updtable="CTMarital" do  quit
+	. . set PLIST(6)=date &SQL(INSERT INTO CT_Marital VALUES :PLIST())
+	
+	. // add religion
+	. if updtable="CTReligion" do  quit
+	. . set PLIST(5)=date &SQL(INSERT INTO CT_Religion VALUES :PLIST())
+	
+	. // add specialty
+	. if updtable="CTSpec" do  quit
+	. . set PLIST(5)=date &SQL(INSERT INTO CT_Spec VALUES :PLIST())
+	
+	. // add sex
+	. if updtable="CTSex" do  quit
+	. . set PLIST(6)=date &SQL(INSERT INTO CT_Sex VALUES :PLIST())
+	
+	. // add title
+	. if updtable="CTTitle" do  quit
+	. . set PLIST(4)=date &SQL(INSERT INTO CT_Title VALUES :PLIST())
+	
+	. // add alert category
+	. if updtable="PACAlertCategory" do  quit
+	. . set PLIST(4)=date &SQL(INSERT INTO PAC_AlertCategory VALUES :PLIST())
+	
+	. // add alert expiry reason
+	. if updtable="PACAlertExpiryReason" do  quit
+	. . set PLIST(4)=date &SQL(INSERT INTO PAC_AlertExpiryReason VALUES :PLIST())
+	
+	. // add patient alert
+	. if updtable="PACPatientAlert" do  quit
+	. . set PLIST(4)=date,PLIST(6)=$get(OTHER(1))
+	. . &SQL(INSERT INTO PAC_PatientAlert VALUES :PLIST())
+	
+	. // add contact type
+	. if updtable="PACContactType" do  quit
+	. . set PLIST(4)=date &SQL(INSERT INTO PAC_ContactType VALUES :PLIST())
+	
+	. // add admission source
+	. if updtable="PACAdmSource" do  quit
+	. . set PLIST(5)=date &SQL(INSERT INTO PAC_AdmSource VALUES :PLIST())
+	
+	. // add clinical notes type
+	. if updtable="MRCClinNotesType" do  quit
+	. . &SQL(INSERT INTO MRC_ClinNotesType VALUES :PLIST())
+	
+	. // add social history/habit
+	. if updtable="MRCHabits" do  quit
+	. . &SQL(INSERT INTO MRC_Habits VALUES :PLIST())
+	
+	. // add social history/habit quantity
+	. if updtable="MRCHabitsQuantity" do  quit
+	. . kill PLIST set PLIST(0)=OTHER(1),PLIST(3)=code,PLIST(4)=desc
+	. . &SQL(INSERT INTO MRC_HabitsQuantity VALUES :PLIST())
+	
+	. // add body parts
+	. if updtable="MRCBodyParts" do  quit
+	. . &SQL(INSERT INTO MRC_BodyParts VALUES :PLIST())
+	
+	. // add body part symptoms
+	. if updtable="MRCBodyPartsSymptoms" do  quit
+	. . kill PLIST set PLIST(0)=OTHER(1),PLIST(3)=code,PLIST(4)=desc
+	. . &SQL(INSERT INTO MRC_BodyPartsSymptoms VALUES :PLIST())
+	
+	. // add body part symptoms sub symptoms
+	. if updtable="MRCBodyPartsSympSubsym" do  quit
+	. . kill PLIST set PLIST(0)=OTHER(1),PLIST(3)=code,PLIST(4)=desc
+	. . &SQL(INSERT INTO MRC_BodyPartsSympSubsym VALUES :PLIST())
+	
+	. // add past history condition
+	. if updtable="MRCPastHistCondit" do  quit
+	. . &SQL(INSERT INTO MRC_PastHistCondit VALUES :PLIST())
+	
+	. // add diagnosis status
+	. if updtable="MRCDiagnosStatus" do  quit
+	. . &SQL(INSERT INTO MRC_DiagnosStatus VALUES :PLIST())
+	
+	. // add diagnosis signs/symptoms
+	. if updtable="MRCDiagnosSignSymptom" do  quit
+	. . set PLIST(6)=date,PLIST(8)="Y"
+	. . &SQL(INSERT INTO MRC_DiagnosSignSymptom VALUES :PLIST())
+	
+	// update/reactivate/deactivate entry
+	if Exists do
+	. // update marital status
+	. if updtable="CTMarital" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(7)=$select(updtype="MUP":PLIST(7),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE CT_Marital VALUES :PLIST() WHERE CTMAR_RowId = :RowId)
+	
+	. // update religion
+	. if updtable="CTReligion" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(6)=$select(updtype="MUP":PLIST(6),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE CT_Religion VALUES :PLIST() WHERE CTRLG_RowId = :RowId)
+	
+	. // update specialty
+	. if updtable="CTSpec" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(6)=$select(updtype="MUP":PLIST(6),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE CT_Spec VALUES :PLIST() WHERE CTSPC_RowId = :RowId)
+	
+	. // update specialty
+	. if updtable="CTSex" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(7)=$select(updtype="MUP":PLIST(7),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE CT_Sex VALUES :PLIST() WHERE CTSEX_RowId = :RowId)
+	
+	. // update title
+	. if updtable="CTTitle" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(5)=$select(updtype="MUP":PLIST(5),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE CT_Title VALUES :PLIST() WHERE TTL_RowId = :RowId)
+	
+	. // update alert category
+	. if updtable="PACAlertCategory" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(5)=$select(updtype="MUP":PLIST(5),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE PAC_AlertCategory VALUES :PLIST() WHERE ALERTCAT_RowId = :RowId)
+	
+	. // update alert expiry reason
+	. if updtable="PACAlertExpiryReason" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(5)=$select(updtype="MUP":PLIST(5),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE PAC_AlertExpiryReason VALUES :PLIST() WHERE ALEXP_RowId = :RowId)
+	
+	. // update patient alert category
+	. if updtable="PACPatientAlert" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(5)=$select(updtype="MUP":PLIST(5),updtype="MAC":"",updtype="MAD":"",1:date),PLIST(6)=$get(OTHER(1))
+	. . &SQL(UPDATE PAC_PatientAlert VALUES :PLIST() WHERE ALERT_RowId = :RowId)
+	
+	. // update contact type
+	. if updtable="PACContactType" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(5)=$select(updtype="MUP":PLIST(5),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE PAC_ContactType VALUES :PLIST() WHERE CONTTP_RowId = :RowId)
+	
+	. // update admission source
+	. if updtable="PACAdmSource" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(6)=$select(updtype="MUP":PLIST(6),updtype="MAC":"",updtype="MAD":"",1:date)
+	. . &SQL(UPDATE PAC_AdmSource VALUES :PLIST() WHERE ADSOU_RowId = :RowId)
+	
+	. // update clinical notes type - no date from/date to
+	. if updtable="MRCClinNotesType" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc
+	. . &SQL(UPDATE MRC_ClinNotesType VALUES :PLIST() WHERE CNT_RowId = :RowId)
+	
+	. // update social history/habits - no date from/date to
+	. if updtable="MRCHabits" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc
+	. . &SQL(UPDATE MRC_Habits VALUES :PLIST() WHERE HAB_RowId = :RowId)
+	
+	. // update social history/habit quantities - no date from/date to
+	. if updtable="MRCHabitsQuantity" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(3)=code,PLIST(4)=desc
+	. . &SQL(UPDATE MRC_HabitsQuantity VALUES :PLIST() WHERE QTY_RowId = :RowId)
+	
+	. // update body parts
+	. if updtable="MRCBodyParts" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc
+	. . &SQL(UPDATE MRC_BodyParts VALUES :PLIST() WHERE BODP_RowId = :RowId)
+	
+	. // update body part symptoms
+	. if updtable="MRCBodyPartsSymptoms" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(3)=code,PLIST(4)=desc
+	. . &SQL(UPDATE MRC_BodyPartsSymptoms VALUES :PLIST() WHERE SYM_RowId = :RowId)
+	
+	. // update body part symptoms sub symptoms
+	. if updtable="MRCBodyPartsSympSubsym" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(3)=code,PLIST(4)=desc
+	. . &SQL(UPDATE MRC_BodyPartsSympSubsym VALUES :PLIST() WHERE SUBS_RowId = :RowId)
+	
+	. // update past history condition
+	. if updtable="MRCPastHistCondit" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc
+	. . &SQL(UPDATE MRC_PastHistCondit VALUES :PLIST() WHERE PAST_RowId = :RowId)
+	
+	. // update diagnosis status
+	. if updtable="MRCDiagnosStatus" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc
+	. . &SQL(UPDATE MRC_DiagnosStatus VALUES :PLIST() WHERE DSTAT_RowId = :RowId)
+	
+	. // update diagnosis signs/symptoms
+	. if updtable="MRCDiagnosSignSymptom" do  quit
+	. . set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(7)=$select(updtype="MUP":PLIST(7),updtype="MAC":"",updtype="MAD":"",1:date),PLIST(8)=$select(updtype="MUP":PLIST(8),updtype="MAC":"Y",updtype="MAD":"Y",1:"N")
+	. . &SQL(UPDATE MRC_DiagnosSignSymptom VALUES :PLIST() WHERE DSYM_RowId = :RowId)
+	
+	if 'SQLCODE quit
+	
+	// set rejection message
+	set reject="Unable to "_$select(updtype="MAD":"add",updtype="MUP":"update",updtype="MDC":"deactivate",1:"reactivate")_" code "_code_" ("_desc_")"_" to table "_tablename
+	set reject("Detail")="MFE^"_$get(^TMP("HL7",$job,cnt1,"MFE",2))_"^4~206"
+	
+	quit
+
+
+

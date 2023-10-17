@@ -1,0 +1,290 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7SiteQLDPatEv^MAC^^^0
+HL7SiteQLDPatEv // ML 16/06/2003 ; HL7 interface : patient event categories - Queensland Health
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7SiteQLDPatEv.rtn#1 $
+	quit
+ 
+CheckA08 ;; A08 - update patient information
+Update(reject,adttype) set adttype=$get(adttype),reject=""
+ 	
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	.if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	. // check if patient exists
+	.do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	. // check patient details
+	.if $$PatCheck^HL7Common3(intRegMrn) quit
+	. // extract visit details and update
+	.set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do
+	..if '$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) quit
+	..kill PAADM,oldPAADM,xPAADM
+	..do VisDet^HL7PatEv2(cnt1,cnt2) set intAdmNum=$$intAdmNum^HL7Common2(visit,intRegMrn) if intAdmNum="" quit
+	..do VisSet^HL7PatEv2 kill xPAADM merge xPAADM=PAADM kill PAADM
+	..if $$VisSelect^HL7PatEv2(intAdmNum)
+	..merge oldPAADM=PAADM merge PAADM=xPAADM kill xPAADM
+	..if $$VisUpdate^HL7PatEv2(intAdmNum)
+	.. // check if new attending dr transaction needed
+	..if $get(PAADM(12))'=$get(oldPAADM(12)) do
+	...set HL7Flag="Y"
+	... // find and close previous transaction
+	...do
+	....set (found,trans)="" for  set trans=$order(^PAADM(intAdmNum,"TRANS",trans),-1) quit:trans=""  do  quit:found
+	.....if $piece(^(trans),"^",5)="" quit
+	.....if $piece(^(trans),"^",5)=$get(oldPAADM(12)),$piece(^(trans),"^",4)="" set found=1
+	.... // close previous transaction
+	....if found if $$Update^CPAAdmTransaction(intAdmNum_"||"_trans,intAdmNum,"","","","T","","",$get(oldPAADM(12)),"",upduser,"_zz","_zz",+$h,$piece($h,",",2),upddate,updtime,"","","","","T")
+	... // create new transaction
+	...if $$Update^CPAAdmTransaction("",intAdmNum,"","","","T","","",$get(PAADM(12)),"",upduser,+$h,$piece($h,",",2),"","",upddate,updtime,"","","","","T")
+ 
+	.. // check if message forwarding required
+	..if forward,reject="" set forwardnum(cnt1_"-"_cnt2,intAdmNum)="PAADM"
+ 
+	quit
+ 
+CheckA05 ;; A05 - update pre-admission
+CheckA38 ;; A38 - cancel pre-admission
+PreAdmit(reject,adttype) set adttype=$get(adttype),reject=""
+ 
+	if adttype="A05" do
+	. // check if message forwarding required
+	.set forward=$$MsgForward^HL7PatEv
+	.set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	..if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	..do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	..set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	...if '$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) quit
+	...do VisDet^HL7PatEv2(cnt1,cnt2)
+	...set WaitListNum=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZWL",31)),"^") if WaitListNum="" do  quit
+	....set reject="No waiting list number received for Patient Id "_RegMrn,reject("Detail")="ZWL^^31~204" quit
+	...set intWaitNum=$$intWaitListNum^HL7Common2(WaitListNum)
+	...if intWaitNum="" set reject="Waiting List number "_WaitListNum_" does not exist in MedTrak.",reject("Detail")="ZWL^^31~204" quit
+	... // perform ORMIS completion
+	...do ##class(web.PAWaitingList).ORMISComplete(intWaitNum)
+	... // update user/date/time/hospital
+	...kill PLIST set PLIST(73)=upduser,PLIST(71)=upddate,PLIST(72)=updtime,PLIST(94)=updhosp
+	... &SQL(UPDATE PA_WaitingList VALUES :PLIST() WHERE WL_RowId = :intWaitNum)
+	... // update waiting list admission
+	...set intWaitAdm=##class(web.PAWaitingListAdm).GetLatestAdm(intWaitNum) if intWaitAdm'="" do
+	....kill PLIST set PLIST(10)=upduser,PLIST(14)=upddate,PLIST(15)=updtime,PLIST(32)=updhosp
+	.... &SQL(UPDATE PA_WaitingListAdm VALUES :PLIST() WHERE ADM_RowId = :intWaitAdm)
+ 
+	.. // check if message forwarding required
+	..if forward,reject="" set forwardnum(intWaitNum)="PAWAITINGLIST"
+ 
+	if adttype="A38" do
+	. // check if message forwarding required
+	.set forward=$$MsgForward^HL7PatEv
+	.set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	..if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	..do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	..set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do  quit:reject'=""
+	...if '$data(^TMP("HL7",$job,cnt1,cnt2,"PV1")) quit
+	...do VisDet^HL7PatEv2(cnt1,cnt2)
+	... // extract waiting list
+	...set WaitListNum=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZWL",31)),"^") if WaitListNum="" do  quit
+	....set reject="No waiting list number received for Patient Id "_RegMrn,reject("Detail")="ZWL^^31~204" quit
+	...set intWaitNum=$$intWaitListNum^HL7Common2(WaitListNum)
+	...if intWaitNum="" set reject="Waiting List number "_WaitListNum_" does not exist in MedTrak.",reject("Detail")="ZWL^^31~204" quit
+	...set bookingnumber=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZWL",1)),"^")
+	... // extract ORMIS data
+	...set canceldate=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"ZWL",34)),1,8),canceltime=$extract($get(^TMP("HL7",$job,cnt1,cnt2,"ZWL",34)),9,12)
+	...set canceluser=$get(^TMP("HL7",$job,cnt1,cnt2,"ZWL",35)),comment=$get(^TMP("HL7",$job,cnt1,cnt2,"ZWL",80))
+	...set cancelreason=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZWL",39)),"^")
+	... // convert date/time format
+	...if canceldate'="" do
+	....set canceldate=$select(canceldate?8N:$$DateConv^HL7Common2(.reject,"EI",canceldate,"","Cancel Date"),1:"")
+	....if canceldate'="" set canceldate=##class(websys.Conversions).DateLogicalToHtml(canceldate)
+	...if $data(canceltime) do
+	....set canceltime=$select(canceltime?4N:$$TimeConv^HL7Common2("EI",$extract(canceltime,1,2)_":"_$extract(canceltime,3,4)),1:"")
+	....if canceltime'="" set canceltime=##class(websys.Conversions).TimeLogicalToHtml(canceltime)
+	... // build comment
+	...set cancelcomment="" for i=1:1:$length(comment,"~") set cancelcomment=$get(cancelcomment)_$select($length(cancelcomment):$char(13,10),1:"")_$piece(comment,"~",i)
+	... // extract user id
+	...set userid=$piece(canceluser,"^"),external=$piece(canceluser,"^",9)
+	... &SQL(SELECT SSUSR_RowId INTO :userid FROM SS_User, SS_UserExtSysCodes
+		  WHERE EXT_Code = %ALPHAUP(:userid) AND EXT_Interface = :external AND SSUSR_RowId = EXT_ParRef)
+	... // check status
+	... &SQL(SELECT ADM_VisitStatus, ADM_RowId INTO :status, :intWaitAdm FROM PA_WaitingListAdm WHERE ADM_ParRef = :intWaitNum AND ADM_AdmBookingNumber = :bookingnumber)
+ 
+ 	...set HL7Flag="Y"
+	... // perform ORMIS cancel
+	...if status'="C" do
+	....do ##class(web.PAWaitingList).ORMISCancel("",intWaitNum,canceldate,canceltime,cancelreason,cancelcomment,userid)
+	...do UpdateUser^HL7PatEv1("CT")
+	... // update cancellation details
+	...if status="C" do
+	....set canceldate=##class(websys.Conversions).DateHtmlToLogical(canceldate),canceltime=##class(websys.Conversions).TimeHtmlToLogical(canceltime)
+	....kill PLIST set PLIST(10)=upduser,PLIST(14)=upddate,PLIST(15)=updtime,PLIST(32)=updhosp
+	....set PLIST(5)=canceldate,PLIST(6)=canceltime,PLIST(7)=""
+	.... &SQL(SELECT REA_RowId INTO :PLIST(7) FROM PAC_WLReasonNotAvail WHERE REA_Code = :cancelreason)
+	....set PLIST(26)="" for i=1:1:$length(cancelcomment,$char(13,10)) set PLIST(26)=$get(PLIST(26))_$listbuild($piece(cancelcomment,$char(13,10),i))
+	.... &SQL(UPDATE PA_WaitingListAdm VALUES :PLIST() WHERE ADM_RowId = :intWaitAdm)
+	.... // update history
+	....if ##class(web.PAWaitingListTransaction).RecordHistory(intWaitNum,intWaitAdm,"",cancelreason,"",bookingnumber,"C","")
+ 
+	... // update user/date/time/hospital
+	...kill PLIST set PLIST(73)=upduser,PLIST(71)=upddate,PLIST(72)=updtime,PLIST(94)=updhosp
+	... &SQL(UPDATE PA_WaitingList VALUES :PLIST() WHERE WL_RowId = :intWaitNum)
+	... // update waiting list admission
+	...set intWaitAdm=##class(web.PAWaitingListAdm).GetLatestAdm(intWaitNum) if intWaitAdm'="" do
+	....kill PLIST set PLIST(10)=upduser,PLIST(14)=upddate,PLIST(15)=updtime,PLIST(32)=updhosp
+	.... &SQL(UPDATE PA_WaitingListAdm VALUES :PLIST() WHERE ADM_RowId = :intWaitAdm)
+ 
+	... // check if message forwarding required
+	...if forward set forwardnum(intWaitNum)="PAWAITINGLIST"
+ 
+	quit
+ 
+CheckA19 ;; A19 - query (normally QRY^A19)
+Query(reject,adttype) set adttype=$get(adttype),(msgtype,reject)=""
+	kill queue,^TMP("HL7-OUT",$job)
+ 
+	// extract search type : DEM - demographic
+	set searchtype=$get(^TMP("HL7",$job,"QRD",9)) if searchtype'="DEM" do  quit
+	.set reject="Query interface does not cater for "_searchtype_" searches.",reject("Detail")="QRD^^9~207"
+ 
+	// extract search criteria
+	set number=$piece($get(^TMP("HL7",$job,"QRD",8)),"^"),facility=$get(^TMP("HL7",$job,"QRD",11))
+	if number="" do  quit
+	.set reject="Query could not be performed as no Medical Record Number was received in the query",reject("Detail")="QRD^^8~205"
+ 
+	// override facility received with interface facility
+	if HL7("SENDFAC")'="",HL7("SENDFAC")'=facility set facility=HL7("SENDFAC")
+	if facility="" do  quit
+	.set reject="Query for Medical Record Number "_number_" cannot be performed as no facility could be located for search criteria",reject("Detail")="QRD^^11~205"
+ 
+	// demographic search
+	set (intRegMrn,intHospMrn,intAdmNum,SQLCODE)=""
+ 
+	// check if valid mrn
+	&SQL(SELECT RTMAS_RowId INTO :intHospMrn FROM RT_Master, RTC_MRecordType, CT_Loc, CT_Hospital
+	      WHERE RTMAS_MRNo = :number AND RTMAS_MRType_DR = TYP_RowId AND CTLOC_RowId = TYP_CTLOC_DR
+		AND HOSP_RowId = CTLOC_Hospital_DR AND HOSP_Code = :facility)
+	if SQLCODE do  quit
+	.set reject="Medical Record Number "_number_" received for facility "_facility_" does not exist in MedTrak.",reject("Detail")="QRD^^8~205"
+ 
+	// extract registration number, current inpatient admission
+	set intRegMrn=$$intRegMrnHosp^HL7Common2(intHospMrn) if intRegMrn="" do  quit
+	.set reject="Medical Record Number "_number_" received for facility "_facility_" does not belong to a patient in MedTrak.",reject("Detail")="QRD^^8~205"
+ 
+	// extract current/most recent admission
+	set found=""
+	set intAdmNum="" for  set intAdmNum=$order(^PAPERdr(intRegMrn,"ADM","I",intAdmNum),-1) quit:intAdmNum=""  do  quit:found
+	.set current="" &SQL(SELECT PAADM_Current INTO :current FROM PA_Adm WHERE PAADM_RowId = :intAdmNum)
+	.if current="Y" set found=1 quit
+	if 'found set intAdmNum=$order(^PAPERdr(intRegMrn,"ADM","I",intAdmNum),-1)
+ 
+	set table=""
+	// build segments
+	merge ^TMP("HL7-OUT",$job,"QRD")=^TMP("HL7",$job,"QRD")
+	do Build^HL7Queue("QRD",13)
+	for segment="PID^Y^N^","NK1^N^Y^99","PV1^Y^N^","ZPD^N^N^" if $increment(cnt) set SEG(cnt)=segment
+	do BuildSegment^HL7Create
+ 
+	// send query response
+	if $data(queue) do  kill queue
+	.set controlid=$$ControlId^HL7AckNak
+	. // reverse sending and receiving applications found in interface info
+	.set mshmsg="MSH"_msh_%_HL7("ACKSENDAPP")_%_HL7("ACKSENDFAC")_%_^TMP("HL7",$job,"MSH",2)_%_^TMP("HL7",$job,"MSH",3)_%_$$Date^HL7_%_%_"ACK^A19"_%_$$ControlId^HL7AckNak_%_HL7("PT")_%_HL7("VER")_%_%_%_%_%
+	.set msamsg="MSA"_%_"AA"_%_^TMP("HL7",$job,"MSH",9)_%_%_%
+	.kill trace set trace=1
+	.write ESC("VT"),mshmsg,ESC("CR") set trace(trace)=mshmsg
+	.write msamsg,ESC("CR"),ESC("FS"),ESC("CR"),! set trace=trace+1,trace(trace)=msamsg
+	.set cnt="" for  set cnt=$order(queue(cnt)) quit:cnt=""  do
+	..write queue(cnt),ESC("CR") set trace=$get(trace)+1,trace(trace)=queue(cnt)
+	.write ESC("FS"),ESC("CR"),!
+	.do trace^HL7Trace("M-->E",$h,"",tracerowid) kill trace
+ 
+	kill ^TMP("HL7-OUT",$job)
+	quit
+ 
+CheckA23 ;; A23 - deactivate a patient record
+Deactivate(reject,adttype) set adttype=$get(adttype),reject=""
+ 
+	if adttype="A23" do
+	. // check if message forwarding required
+	.set forward=$$MsgForward^HL7PatEv
+	.set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	..if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	.. // check patient details
+	..do PatDet^HL7PatEv1(cnt1) if reject'="" quit
+	..if $$PatCheck^HL7Common3(intRegMrn,RegMrn),reject'="" quit
+	..set x="" for  set x=$order(HospMrn(x)) quit:x=""  do
+	...set HospMrn=$piece(HospMrn(x),"^") quit:HospMrn=""
+	...set mrtype=$$MedRecType^HL7Common5(.reject,$piece(HospMrn(x),"^",2),$piece(HospMrn(x),"^",3),$piece(HospMrn(x),"^",4))
+	...if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)="" quit
+	...set intHospMrn=$$intHospMrn^HL7Common2(HospMrn,mrtype) quit:intHospMrn=""
+	...do HospUpdate(intHospMrn,"D")
+ 
+	quit
+ 
+CheckA47 ;; A47 - change patient identifier status
+ChangePatId(reject,adttype) set adttype=$get(adttype),reject=""
+ 
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	.if '$data(^TMP("HL7",$job,cnt1,"PID")) quit
+	.if $translate($piece(^TMP("HL7",$job,cnt1,"MRG",1),"~"),"^~")="" set reject="No hospital number sent in MRG segment",reject("Detail")="MRG^^1~101" quit
+ 
+	.set numbers=$$RegNum^HL7Common2(.reject,adttype)
+	.set RegMrn=$piece(numbers,"|"),intRegMrn=$piece(numbers,"|",2)
+	.if reject'="" quit
+ 
+	. // extract hospital numbers
+	.if $data(PatNum("HOSP")) do
+	..do NumTypeDetail^HL7Common2(PatNum("HOSP"),.seg,.field,.asstype,"","",.idmrtype,.usetype,.usecode)
+	..kill HospPid set numbers=$get(^TMP("HL7",$job,cnt1,seg,field)) quit:'$length($translate(numbers,"^~"))
+ 
+	..for i=1:1:$length(numbers,"~") if $piece($piece(numbers,"~",i),"^")'="" do  if reject'="" quit
+	...set found="" if idmrtype="Y" do  quit:'found
+	....set usecode=$piece($piece($piece(numbers,"~",i),"^",usetype),"&") if usecode'="",$data(^RTC("TYPE",0,"Code",usecode)) set found=1
+	...if idmrtype'="Y",$piece($piece($piece(numbers,"~",i),"^",usetype),"&")'=usecode quit
+	...set mrtype=$$MedRecType^HL7Common5(.reject,$piece($piece($piece(numbers,"~",i),"^",asstype),"&"),idmrtype,usecode,$piece($piece(numbers,"~",i),"^"),RegMrn)
+	...if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)="" quit
+	...set intHospMrn=$$intHospMrn^HL7Common2($piece($piece(numbers,"~",i),"^"),mrtype) if intHospMrn'="" do  quit
+	....set checkRegMrn=$$intRegMrnHosp^HL7Common2(intHospMrn) if checkRegMrn'=intRegMrn do  quit
+	.....set reject="Hospital number "_$piece($piece(numbers,"~",i),"^")_" does not exist against Registration number "_RegMrn,reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~204" quit
+	....set HospPid(i)=intHospMrn_"^"_$piece($piece($piece(numbers,"~",i),"^",asstype),"&",2)
+ 
+	..if reject'="" quit
+ 
+	..kill HospMrg set numbers=$get(^TMP("HL7",$job,cnt1,"MRG",1))
+	..for i=1:1:$length(numbers,"~") if $piece($piece(numbers,"~",i),"^")'="" do  if reject'="" quit
+	...set found="" if idmrtype="Y" do  quit:'found
+	....set usecode=$piece($piece($piece(numbers,"~",i),"^",usetype),"&") if usecode'="",$data(^RTC("TYPE",0,"Code",usecode)) set found=1
+	...if idmrtype'="Y",$piece($piece($piece(numbers,"~",i),"^",usetype),"&")'=usecode quit
+	...set mrtype=$$MedRecType^HL7Common5(.reject,$piece($piece($piece(numbers,"~",i),"^",asstype),"&"),idmrtype,usecode,$piece($piece(numbers,"~",i),"^"),RegMrn)
+	...if reject'="" do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)="" quit
+	...set intHospMrn=$$intHospMrn^HL7Common2($piece($piece(numbers,"~",i),"^"),mrtype) if intHospMrn'="" do  quit
+	....set checkRegMrn=$$intRegMrnHosp^HL7Common2(intHospMrn) if checkRegMrn'=intRegMrn do  quit
+	.....set reject="Hospital number "_$piece($piece(numbers,"~",i),"^")_" does not exist against Registration number "_RegMrn,reject("Detail")=seg_"^"_$get(^TMP("HL7",$job,cnt1,seg,1))_"^"_field_"~204" quit
+	....set HospMrg(i)=intHospMrn_"^"_$piece($piece($piece(numbers,"~",i),"^",asstype),"&",2)
+	....if forward do  kill HospMrn
+	.....kill HospMrn if $$HospMrn^HL7OutExtract5(intHospMrn,.HospMrn)
+	.....set forwardnum(cnt1,intHospMrn)="RTMASTER" merge forwardnum(cnt1,intHospMrn,"RTMASTER-OLD")=HospMrn
+ 
+	..if reject'="" quit
+ 
+	..set i="" for  set i=$order(HospMrg(i)) quit:i=""  do
+	...set intHospMrn=$piece(HospMrg(i),"^"),status=$piece(HospMrg(i),"^",2),status=$select(status="A":"Y",status="I":"N",1:status)
+	...do HospUpdate(intHospMrn,status)
+ 
+	..set i="" for  set i=$order(HospPid(i)) quit:i=""  do
+	...set intHospMrn=$piece(HospPid(i),"^"),status=$piece(HospPid(i),"^",2),status=$select(status="A":"Y",status="I":"N",1:status)
+	...do HospUpdate(intHospMrn,status)
+ 
+	quit
+ 
+	// update hospital number with new status
+HospUpdate(intHospMrn,status) new (intHospMrn,status) set intHospMrn=$get(intHospMrn),status=$get(status)
+	set HOSP(13)=status,HL7Flag="Y"
+	// update active status
+	if status'="D" do
+	. &SQL(UPDATE RT_Master VALUES :HOSP() WHERE RTMAS_RowId = :intHospMrn)
+	// delete hospital number
+	if status="D" do
+	. &SQL(DELETE FROM RT_Master WHERE RTMAS_RowId = :intHospMrn)
+	kill HL7Flag
+	quit
+
+
+

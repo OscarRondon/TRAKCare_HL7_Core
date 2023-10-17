@@ -1,0 +1,88 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7PatEv5^MAC^^^0
+HL7PatEv5 // ML 08/01/2004 ; HL7 Interface : common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7PatEv5.rtn#1 $
+	quit
+ 
+	// extract internal code table values
+CodeTable(mtable) new i,plist,rowid set mtable=$get(mtable),(rowid,reject,reject("Detail"),SQLCODE)=""
+ 
+	if mtable="PA_Adm" do  quit
+	.for i=5,10,78,163,164,332 do
+	..set code=$piece($get(PAADM(i)),"^"),desc=$piece($get(PAADM(i)),"^",2) if code=""""""!(code="""") quit
+	..set code=##class(%Collation).AlphaUp(code) if code="" set PAADM(i)="" quit
+	..if i=5 do
+	...if $get(PAADM(332))'="" do
+	.... &SQL(SELECT CTLOC_RowId INTO :rowid FROM CT_Loc, CT_Hospital WHERE CTLOC_Code =:code AND HOSP_Code = :PAADM(332) AND CTLOC_Hospital_DR = HOSP_RowId)
+	...if $get(PAADM(332))=""!(SQLCODE) do  quit
+	.... &SQL(SELECT CTLOC_RowId INTO :rowid FROM CT_Loc WHERE CTLOC_Code = :code)
+	....if SQLCODE set reject="Location received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+	..if i=10 do
+	... &SQL(SELECT ADSOU_RowId INTO :rowid FROM PAC_AdmSource WHERE ADSOU_Code = :code)
+	...if SQLCODE set reject="Admission source received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+	..if i=78 do
+	... &SQL(SELECT CTACU_RowId INTO :rowid FROM CT_Acuity WHERE CTACU_Code = :code)
+	...if SQLCODE set reject="Acuity received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+	..if i=163 do
+	... &SQL(SELECT ROOM_RowId INTO :rowid FROM PAC_Room WHERE ROOM_Code = :code)
+	...if SQLCODE set reject="Room received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+	..if i=164 do
+	... &SQL(SELECT WARD_RowId INTO :rowid FROM PAC_Ward WHERE WARD_Code = :code)
+	...if SQLCODE set reject="Ward received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+	..if i=332 do
+	... &SQL(SELECT HOSP_RowId INTO :rowid FROM CT_Hospital WHERE HOSP_Code = :code)
+	...if SQLCODE set reject="Hospital received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+ 
+	..if reject'="" do Reject^HL7Reject(reject,"N")
+	..set PAADM(i)=$select('SQLCODE:rowid,1:"")
+	..set (rowid,reject,reject("Detail"),SQLCODE)=""
+ 
+	if mtable="MR_Adm" do  quit
+	.for i=58,63 do
+	..set code=$piece($get(MRADM(i)),"^"),desc=$piece($get(MRADM(i)),"^",2) if code=""""""!(code="""") quit
+	..set code=##class(%Collation).AlphaUp(code) if code="" set MRADM(i)="" quit
+	..if i=58 do
+	... &SQL(SELECT DSCL_RowId INTO :rowid FROM PAC_DischClassification WHERE DSCL_Code = :code)
+	...if SQLCODE set reject="Discharge classifaction/location received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+	..if i=63 do
+	... &SQL(SELECT CARETYP_RowId INTO :rowid FROM PAC_CareType WHERE CARETYP_Code = :code)
+	...if SQLCODE set reject="Care type received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+ 
+	..if reject'="" do Reject^HL7Reject(reject,"N")
+	..set MRADM(i)=$select('SQLCODE:rowid,1:"")
+	..set (rowid,reject,reject("Detail"),SQLCODE)=""
+ 
+	if mtable="MR_Diagnos" do  quit
+	.for i=4,17 do
+	..set code=$piece($get(MRDIA(i)),"^"),desc=$piece($get(MRDIA(i)),"^",2) if code=""""""!(code="""") quit
+	..set code=##class(%Collation).AlphaUp(code) if code="" set MRDIA(i)="" quit
+	..if i=4 do
+	...set codex=$get(MRDIA(i,"Edition"))
+	... &SQL(SELECT MRCID_RowId INTO :rowid FROM MRC_ICDDx, MRC_ICDDxEdition, MRC_ICDEdition
+		  WHERE MRCID_Code = :code AND ICDED_Code = :codex AND ED_Edition_DR = ICDED_RowId AND ED_ParRef = MRCID_RowId)
+	...if SQLCODE set reject="Primary diagnosis received "_code_$select($length(desc):" ("_desc_")",1:"")_",Edition "_codex_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+	..if i=17 do
+	... &SQL(SELECT DSYM_RowId INTO :rowid FROM MRC_DiagnosSignSymptom WHERE DSYM_Code = :code)
+	...if SQLCODE set reject="Category of complaint received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+ 
+	..if reject'="" do Reject^HL7Reject(reject,"N")
+	..set MRDIA(i)=$select('SQLCODE:rowid,1:"")
+	..set (rowid,reject,reject("Detail"),SQLCODE)=""
+ 
+	if mtable="MR_DiagType" do  quit
+	.for i=3 do
+	..set code=$piece($get(MRDIAT(i)),"^"),desc=$piece($get(MRDIAT(i)),"^",2) if code=""""""!(code="""") quit
+	..set code=##class(%Collation).AlphaUp(code) if code="" set MRDIAT(i)="" quit
+	..if i=3 do
+	... &SQL(SELECT DTYP_RowId INTO :rowid FROM MRC_DiagnosType WHERE DTYP_Code = :code)
+	...if SQLCODE set reject="Diagnosis type received "_code_$select($length(desc):" ("_desc_")",1:"")_" for Patient Id "_RegMrn_" does not exist in TrakCare"
+ 
+	..if reject'="" do Reject^HL7Reject(reject,"N")
+	..set MRDIAT(i)=$select('SQLCODE:rowid,1:"")
+	..set (rowid,reject,reject("Detail"),SQLCODE)=""
+ 
+	quit
+
+
+

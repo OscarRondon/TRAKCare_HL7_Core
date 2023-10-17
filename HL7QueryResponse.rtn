@@ -1,0 +1,73 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7QueryResponse^MAC^^^0
+HL7QueryResponse // ML 27/09/2005 ; HL7 interface - query response
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7QueryResponse.rtn#1 $
+	quit
+ 
+	// read response
+Response(reject) set (pass,reject,uniqueid)=""
+ 
+	if INT("DIRECT")="O" do
+	.kill trace,tracecopy
+	.set pass=$$Read^HL7("Y",TIMEOUT("RESPONSE")) do
+	.. // check for response
+	..if '$data(trace)!(pass="")!(pass="RDERR") set reject="No response received.",pass="Fail-1" quit
+	.. // build segment data
+	..if $data(trace) do
+	...merge tracecopy=trace set j="" for  set j=$order(trace(j)) quit:j=""  set seg=trace(j) do Data^HL7Data
+	...if $data(trace)>1 do trace^HL7Trace("E-->M",$h,"",tracerowid)
+	...if 'T set reject="Timeout receiving next segment, continuing."
+ 
+	if INT("DIRECT")="I" do
+	.merge DATA=^TMP("HL7",$job)
+ 
+	// check if acknowledged
+	set check=$get(DATA("MSA",1)) if ",AA,AE,AR,CA,CE,CR,"'[(","_check_",") set reject="NAK - Message Failed with unknown MSA-2 code "_check_", MSA-3 description "_$get(DATA("MSA",3)),pass="Fail-2"
+	// check if rejected
+	if pass="",check'="AA",check'="CA" set reject=$get(DATA("MSA",1))_" - "_$get(DATA("MSA",3))_".",pass="Fail-2"
+	// message id match
+	if $get(DATA("MSA",2))'=$get(controlId),reject'="" set reject="Control Id received in MSA "_$get(DATA("MSA",2))_" does not match Id "_$get(controlId)_" sent.",pass="Fail-2"
+ 
+	// if connected to ensemble response comes back via different interface
+	if HL7("ENSEMBLE")="Y",INT("DIRECT")="O" do  quit
+	.kill DATA,trace,tracecopy,message
+ 
+	set (uniqueid,querycnt,querycurrent,queryremain)=""
+	set j="" for  set j=$order(tracecopy(j)) quit:j=""  do  if uniqueid'="" quit
+	.if $piece(tracecopy(j),"|")="QRD" set uniqueid=$piece(tracecopy(j),"|",5)
+ 
+	// remove continuation flag
+	kill ^TMP("HL7-QUERY",uniqueid,"CONTINUE")
+ 
+	// setup result marker
+	if pass'["Fail" do
+	.set j="" for  set j=$order(tracecopy(j)) quit:j=""  do
+	..set seg=$get(tracecopy(j))
+	.. // ignore standard message response segments
+	..if $piece(seg,"|")="MSH"!($piece(seg,"|")="MSA")!($piece(seg,"|")="ERR") quit
+	..if $piece(seg,"|")="QAK" set querycnt=$piece(seg,"|",5),querycurrent=$piece(seg,"|",6),queryremain=$piece(seg,"|",7)
+	.. // extract unique id
+	..if $piece(seg,"|")="QRD" set uniqueid=$piece(seg,"|",5),run=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",""),-1)+1,^TMP("HL7-QUERY",uniqueid,"RESP-CNT")=querycnt,^TMP("HL7-QUERY",uniqueid,"RESP-CURRENT")=querycurrent,^TMP("HL7-QUERY",uniqueid,"RESP-REMAIN")=queryremain quit
+	..if $piece(seg,"|")="QRF" quit
+	..if $piece(seg,"|")="DSC" set ^TMP("HL7-QUERY",unique,"CONT")=seg quit
+	..if $piece(seg,"|")="PID" set pat=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",run,"PAT",""),-1)+1
+	..set num=$order(^TMP("HL7-QUERY",uniqueid,"RESULT",run,"PAT",pat,""),-1)+1
+	..set ^TMP("HL7-QUERY",uniqueid,"RESULT",run,"PAT",pat,num)=seg
+ 
+	// setup no response marker
+	if pass="Fail-1" do
+	.set ^TMP("HL7-QUERY",uniqueid,"NO-RESP")=""
+ 
+	// setup no result marker
+	if pass="Fail-2" do
+	.set seg=""
+	.set j="" for  set j=$order(tracequeue(j)) quit:j=""  do  if $piece(tracequeue(j),"|")="ERR" set seg=$get(tracequeue(j))
+	..if $piece(tracequeue(j),"|")="QRD" set uniqueid=$piece(tracequeue(j),"|",5)
+	.set ^TMP("HL7-QUERY",uniqueid,"NO-RES")=seg
+ 
+	kill DATA,trace,message
+	quit
+
+
+

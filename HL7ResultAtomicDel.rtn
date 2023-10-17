@@ -1,0 +1,72 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7ResultAtomicDel^MAC^^^0
+HL7ResultAtomicDel // ML 08/09/2003 ; HL7 Interface - Atomic result deletion processing
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7ResultAtomicDel.rtn#1 $
+	quit
+ 
+	// delete atomic result
+DelAtomic(intOrdNum,Comm,RefRange,Flag,Sens) set intOrdNum=$get(intOrdNum),Comm=$get(Comm),RefRange=$get(RefRange),Flag=$get(Flag),Sens=$get(Sens)
+ 
+	// extract visit test set rowid
+	set VISTSRowId=""
+	&SQL(SELECT OEORI_LabTestSetRow INTO :VISTSRowId FROM OE_OrdItem WHERE OEORI_RowId = :intOrdNum)
+	if VISTSRowId="" quit
+ 
+	// deleted result text
+	set DelText=""
+	&SQL(SELECT OECF_TextForDeletedTestItem INTO :DelText FROM CF_OEConfig WHERE OECF_RowId = '1')
+ 
+	// set test and result status to 'K'orrected
+	set TestStatus="K",ResultStatus="K"
+ 
+	set epis=$piece(VISTSRowId,"||"),ts=$piece(VISTSRowId,"||",2),seq=$piece(VISTSRowId,"||",3)
+	// set test status
+	set $piece(^TEPI(epis,1,ts,seq),"\",31)=TestStatus
+	set tc="" for  set tc=$order(^TEPI(epis,1,ts,seq,"DATA",tc)) quit:tc=""  do
+	. // check if ignore regular result due to comment
+	.set x=$order(^TEPI(epis,1,ts,seq,"DATA",tc,"REM",0))
+	.set skip="" if x>0,$piece($get(^TEPI(epis,1,ts,seq,"DATA",tc)),"\")="" set skip=1
+	. // set result to deleted result text
+	.if 'skip set $piece(^TEPI(epis,1,ts,seq,"DATA",tc),"\")=DelText
+	. // set result status
+	.set $piece(^TEPI(epis,1,ts,seq,"DATA",tc),"\",2)=ResultStatus
+	. // delete comments
+	.if Comm="Y" do
+	..if '$data(^TEPI(epis,1,ts,seq,"DATA",tc,"REM")) quit
+	..set x=$order(^TEPI(epis,1,ts,seq,"DATA",tc,"REM",0)) if x'>0 quit
+	..kill ^TEPI(epis,1,ts,seq,"DATA",tc,"REM")
+	..set ^TEPI(epis,1,ts,seq,"DATA",tc,"REM",0)=1,^TEPI(epis,1,ts,seq,"DATA",tc,"REM",1)=DelText
+	. // delete reference range
+	.if RefRange="Y" do
+	..for i=4,5 set $piece(^TEPI(epis,1,ts,seq,"DATA",tc),"\",i)=""
+	. // delete flags
+	.if Flag="Y" do
+	..set $piece(^TEPI(epis,1,ts,seq,"DATA",tc),"\",8)=""
+	. // delete sensitivity results
+	.if Sens="Y" do
+	..if '$data(^TEPI(epis,1,ts,seq,"DATA",tc,"ANT")) quit
+	..kill ^TEPI(epis,1,ts,seq,"DATA",tc,"ANT")
+ 
+	. // update audit trail
+	.set comm="",x=0 for  set x=$order(^TEPI(OrdNum,1,ts,seq,"DATA",tc,"REM",x)) quit:x=""  set comm=comm_$select($length(comm):"|",1:"")_^(x)
+	.kill NewAudit set NewAudit("VISTDComments")=comm
+	.for ii=1,2,4,5,8,9 do
+	..set field=$select(ii=1:"VISTDTestData",ii=2:"VISTDResultStatus",ii=4:"VISTDResultRefRangeLow",ii=5:"VISTDResultRefRangeHigh",ii=8:"VISTDInstrumentFlags",1:"VISTDDisplaySequence")
+	..set NewAudit(field)=$piece($get(^TEPI(OrdNum,1,ts,seq,"DATA",tc)),"\",ii)
+	.set NewAudit("VISTDResultUnit")=$piece($get(^TTAB("TC",tc)),"\",2)
+	.kill VISTDRowId set VISTDRowId=OrdNum_"||"_ts_"||"_seq_"||"_tc
+	. // check if audit required of atomic results - EPVisitTestSetData does not exist in Audit CT's so flag driven
+	.if HL7("DO_NOT_AUDIT_ATOMIC")'="Y",$$Audit^HL7Common3(VISTDRowId,"U",HL7("USER"))
+ 
+	set updhosp=$$Hospital^HL7Common9($piece($get(^TMP("HL7",$job,"MSH",3)),"^"),"R")
+	// add result user/date/time/hospital update detail
+	do OrderUpdate^HL7Common3(intOrdNum,"MF",+$h_"^"_$piece($h,",",2)_"^"_HL7("USER")_"^"_updhosp,"250^251^252^253")
+ 
+	// mark result as unread
+	do OrderUpdate^HL7Common3(intOrdNum,"UR",HL7("USER"))
+ 
+	quit
+
+
+

@@ -1,0 +1,26 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Replay^MAC^^^0
+HL7Replay // ML 24/08/2005 ; HL7 interface - replay message
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Replay.rtn#1 $
+	quit
+ 
+	// check if message to replay
+Replay(link,trace) new (link,trace) set link=$get(link) kill trace
+ 
+	set seq="" for  set seq=$order(^SSHL7(link,"REPLAY",seq)) quit:seq=""  do  quit:$data(trace)
+	.set x=0 for  set x=$order(^SSHL7(link,"REPLAY",seq,"MSG",x)) quit:x=""  do
+	..set trace($increment(trace))=^(x)
+	.kill ^SSHL7(link,"REPLAY",seq)
+ 
+	set value="" if $data(trace)>1 set value=1
+	quit value
+ 
+	// delete message from queue
+DelReplay(link,sequence) new (link,sequence) set link=$get(link),sequence=$get(sequence)
+	set rowid=link_"||"_sequence
+	&SQL(DELETE FROM SS_HL7Replay WHERE HL7RP_RowId =:rowid)
+	quit
+
+
+

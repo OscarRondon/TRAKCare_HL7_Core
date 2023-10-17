@@ -1,0 +1,203 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7MastFileM01a^MAC^^^0
+HL7MastFileM01a // ML 19/10/2005 ; HL7 interface : master file notification categories
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7MastFileM01a.rtn#1 $
+	quit
+ 
+	// update code table entries
+UpdateTable(updtable,updtype,code,desc,date,Exists) set updtable=$get(updtable),updtype=$get(updtype),code=$get(code)
+	set desc=$get(desc),date=$get(date),Exists=$get(Exists)
+ 
+	// insert new entry
+	if 'Exists do
+	.set PLIST(2)=code,PLIST(3)=desc
+	. // add allergy reason for change
+	.if updtable="PACAllergyReasonForChang" do  quit
+	..set PLIST(4)=date &SQL(INSERT INTO PAC_AllergyReasonForChang VALUES :PLIST())
+ 
+	. // add nature of reaction
+	.if updtable="PACAllergyCategory" do  quit
+	..set PLIST(6)=date &SQL(INSERT INTO PAC_AllergyCategory VALUES :PLIST())
+ 
+	. // add allergy
+	.if updtable="PACAllergy" do  quit
+	..set PLIST(5)=date,PLIST(7)=$get(OTHER(1))
+	.. &SQL(INSERT INTO PAC_Allergy VALUES :PLIST())
+ 
+	. // add allergy severity
+	.if updtable="PACAllergySeverity" do  quit
+	..set PLIST(4)=$get(OTHER(1)),PLIST(5)=$get(OTHER(2)),PLIST(6)=date,PLIST(8)=$get(OTHER(3)),PLIST(9)=$get(OTHER(4))
+	.. &SQL(INSERT INTO PAC_AllergySeverity VALUES :PLIST())
+ 
+	. // add allergy category
+	.if updtable="MRCAllType" do  quit
+	..set PLIST(10)=date &SQL(INSERT INTO MRC_AllType VALUES :PLIST())
+ 
+	. // add operation/procedure
+	.if updtable="ORCOperation" do  quit
+	..set PLIST(6)=date &SQL(INSERT INTO ORC_Operation VALUES :PLIST())
+ 
+	. // add ICD code
+	.if updtable="MRCICDDx" do  quit
+	..set PLIST(8)=date &SQL(INSERT INTO MRC_ICDDx VALUES :PLIST())
+ 
+	. // add question
+	.if updtable="PACQuestion" do  quit
+	..set PLIST(4)=$get(OTHER(1)),PLIST(5)=$get(OTHER(2)),PLIST(11)=date
+	.. &SQL(INSERT INTO PAC_Question VALUES :PLIST())
+ 
+	. // add insurance payor
+	.if updtable="ARCInsuranceType" do  quit
+	..set PLIST(14)=date &SQL(INSERT INTO ARC_InsuranceType VALUES :PLIST())
+ 
+	. // add insurance plan
+	.if updtable="ARCAuxilInsurType" do  quit
+	..set PLIST(4)=$get(OTHER(1)),PLIST(5)=date
+	.. &SQL(INSERT INTO ARC_AuxilInsurType VALUES :PLIST())
+ 
+	. // add day book specimen
+	.if updtable="CTDBSpecimen" do  quit
+	..set PLIST(4)=date &SQL(INSERT INTO CT_DBSpecimen VALUES :PLIST())
+ 
+	. // add city
+	.if updtable="CTCity" do  quit
+	..set PLIST(6)=$get(OTHER(1)),PLIST(7)=date
+	.. &SQL(INSERT INTO CT_City VALUES :PLIST())
+ 
+	. // add post/zip code
+	.if updtable="CTZip" do  quit
+	..set PLIST(7)=$get(OTHER1(1)),PLIST(9)=$get(OTHER(1)),PLIST(14)="Y",PLIST(18)=date
+	.. &SQL(INSERT INTO CT_Zip VALUES :PLIST())
+ 
+	. // add resource equipment
+	.if updtable="RBCEquipment" do  quit
+	..set PLIST(5)=date
+	.. &SQL(INSERT INTO RBC_Equipment VALUES :PLIST())
+ 
+	. // add non-government organisation
+	.if updtable="PACNonGovOrg" do  quit
+	..set PLIST(4)=OTHER(1),PLIST(5)=OTHER(2),PLIST(6)=OTHER(3),PLIST(7)=OTHER(4),PLIST(8)=OTHER(5),PLIST(9)=OTHER(6),PLIST(10)=OTHER(7),PLIST(11)=OTHER(8),PLIST(12)=date,PLIST(14)=OTHER(9)
+	.. &SQL(INSERT INTO PAC_NonGovOrg VALUES :PLIST())
+ 
+	. // add special needs status
+	.if updtable="PACSpecialNeedsStatus" do  quit
+	..set PLIST(4)=date &SQL(INSERT INTO PAC_SpecialNeedsStatus VALUES :PLIST())
+ 
+	// update/reactivate/deactivate entry
+	if Exists do
+	. // update allergy reason for change
+	.if updtable="PACAllergyReasonForChang" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(5)=$select(updtype="MUP":PLIST(5),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE PAC_AllergyReasonForChang VALUES :PLIST() WHERE ALRFC_RowId = :RowId)
+ 
+	. // update nature of reaction
+	.if updtable="PACAllergyCategory" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(7)=$select(updtype="MUP":PLIST(7),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE PAC_AllergyCategory VALUES :PLIST() WHERE ALRGCAT_RowId = :RowId)
+ 
+	. // update allergy
+	.if updtable="PACAllergy" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(6)=$select(updtype="MUP":PLIST(6),updtype="MAC":"",updtype="MAD":"",1:date),PLIST(7)=$get(OTHER(1))
+	.. &SQL(UPDATE PAC_Allergy VALUES :PLIST() WHERE ALG_RowId = :RowId)
+ 
+	. // add allergy severity
+	.if updtable="PACAllergySeverity" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(4)=$get(OTHER(1)),PLIST(5)=$get(OTHER(2)),PLIST(7)=$select(updtype="MUP":PLIST(7),updtype="MAC":"",updtype="MAD":"",1:date)
+	..set PLIST(8)=$get(OTHER(3)),PLIST(9)=$get(OTHER(4))
+	.. &SQL(UPDATE PAC_AllergySeverity VALUES :PLIST() WHERE ALRGSEV_RowId = :RowId)
+ 
+	. // update allergy category
+	.if updtable="MRCAllType" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(11)=$select(updtype="MUP":PLIST(11),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE MRC_AllType VALUES :PLIST() WHERE MRCAT_RowId = :RowId)
+ 
+	. // update opertaion/procedure
+	.if updtable="ORCOperation" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(7)=$select(updtype="MUP":PLIST(7),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE ORC_Operation VALUES :PLIST() WHERE OPER_RowId = :RowId)
+ 
+	. // update ICD code
+	.if updtable="MRCICDDx" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(9)=$select(updtype="MUP":PLIST(9),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE MRC_ICDDx VALUES :PLIST() WHERE MRCID_RowId = :RowId)
+ 
+	. // update question
+	.if updtable="PACQuestion" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(4)=$get(OTHER(1)),PLIST(5)=$get(OTHER(2)),PLIST(12)=$select(updtype="MUP":PLIST(12),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE PAC_Question VALUES :PLIST() WHERE QUES_RowId = :RowId)
+ 
+	. // update insurance payor
+	.if updtable="ARCInsuranceType" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(15)=$select(updtype="MUP":PLIST(15),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE ARC_InsuranceType VALUES :PLIST() WHERE INST_RowId = :RowId)
+ 
+	. // update insurance plan
+	.if updtable="ARCAuxilInsurType" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(4)=$get(OTHER(1)),PLIST(6)=$select(updtype="MUP":PLIST(6),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE ARC_AuxilInsurType VALUES :PLIST() WHERE AUXIT_RowId = :RowId)
+ 
+	. // update daybook specimen
+	.if updtable="CTDBSpecimen" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(5)=$select(updtype="MUP":PLIST(5),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE CT_DBSpecimen VALUES :PLIST() WHERE DBSPEC_RowId = :RowId)
+ 
+	. // update city
+	.if updtable="CTCity" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(6)=$get(OTHER(1)),PLIST(8)=$select(updtype="MUP":PLIST(8),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE CT_City VALUES :PLIST() WHERE CTCIT_RowId = :RowId)
+ 
+	. // update post/zip code
+	.if updtable="CTZip" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(7)=$get(OTHER1(1)),PLIST(9)=$get(OTHER(1)),PLIST(14)=$select(updtype="MUP":PLIST(14),updtype="MAC":"Y",updtype="MAD":"Y",1:"N")
+	..set PLIST(19)=$select(updtype="MUP":PLIST(19),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE CT_Zip VALUES :PLIST() WHERE CTZIP_RowId = :RowId)
+	..if 'SQLCODE do
+	... // update keywords
+	...do KeyWords(updtable,RowId)
+ 
+	. // update resource equipment
+	.if updtable="RBCEquipment" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(6)=$select(updtype="MUP":PLIST(6),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE RBC_Equipment VALUES :PLIST() WHERE EQ_RowId = :RowId)
+ 
+	. // update non-government organisation
+	.if updtable="PACNonGovOrg" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(4)=OTHER(1),PLIST(5)=OTHER(2),PLIST(6)=OTHER(3),PLIST(7)=OTHER(4),PLIST(8)=OTHER(5),PLIST(9)=OTHER(6)
+	..set PLIST(10)=OTHER(7),PLIST(11)=OTHER(8),PLIST(13)=$select(updtype="MUP":PLIST(13),updtype="MAC":"",updtype="MAD":"",1:date),PLIST(14)=OTHER(9)
+	.. &SQL(UPDATE PAC_NonGovOrg VALUES :PLIST() WHERE NGO_RowId = :RowId)
+ 
+	. // update special needs status
+	.if update="PACSpecialNeedsStatus" do  quit
+	..set RowId=PLIST(1) kill PLIST(1) set PLIST(2)=code,PLIST(3)=desc,PLIST(5)=$select(updtype="MUP":PLIST(5),updtype="MAC":"",updtype="MAD":"",1:date)
+	.. &SQL(UPDATE PAC_SpecialNeedsStatus VALUES :PLIST() WHERE SNS_RowId = :RowId)
+ 
+	if 'SQLCODE quit
+ 
+	// set rejection message
+	set reject="Unable to "_$select(updtype="MAD":"add",updtype="MUP":"update",updtype="MDC":"deactivate",1:"reactivate")_" code "_code_" ("_desc_")"_" to table "_tablename
+	set reject("Detail")="MFE^"_$get(^TMP("HL7",$job,cnt1,"MFE",2))_"^4~206"
+ 
+	quit
+ 
+	// insert keywords
+KeyWords(updtable,RowId) new (updtable,RowId) set updtable=$get(updtable),RowId=$get(RowId)
+ 
+	// add CTZip keywords
+	if updtable="CTZip" do
+	. // delete old keywords for rowid
+	. &SQL(DELETE FROM CT_ZipKeywords WHERE KEYW_ParRef = :RowId)
+	. // extract keyword required data
+	.set detail=$get(^CT("ZIP",RowId)),code=$piece(detail,"^"),desc=$piece(detail,"^",2),city=$piece(detail,"^",6)
+	.set desc=code_" "_desc
+	.kill Desc
+	. // create keywords for parts of description
+	.for i=1:1:$length(desc," ") set part=$piece(desc," ",i) if part'="" do
+	..set part=##class(%Collation).AlphaUp(part) quit:part=""
+	..quit:$data(Desc(part))  set Desc(part)=""
+	.. &SQL(INSERT INTO CT_ZipKeywords (KEYW_ParRef,KEYW_Desc,KEYW_City_DR) VALUES (:RowId,:part,:city))
+ 
+	quit
+
+
+

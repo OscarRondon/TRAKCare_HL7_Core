@@ -1,0 +1,40 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7ReferralI13^MAC^^^0
+HL7ReferralI13	// ML 24/08/2209 ;  HL7 interface : referral
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7ReferralI13.rtn#1 $
+	quit
+	// I13 - update patient referral
+I13()
+	set cnt1=0 for  set cnt1=$order(^TMP("HL7",$job,cnt1)) quit:cnt1=""  do  quit:reject'=""
+	.if ",MSH,MSA,EVN,QRD,QRF,QAK,"[(","_cnt1_",") quit
+	.if '$data(^TMP("HL7",$job,cnt1,"RF1")) set reject="Required segment RF1 not received in message",reject("Detail")="RF1^^^~100" quit 
+	.set (status,priority,comments,documents)=""
+	.if $data(^TMP("HL7",$job,cnt1,"RF1")) do  if reject'="" quit
+	.. // extract referral number
+	.. // extract referral numbers
+	..kill RefNumber for type="REF","CSINT","CSNUM" set RefNumber(type)="" if $data(RefNum(type)) do
+    ...set RefNumber(type)=$$ExtractNumber^HL7Common2("R",type)
+    ..if RefNumber("REF")="",($get(RefNumber("CSINT"))=""),($get(RefNumber("CSNUM"))="") set reject="No Referral/Clinical summary id's received, unable to update referral.",reject("Detail")="RF1^^6^~100"
+	..set status=$get(^TMP("HL7",$job,cnt1,"RF1",1)),priority=$get(^TMP("HL7",$job,cnt1,"RF1",2))
+	.set cnt2=0 for  set cnt2=$order(^TMP("HL7",$job,cnt1,cnt2)) quit:cnt2=""  do
+	..if cnt2'?.N quit
+	.. // extract admission comments
+	..if $data(^TMP("HL7",$job,cnt1,cnt2,"PV1-NTE")) do
+	...set i="" for  set i=$order(^TMP("HL7",$job,cnt1,cnt2,"PV1-NTE",3,i)) quit:i=""  do
+	....set comments=$get(comments)_$listbuild($get(^TMP("HL7",$job,cnt1,cnt2,"PV1-NTE",3,i)))
+	.. // extract document details
+	..set segid="ZFA" for  set segid=$order(^TMP("HL7",$job,cnt1,cnt2,segid)) quit:segid=""  quit:segid'["ZFA"  do
+	...set documents=$get(documents)_$listbuild($get(^TMP("HL7",$job,cnt1,cnt2,segid,2)))
+	.if $get(RefNumber("CSINT"))="",$get(RefNumber("CSNUM"))="" do
+	..if reject="" do ##class(web.RBReferral).UpdateRef($get(RefNumber("REF")),$get(priority),$get(comments))
+	.if ($get(RefNumber("CSINT"))'="")||($get(RefNumber("CSNUM"))'="") do
+	..set ^zTrak("jb","discharge summary details")=$get(RefNumber("CSINT"))_"-"_$get(RefNumber("CSNUM"))_"-"_status
+	..set csRowId=$get(RefNumber("CSINT"))
+	..if csRowId="" set csRowId=$order(^PA("DISSUM",0,"RefID",$get(RefNumber("CSNUM")),csRowId))
+	..if ((reject="")&&(csRowId'="")) do ##class(web.PAAdmDischargeSummary).UpdateRBReferralDetails(csRowId,$piece(status,"^"))
+	if reject'="" do Reject^HL7Reject(reject,"R")
+	quit $select(reject="":"AA",1:"AR\"_reject_"\"_$piece($get(reject("Detail")),"~")_"\"_$piece($get(reject("Detail")),"~",2))
+
+
+

@@ -1,0 +1,71 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Inbound^MAC^^^0
+HL7Inbound // ML 10/01/2008 ; Process Inbound Messages
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Inbound.rtn#1 $
+	quit
+	// process received message
+MsgProcess(event) set event=$get(event),(ok,etype)=""
+	// check event type
+	if ",ADT,"[(","_$piece(event,"^")_",") set etype=1
+	if ",OML,ORM,ORR,"[(","_$piece(event,"^")_",") set etype=2
+	if ",OMP,RDS,"[(","_$piece(event,"^")_",") set etype=3
+	if ",ORU,"[(","_$piece(event,"^")_",") set etype=4
+	if ",QRY,"[(","_$piece(event,"^")_",") set etype=5
+	if ",MFN,"[(","_$piece(event,"^")_",") set etype=6
+	if ",SRM,SQM,"[(","_$piece(event,"^")_",") set etype=7
+	if ",REF,"[(","_$piece(event,"^")_",") set etype=8
+	if ",ZTC,"[(","_$piece(event,"^")_",") set etype=9
+	if ",MDM,"[(","_$piece(event,"^")_",") set etype=10
+	if event="ADR^A19" set etype=11
+	if $extract(event)="Z",etype="" set etype=12
+	// message type not currently supported
+	if etype="" quit "AR\Message type received not currently supported\MSH^^9\200"
+	if etype'=1 do
+	. // setup %session for non-api filing
+	. set %session=##class(%CSP.Session).%New($job)
+	. set HL7User=$zstrip(HL7("USER-CODE"),"*PWC")
+	. set HL7UserId=$order(^SSU("SSUSR",0,"SSUSR_Initials",$zconvert(HL7User,"U"),0))
+	. set %session.Data("LOGON.USERID")=HL7UserId
+	// admissions, discharge, transfers
+	if etype=1 do
+	. // check if api processing of msg available
+	. set ok=$$Check^HL7InboundADT(event) if ok'="" quit
+	// order/order response messages
+	if etype=2 set ok=$$Check^HL7Order(event)
+	// pharmacy messages
+	if etype=3 set ok=$$Check^HL7Pharmacy(event)
+	// observation results
+	if etype=4 do SiteCode^HL7Res set ok=""
+	// query
+	if etype=5 do
+	. // check if api processing of msg available
+	. //s ok=$$Check^HL7InboundQRY(event) i ok'="" q
+	. set ok=$$SiteCode^HL7Query($piece(event,"^",2))
+	// master file notification
+	if etype=6 set ok=$$Check^HL7MastFile(event)
+	// scheduling
+	if etype=7 set ok=$$Check^HL7Scheduling(event)
+	// referral
+	if etype=8 set ok=$$Check^HL7Referral(event)
+	// TC 'Z' messages
+	if etype=9 set ok=$$Check^HL7CustomZ(event)
+	// medical document management
+	if etype=10 set ok=$$Check^HL7DocMgmt(event)
+	// query response
+	if etype=11 do Response^HL7QueryResponse set ok=""
+	// site defined 'Z' message
+	if etype=12 do
+	. set routine="HL7Site"_HL7("INCODE")_"Custom",LineRoutine="CheckZ^"_routine if $length($text(@LineRoutine),";;")=2 do  quit
+	. . xecute "d Check^"_routine_"(.reject,"""_event_""")" set done=1
+	// remove %session
+	kill %session
+	quit ok
+	// check if message forwarding required
+MsgForward(mtype) new (link,mtype) set link=$get(link),mtype=$translate($get(mtype),"^","_")
+	set forward=$order(^SSHL7(link,"MSG-FWD",mtype,"INT",""))
+	set forward=$select(forward="":0,1:1)
+	quit forward
+
+
+

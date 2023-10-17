@@ -1,0 +1,58 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundExtractZ^MAC^^^0
+HL7InboundExtractZ	// ML 15/06/2010 : extract data from segments
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7InboundExtractZ.rtn#1 $
+	quit
+	// extract data from ZID segment
+ZID
+	// fields ZID.10, ZID.20 and ZID.26 are outbound only and as such are ignored
+	if $data(^TMP("HL7",$job,cnt1,"ZID")) {
+		// nationality, aus south sea islander, free text postcode, remarks
+		set PERSON("CTNATDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",1)),"^"),PERSON("ASSISDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",3)),"^")
+		set PERSON("PAPERPostCode")=$translate($$TextConversion^HL7Common12($get(^TMP("HL7",$job,cnt1,"ZID",6)),"I"),"^")
+		set detail=$translate($get(^TMP("HL7",$job,cnt1,"ZID",7)),HL7("LINEBK"),$char(13,10)),PERSON("PAPERRemark")=$$TextConversion^HL7Common12(detail,"I")
+		// preferred contact, interpreter, death status, vip
+		set PERSON("PAPERPreferredContactMethod")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",8)),"^"),PERSON("PAPERInterpreterRequired")=$get(^TMP("HL7",$job,cnt1,"ZID",9))
+		set PERSON("PAPERDeathNotificationStatus")=$get(^TMP("HL7",$job,cnt1,"ZID",11))
+		set PERSON("PAPMIVIPFlag")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",12)),"^")
+		// patient type, employment status, document type, free text occupation
+		set PERSON("PTYPEDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",13)),"^"),PERSON("EMPLSTDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",14)),"^")
+		set PERSON("PAPERIDDocTypeDR")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",15)),"^"),PERSON("PAPEROccupation")=$translate($$TextConversion^HL7Common12($get(^TMP("HL7",$job,cnt1,"ZID",16)),"I"),"^")
+		// region, second phone, social status
+		set PERSON("CTRGDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",17)),"^"),PERSON("PAPERSecondPhone")=$get(^TMP("HL7",$job,cnt1,"ZID",18))
+		set PERSON("SSDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",19)),"^")
+		// employee dept, company
+		set EMPLOY("CTLOCDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",21)),"^"),EMPLOY("CTCODesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",22)),"^")
+		// employee date from, employee date to
+		set EMPLOY("PAPEREmployeeDateFrom")=$extract($piece($get(^TMP("HL7",$job,cnt1,"ZID",23)),"^"),1,8),EMPLOY("PAPEREmployeeDateTo")=$extract($piece($get(^TMP("HL7",$job,cnt1,"ZID",24)),"^"),1,8)
+		// employee type, reason for attention, OS Visitor Status
+		set EMPLOY("EPEDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",25)),"^"),PERSON("PAPERReasonForAttention")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",27)),"^"),PERSON("OVSDesc")=$piece($get(^TMP("HL7",$job,cnt1,"ZID",28)),"^")
+		// ZID.30 - merge pending flag, is used inbound, but only as part of query response. see ##class(web.PAPerson).PatData
+		// ZID.31 - superceded NHS number, is used inbound, but only as part of query response. see ##class(web.PAPerson).PatData
+		set PERSON("PAPERForeignCity")=$get(^TMP("HL7",$job,cnt1,"ZID",32))
+		// validate date fields
+		for var="PAPEREmployeeDateFrom","PAPEREmployeeDateTo" {
+			set date=""
+			if EMPLOY(var)'="" set date=$$DateConv^HL7Common2(.reject,"EI",EMPLOY(var))
+			if date="-1"!(reject'="") {
+				set reject="Invalid Employee "_$select(var="PAPEREmployeeDateFrom":"Date From",1:"Date To")_" "_EOMPLOY(var)_" sent on Registration number "_RegMrn
+				do Reject^HL7Reject(reject,"N") set (reject,SQLCODE)=""
+				set date=""
+			}
+			set EMPLOY(var)=date
+		}
+	}
+	quit
+	// extract data from ZV1 segment
+ZV1
+	if $data(^TMP("HL7",$job,cnt1,cnt2,"ZV1")) {
+		// presenting problem, referring dr clinic
+		set PAADM("MRADMPresentComplaint")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZV1",1)),"^"),PAADM("CTRFCDesc")=$get(^TMP("HL7",$job,cnt1,cnt2,"ZV1",2))
+		// discharge condition (PAADMDischarge.Edit), discharge destination
+		set PAADM("DISCONDesc")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZV1",3)),"^"),PAADM("MRADMDischDestinDR")=$piece($get(^TMP("HL7",$job,cnt1,cnt2,"ZV1",4)),"^")
+	}
+	quit
+
+
+

@@ -1,0 +1,58 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7Common6^MAC^^^0
+HL7Common6 // ML 10/12/2003 ; HL7 interface - common routine calls
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7Common6.rtn#1 $
+	quit
+ 
+	// validate numbers
+ValidateNumber(reject,type,number) new (type,number,reject,RegMrn) set type=$get(type),number=$get(number),(valid,ok)=""
+ 
+	// validate medicare number
+	if type="MC" do  if 'valid set reject="Medicare number "_number_" received on Patient Id "_RegMrn_" is not valid"
+	.if $length(number)'=11 quit
+	.if $extract(number)<2,$extract(number)>6 quit
+	.set chdigit=$extract(number,9),total=""
+	.for i=1:1:8 set total=total+($extract(number,i)*$select(i=1:1,i=2:3,i=3:7,i=4:9,i=5:1,i=6:3,i=7:7,1:9))
+	.set newchdigit=total#10 if newchdigit=chdigit set valid=1
+ 
+	// validate safety net number
+	if type="SN" do  if 'valid set reject="Safety Net number "_number_" received on Patient Id "_RegMrn_" is not valid"
+	.if $length(number)'=11 quit
+	.if ",CN,SN,"'[(","_$extract(number,1,2)_",") quit
+	.set num=$extract(number,3,10),chdigit=$extract(number,11),total=""
+	.for i=1:1:8 set total=total+($extract(num,i)*$select(i=1:1,i=2:3,i=3:7,i=4:9,i=5:1,i=6:3,i=7:7,1:9))
+	.set newchdigit=total#10 if newchdigit=chdigit set valid=1
+ 
+	// validate DVA, pension, health care number
+	if type="DVA"!(type="GOV")!(type="HC") do  if 'valid set reject=$select(type="DVA":"DVA",type="GOV":"Pension",1:"Health Care")_" number "_number_" received on Patient Id "_RegMrn_" is not valid"
+	. // centrelink issued pension/health care number
+	.if $length(number)>9 do  quit
+	..set number=number_$extract("           ",1,11-$length(number))
+	..if ",2,3,4,5,6,7,"'[(","_$extract(number)_",") quit
+	..if $extract(number,11)'=" ",($extract(number,11)'?1A) quit
+	..set chdigit=$extract(number,10),total=""
+	..for i=1:1:9 set total=total+($extract(number,i)*$select(i=1:512,i=2:256,i=3:128,i=4:64,i=5:32,i=6:16,i=7:8,i=8:4,1:2))
+	..set digit=total#11,newchdigit=$select(digit=0:"X",digit=1:"V",digit=2:"T",digit=3:"S",digit=4:"L",digit=5:"K",digit=6:"J",digit=7:"H",digit=8:"C",digit=9:"B",digit=10:"A",1:"")
+	..if newchdigit=chdigit set valid=1
+	. // dva issued va/pension number
+	.if ",N,V,Q,S,W,T,"'[(","_$extract(number)_",") quit
+	.if $extract(number,$length(number))'=" ",($extract(number,$length(number))'?1A),($extract(number,$length(number))'?1N) quit
+	.set warcode=$extract(number,2,4)
+	.if warcode?3A set ok=$$WarCheck(warcode) if 'ok quit
+	.if $extract(warcode,1,2)?2A,'ok set ok=$$WarCheck($extract(warcode,1,2)) if 'ok quit
+	.if $extract(warcode)?1A,'ok set ok=$$WarCheck($extract(warcode)) if 'ok quit
+	.if $extract(warcode)'=" ",($extract(warcode)'?1N),('ok) quit
+	.set valid=1
+	quit
+ 
+	// check DVA war code
+WarCheck(code) new (code) set code=$get(code),check=""
+	do
+	.if ",A,AGX,BUR,BW,CGW,CN,CNK,CNX,CNS,FIJ,GHA,GW,HKS,HKX,IND,IV,KM,KYA,MAL,MAU,MLS,MTX,MWI,"[(","_code_",") set check=1 quit
+	.if ",N,NF,NG,NGR,NK,NRD,NSM,NSS,NSW,NX,P,PAD,PAM,PCA,PCR,PCV,PK,PMS,PSM,PSW,PWO,PX,Q,"[(","_code_",") set check=1 quit
+	.if ",RD,RDX,SA,SAX,SL,SM,SR,SS,SUD,SWO,TZA,X,"[(","_code_",") set check=1
+	quit check
+
+
+

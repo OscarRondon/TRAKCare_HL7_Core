@@ -1,0 +1,51 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7OutExtract6^MAC^^^0
+HL7OutExtract6 // ML 10/06/2003 ;  HL7 interface - common outbound extractions
+SrcVer ;; $Id: //trak/main/releases/T2020/1/CLXX/rtn/hl7/HL7OutExtract6.rtn#1 $
+	quit
+ 
+	// extract hospital number detail
+TrafAccident(intTrafNum,Accident) new (intTrafNum,Accident,old,curr)
+	&SQL(SELECT * INTO :Accident() FROM PA_TrafficAccident WHERE TRF_RowId = :intTrafNum)
+	quit SQLCODE
+	// extract traffic accident contact detail
+TrafAccContact(intAccCont,AccContact) new (intAccCont,AccContact) set intAccCont=$get(intAccCont)
+	&SQL(SELECT * INTO :AccContact() FROM PA_TrafficAccidentContact WHERE CONT_RowId = :intAccCont)
+	quit SQLCODE
+	// extract code table settings
+CodeTable(mtable) set mtable=$get(mtable),(code,desc,other)=""
+ 
+	if mtable="PA_TrafficAccident" do
+	.for i=27,47 if $get(Accident(i))'="" do  set Accident(i)=$select($get(Accident(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=Accident(i) quit:value=""""""
+	..if i=27 do
+	... &SQL(SELECT TRF_Code, TRF_Desc INTO :code, :desc FROM PAC_TrafAccidCode WHERE TRF_RowId = :value)
+	..if i=47 do
+	... &SQL(SELECT PATROL_Code, PATROL_Desc INTO :code, :desc FROM PAC_PatientRoleRA WHERE PATROL_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(Accident(""),-1) if $data(Accident(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",27,47,"[(","_i_",") quit
+	..set Accident(i)=$$TextConversion^HL7Common12(Accident(i),"O")
+	if mtable="PA_TrafficAccidentContact" do
+	.for i=3,7,8 if $get(AccContact(i))'="" do  set AccContact(i)=$select($get(AccContact(i))="""""":"""""",1:code_"^"_desc),(code,desc,other)=""
+	..set value=AccContact(i) quit:value=""""""
+	..if i=3 do
+	... &SQL(SELECT PCT_Code, PCT_Desc INTO :code, :desc FROM ARC_PayorContactType WHERE PCT_RowId = :value)
+	..if i=7 do
+	... &SQL(SELECT CTCIT_Code, CTCIT_Desc INTO :code, :desc FROM CT_City WHERE CTCIT_RowId = :value)
+	..if i=8 do
+	... &SQL(SELECT CTZIP_Code INTO :code FROM CT_Zip WHERE CTZIP_RowId = :value)
+	.. // convert escape characters
+	..for var="code","desc","other" set @var=$$TextConversion^HL7Common12(@var,"O")
+	.for i=1:1:$order(AccContact(""),-1) if $data(AccContact(i)) do
+	.. // exclude code table entries and list build fields
+	..if ",3,7,8,"[(","_i_",") quit
+	..set AccContact(i)=$$TextConversion^HL7Common12(AccContact(i),"O")
+ 
+	quit
+
+
+

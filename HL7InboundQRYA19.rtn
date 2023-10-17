@@ -1,0 +1,164 @@
+^MAC^Save for Source Control^^~Format=IRIS.S~^RAW
+%RO
+HL7InboundQRYA19^MAC^^^0
+HL7InboundQRYA19	// ML 22/03/2011 ;  HL7 interface : query event QRY_A19
+	quit
+	// A19 - patient query
+A19()
+	{
+		set HL7Flag="Y"
+		kill ^TMP("HL7-OUT",$job)
+		// only process immediate response msg
+		if $get(^TMP("HL7",$job,"QRD",3))'="I" set reject="Unable to process query. Message not marked for immediate response.",reject("Detail")="QRD^^3~100" quit
+		// convert dates
+		kill date
+		set date("FROM")=$select($get(^TMP("HL7",$job,"QRF",2))'="":$zdateh($extract(^TMP("HL7",$job,"QRF",2),1,8),8),1:"")
+		set date("TO")=$select($get(^TMP("HL7",$job,"QRF",3))'="":$zdateh($extract(^TMP("HL7",$job,"QRF",3),1,8),8),1:"")
+ 
+		// set maximum number of records to return (if 0)
+		set max=+$piece($get(^TMP("HL7",$job,"QRD",7)),"^")
+		if max=0 set max=40
+		// query type
+ 		set querytype=$piece($get(^TMP("HL7",$job,"QRD",9)),"^")
+		kill QUERY set QUERY=0
+ 		set (intRegMrn,intAdmNum)=""
+		set j=0 for  {
+			// complete processing if max number of records reached
+			if QUERY=max quit
+			set j=$order(^TMP("HL7",$job,"QRD",8,j)) if j="" quit
+			set detail=$get(^TMP("HL7",$job,"QRD",8,j))
+			// APN - name query
+			if querytype="APN" {
+				kill list set list=##class(TC.api.PAPerson.List).%New()
+				kill params set params=##class(TC.api.PAPerson.List.Params).%New()
+				// set search parameters
+				set params.PAPERName=$piece(detail,"^",2)
+				set params.PAPERName2=$piece(detail,"^",3)
+				set return=list.Execute(token,params)
+				while return=1 {
+					set return=list.Next() if return'=1 quit
+					set intRegMrn=list.Data("ID")
+					if intRegMrn'="" set QUERY($increment(QUERY))=$listbuild(intRegMrn,intAdmNum)
+					// complete processing if max number of records reached
+					if QUERY=max set return=0 quit
+				}
+			}
+			// APP - care provider patient query
+			if querytype="APP" {
+			}
+			// DEM - demographic query
+			if querytype="DEM" {
+				kill list set list=##class(TC.api.PAPerson.List).%New()
+				kill params set params=##class(TC.api.PAPerson.List.Params).%New()
+				// set search parameters
+				set params.RegistrationNo=$piece(detail,"^")
+				set return=list.Execute(token,params)
+				while return=1 {
+					set return=list.Next() if return'=1 quit
+					set intRegMrn=list.Data("ID")
+					if intRegMrn'="" set QUERY($increment(QUERY))=$listbuild(intRegMrn,intAdmNum)
+					// complete processing if max number of records reached
+					if QUERY=max set return=0 quit
+				}
+			}
+		}
+	}
+	// build response
+	kill queue,^TMP("HL7-OUT",$job)
+	// MSA, QRD segments required
+	set ^TMP("HL7-OUT",$job,"MSA",1)=$select(reject="":"AA",1:"AR"),^TMP("HL7-OUT",$job,"MSA",2)=$get(^TMP("HL7",$job,"MSH",9))
+	if reject'="" set DATA("MSA",3)=reject,DATA("MSA",6)=$piece($get(reject("Detail")),"~")_"^"_$piece($get(reject("Detail")),"~",2)
+	set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment","MSA"),maxlength=$listget(detail,2)
+	do Build^HL7Queue("MSA",maxlength)
+	kill ^TMP("HL7-OUT",$job)
+	
+	for segment="QRD","QRF" {
+		// QRF not required if not received
+		if seg="QRF",'$data(^TMP("HL7",$job,seg)) quit
+		merge ^TMP("HL7-OUT",$job,segment)=^TMP("HL7",$job,segment)
+		set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment",segment),maxlength=$listget(detail,2)
+		do Build^HL7Queue(segment,maxlength)
+		kill ^TMP("HL7-OUT",$job)
+	}
+	set query="" for  {
+		set query=$order(QUERY(query)) if query="" quit
+		set detail=QUERY(query),intRegMrn=$list(detail,1),intAdmNum=$list(detail,2)
+		set (intRegCheck,msgtype,trigger)=""
+		// build remaining segments
+		for segment="PID","PD1","NK1","PV1","ZID" {
+			set detail=##class(websys.StandardTypeItem).GetDescriptionPlus("HL7Segment",segment),maxlength=$list(detail,2)
+			set table=$select(segment="PV1":"PAADM",1:"PAPERSON"),mandatory="N"
+			set repeat="N" if segment="NK1" set repeat="Y" kill Repeat
+			set routefound="" for route=1,2,"Z" {
+				if routefound quit
+				for routine="HL7Site"_HL7("OUTCODE")_"Create"_route,"HL7Create"_route {
+					set LineRoutine="Check"_segment_"^"_routine
+					if $length($text(@LineRoutine),";;")=2 xecute "s fail=$$"_segment_"^"_routine set routefound=1
+					if routefound quit
+				}
+				if fail quit
+				if segment="PID" set ^TMP("HL7-OUT",$job,segment,1)=query
+				do Build^HL7Queue(segment,maxlength)
+				kill ^TMP("HL7-OUT",$job)
+				// check for repeatable segments
+				if repeat="Y" {
+					set j="" for  {
+						set j=$order(Repeat(segment,j)) if j="" quit
+						merge ^TMP("HL7-OUT",$job,segment)=Repeat(segment,j)
+						do Build^HL7Queue(segment,maxlength)
+						kill ^TMP("HL7-OUT",$job,segment)
+					}
+				}
+				kill Repeat
+			}
+		}
+	}
+	kill trace
+	// send response via ensemble adapter
+	if $get(HL7("ENS_ADAPTER"))="Y" {
+		set seq="" for  {
+			set seq=$order(queue(seq)) if seq="" quit
+			set ^TMP("HL7-ENS",$job,$get(^TMP("HL7",$job,"MSH",9)),"RESP",seq)=queue(seq)
+			set trace=trace+1,trace(trace)=queue(seq)
+		}
+	}
+	// send response via tcp/ip
+	if $get(HL7("ENS_ADAPTER"))'="Y" {
+		set first=1,seq=""
+		set seq="" for  {
+			set seq=$order(queue(seq)) if seq="" quit
+			// send start sequence - vertical tab
+			if first write ESC("VT") set first=0
+			write queue(seq),ESC("CR") set trace=trace+1,trace(trace)=queue(seq)
+			// send end sequence
+			if $order(queue(seq))="" write ESC("FS"),ESC("CR"),!
+		}
+	}
+ 
+	if $data(trace) do trace^HL7Trace("M-->E",$h,"",tracerowid)
+	kill queue,trace,tracerowid,reject,^TMP("HL7-OUT",$job)
+	// ack/nak sent already sent
+	quit ""
+APP
+	set max=10,detail="AKC"
+	set token=##class(TC.api.Logon).Request("demo","demo")
+	kill list set list=##class(TC.api.PAAdm.ListDocCurrent).%New()
+	kill params set params=##class(TC.api.PAAdm.ListDocCurrent.Params).%New()
+	// set search parameters
+	set params.Doctor=$piece(detail,"^")
+	set params.dFrom="21/06/2011"
+	set params.dTo="22/06/2011"
+	set return=list.Execute(token,params)
+	
+	quit
+	while return=1 {
+		set return=list.Next() if return'=1 quit
+		// s intRegMrn=list.Data("ID")
+		if intRegMrn'="" set QUERY($increment(QUERY))=$listbuild(intRegMrn,intAdmNum)
+		// complete processing if max number of records reached
+		if QUERY=max set return=0 quit
+	}
+	quit
+
+
+
